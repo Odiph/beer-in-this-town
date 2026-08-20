@@ -41,3 +41,15 @@ signatures. Immutable dataclasses for data that crosses a boundary.
 Don't add features that require forging authentication headers or replaying
 undocumented internal RPCs. If a capability needs that, it doesn't belong here
 — document the gap instead, as the README does for Google Maps saved lists.
+
+## The demo GIF
+
+`docs/demo.gif` is generated, not hand-made:
+
+```bash
+python tools/make_demo_gif.py
+```
+
+Every line in it is copied from a real run. If you change the CLI output,
+update the script rather than leaving the GIF to drift — a demo that shows
+output the tool no longer produces is worse than no demo.
