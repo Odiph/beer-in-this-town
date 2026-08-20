@@ -85,7 +85,8 @@ def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
              len(todo), len(venues))
     resolved: dict[str, tuple[float, float, str]] = {}
 
-    ua = {"User-Agent": f"beer-in-this-town/1.0 ({s.nominatim_email or 'no-contact-set'})"}
+    contact = s.nominatim_email or "no-contact-set"
+    ua = {"User-Agent": f"beer-in-this-town/1.0 ({contact})"}
     with httpx.Client(timeout=20.0, headers=ua) as client:
         for v in todo:
             query = _query_for(v)
