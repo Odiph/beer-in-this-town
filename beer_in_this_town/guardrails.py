@@ -1,4 +1,4 @@
-"""Guardrails whose only job is to keep the user's account alive.
+"""Guardrails whose only job is to keep the user's account safe.
 
 The `pin` command automates a UI that Google's terms do not permit automating.
 That means the realistic failure mode is not a crash — it is a *ban*. These

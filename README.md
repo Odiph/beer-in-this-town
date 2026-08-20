@@ -1,5 +1,9 @@
 # beer in this town
 
+[![CI](https://github.com/Odiph/beer-in-this-town/actions/workflows/ci.yml/badge.svg)](https://github.com/Odiph/beer-in-this-town/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **Find out where to get a beer in this town — then put it on your map.**
 
 ![demo](docs/demo.gif)
@@ -12,8 +16,8 @@ Designed to be **driven by a coding agent**: every command speaks JSON, reports
 its own state, and tells you what to run next. It works fine as a plain CLI too.
 
 ```bash
-python -m beer_in_this_town status --json      # where am I, what is next
-python -m beer_in_this_town run --query singapore --count 100 --json
+beertown status --json      # where am I, what is next
+beertown run --query singapore --count 100 --json
 ```
 
 ---
@@ -46,6 +50,11 @@ It runs in about six minutes for a hundred venues, and it is built to be
 get your account flagged, and refuses to emit data it is not confident in
 rather than quietly handing you wrong numbers.
 
+Along the way it turned out that Google Maps has **no legitimate way to bulk-add
+places to a saved list** — no API surface, no OAuth scope, no URL parameter, no
+intent. [Here is the full research](#there-is-no-api-for-this-we-checked), with
+the workarounds ranked.
+
 ## Install
 
 ```bash
@@ -54,7 +63,7 @@ python -m venv .venv
 pip install -e ".[dev,browser]"
 playwright install chromium   # only if the system Chrome channel is missing
 
-python -m beer_in_this_town bootstrap   # one-time: log in to Untappd (and Google)
+beertown bootstrap   # one-time: log in to Untappd (and Google)
 ```
 
 `bootstrap` uses a **dedicated** Chrome profile, not your everyday one —
@@ -64,9 +73,9 @@ can disturb its session.
 ## Use
 
 ```bash
-python -m beer_in_this_town doctor --json      # deps, session, geocoder
-python -m beer_in_this_town selfcheck --json   # 1 request: are the selectors alive
-python -m beer_in_this_town run --query singapore --count 100 --no-upload --json
+beertown doctor --json      # deps, session, geocoder
+beertown selfcheck --json   # 1 request: are the selectors alive
+beertown run --query singapore --count 100 --no-upload --json
 ```
 
 Outputs land in `data/`:
@@ -93,7 +102,7 @@ This is the part everyone gets wrong, so it is worth being precise.
 `run` produces a KML for the **My Maps** path. That is a documented, supported
 bulk import: one file, up to 2000 placemarks, done.
 
-### There is no legitimate bulk-write to a saved list
+### There is no API for this (we checked)
 
 We researched this properly. As of August 2026:
 
@@ -144,7 +153,7 @@ strictly less informative than the KML layer where the stats show in each pin.
 The one place per-venue data can live is the note attached to a saved place:
 
 ```powershell
-python -m beer_in_this_town notes --csv dataenues_singapore_2026-08-21.csv `
+beertown notes --csv data\venues_singapore_2026-08-21.csv `
     --list "Singapore Bars"
 ```
 
@@ -209,6 +218,9 @@ the Monthly column on every venue with no error at all. See
 pytest -q -m unit     # offline, no network, no browser
 ```
 
+Around 700 lines of offline unit tests. CI runs them on Linux and Windows
+against Python 3.11 and 3.12, and **never touches Untappd or Google**.
+
 ## Finishing a big list over several nights
 
 The write guardrails cap how much can be done per day, so a hundred venues is
@@ -219,7 +231,8 @@ drains on its own; once everything is done it exits in seconds having done
 nothing.
 
 ```powershell
-$script = "$PWDun_catchup.ps1"
+$script = "$PWD
+un_catchup.ps1"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
 Register-ScheduledTask -TaskName "beertown catchup" -Force `
