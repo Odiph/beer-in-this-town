@@ -139,3 +139,66 @@ def test_failure_envelope_carries_a_machine_readable_remedy():
     assert payload["error"]["code"] == "not_signed_in"
     # A remedy that is a runnable command is surfaced as a next action.
     assert payload["next_actions"] == ["python -m untappd_maps bootstrap"]
+
+
+# --- place identity and journal keys (review findings M2, M3) -------------
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("requested", "heading"),
+    [
+        ("Brewerkz", "Brewerkz Riverside Point"),          # Google adds words
+        ("SG TAPS", "SG Taps Restaurant"),                 # case + suffix
+        ("Welcome Ren Min", "Welcome Ren Min - Craft Brewery Taproom"),
+    ],
+)
+def test_place_matches_accepts_google_renamings(requested, heading):
+    from untappd_maps.pin_to_list import place_matches
+
+    assert place_matches(requested, heading)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("requested", "heading"),
+    [
+        ("Malt Craft Beer Bar", "Starbucks Orchard Road"),
+        ("Druggists", "Boots Pharmacy"),
+        ("Good Luck", "Marina Bay Sands"),
+        # Only 1 of 3 words overlap. This may be a different branch of the
+        # same chain, so skipping for manual review beats guessing.
+        ("TAP - 9 Penang", "TAP Craft Beer Bar"),
+    ],
+)
+def test_place_matches_rejects_a_different_venue(requested, heading):
+    from untappd_maps.pin_to_list import place_matches
+
+    assert not place_matches(requested, heading)
+
+
+@pytest.mark.unit
+def test_journal_key_separates_same_named_outlets():
+    from untappd_maps.pin_to_list import journal_key
+
+    a = journal_key("Harry's", "1 Boat Quay, Singapore")
+    b = journal_key("Harry's", "9 Orchard Road, Singapore")
+    assert a != b
+
+
+@pytest.mark.unit
+def test_journal_lookup_honours_pre_migration_keys():
+    """A journal written before keys included the address must still count."""
+    from untappd_maps.pin_to_list import _lookup
+
+    old_style = {"Malthouse": "ok"}
+    assert _lookup(old_style, "Malthouse", "685 East Coast Rd") == "ok"
+
+
+@pytest.mark.unit
+def test_retry_after_accepts_both_legal_forms():
+    from untappd_maps.http_client import _retry_after_seconds
+
+    assert _retry_after_seconds("120", 60) == 120
+    # HTTP-date form used to raise ValueError and kill the run
+    assert _retry_after_seconds("Wed, 21 Aug 2030 07:28:00 GMT", 60) > 0
+    assert _retry_after_seconds("nonsense", 60) == 60
+    assert _retry_after_seconds(None, 60) == 60

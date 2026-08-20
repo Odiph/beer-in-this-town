@@ -31,8 +31,16 @@ class Stage:
 
 
 def _latest(pattern: str) -> Path | None:
-    matches = sorted(DATA_DIR.glob(pattern))
-    return matches[-1] if matches else None
+    """Newest by modification time.
+
+    Sorting lexicographically put venues_singapore_2026-08-01.csv after
+    venues_london_2026-08-21.csv, so `next_actions` would hand an agent -- whose
+    contract says to run the first action verbatim -- a stale dataset.
+    """
+    matches = list(DATA_DIR.glob(pattern))
+    if not matches:
+        return None
+    return max(matches, key=lambda p: p.stat().st_mtime)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
