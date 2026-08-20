@@ -209,6 +209,27 @@ the Monthly column on every venue with no error at all. See
 pytest -q -m unit     # offline, no network, no browser
 ```
 
+## Finishing a big list over several nights
+
+The write guardrails cap how much can be done per day, so a hundred venues is
+deliberately more than one session. `run_catchup.ps1` handles that: it pins
+whatever is still missing, then annotates whatever is already pinned, and both
+halves trim themselves to the remaining budget. Run it nightly and the backlog
+drains on its own; once everything is done it exits in seconds having done
+nothing.
+
+```powershell
+$script = "$PWDun_catchup.ps1"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
+Register-ScheduledTask -TaskName "beertown catchup" -Force `
+    -Action $action -Trigger (New-ScheduledTaskTrigger -Daily -At "01:15") `
+    -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
+```
+
+`-StartWhenAvailable` matters: the machine is usually asleep at 01:15, and
+without it a missed run is simply skipped.
+
 ## Scheduling (Windows)
 
 ```powershell
