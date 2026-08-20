@@ -107,10 +107,31 @@ def test_expired_cooloff_allows_a_start(limits, ledger_path):
 
 
 @pytest.mark.unit
-def test_corrupt_ledger_does_not_crash_but_starts_fresh(limits, ledger_path):
+def test_corrupt_ledger_fails_closed(limits, ledger_path):
+    """A corrupt ledger must NOT hand back a fresh allowance.
+
+    The write happens after every save, so a truncated file is most likely
+    precisely when a run died mid-flight -- e.g. right after a CAPTCHA. Handing
+    that run a clean slate and no cool-off inverts the guardrail. Assume the
+    worst instead.
+    """
     ledger_path.write_text("{not json", encoding="utf-8")
     ledger = RateLedger(limits, ledger_path)
-    assert ledger.used_today() == 0
+
+    assert ledger.corrupt is True
+    assert ledger.remaining_today() == 0
+    assert ledger.cooloff_remaining_s() > 0
+    with pytest.raises(Tripped):
+        ledger.assert_can_start()
+
+
+@pytest.mark.unit
+def test_ledger_write_is_atomic(limits, ledger_path):
+    """No .tmp left behind, and the file is always complete JSON."""
+    ledger = RateLedger(limits, ledger_path)
+    ledger.record_write()
+    assert not ledger_path.with_suffix(".tmp").exists()
+    assert json.loads(ledger_path.read_text(encoding="utf-8"))["events"]
 
 
 # --- circuit breaker ------------------------------------------------------

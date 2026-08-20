@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,6 +94,7 @@ class RateLedger:
     def __init__(self, limits: Limits, path: Path = LEDGER) -> None:
         self.limits = limits
         self.path = path
+        self.corrupt = False
         raw = self._read()
         self.events: list[float] = list(raw.get("events", []))
         self.blocked_until: float = float(raw.get("blocked_until", 0.0))
@@ -104,17 +106,31 @@ class RateLedger:
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            log.warning("Rate ledger unreadable; starting a fresh one.")
-            return {}
+            # Fail CLOSED. A corrupt ledger previously meant "fresh 100-write
+            # allowance and no cool-off" -- so a crash right after a CAPTCHA
+            # (which is exactly when a truncated write is likely, since we
+            # write after every save) handed back a clean slate. Assume the
+            # worst instead: full day used, cool-off running.
+            log.error(
+                "Rate ledger at %s is unreadable. Assuming the budget is spent "
+                "and a cool-off is active -- this is deliberate. Delete the file "
+                "only if you are certain no run was interrupted.", self.path,
+            )
+            self.corrupt = True
+            return {
+                "events": [_now()] * self.limits.max_per_day,
+                "blocked_until": _now() + self.limits.cooloff_hours * 3600,
+            }
 
     def _write(self) -> None:
+        """Atomic write: a crash mid-write must not truncate the ledger."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(
-                {"events": self.events, "blocked_until": self.blocked_until}, indent=1
-            ),
-            encoding="utf-8",
+        payload = json.dumps(
+            {"events": self.events, "blocked_until": self.blocked_until}, indent=1
         )
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, self.path)  # atomic on POSIX and Windows
 
     # -- queries ---------------------------------------------------------
     def _prune(self) -> None:
@@ -155,6 +171,13 @@ class RateLedger:
 
     # -- recording -------------------------------------------------------
     def record_write(self) -> None:
+        """Charge one write to the budget.
+
+        Call this BEFORE the interaction, not after. Every Save click is a
+        real mutation request to Google whether or not our verification
+        later agrees, and a retry is another one. Over-counting costs a few
+        places a day; under-counting costs the account.
+        """
         self.events.append(_now())
         self._write()
 

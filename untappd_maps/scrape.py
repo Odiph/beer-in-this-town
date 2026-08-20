@@ -11,7 +11,7 @@ import logging
 from collections.abc import Callable
 
 from .config import SEARCH_URL, Settings
-from .http_client import PoliteClient
+from .http_client import BudgetExceeded, PoliteClient, RateLimitTripped
 from .models import Venue, VenueRef
 from .parsers import parse_search_page, parse_venue_stats
 
@@ -144,6 +144,14 @@ def fetch_venues(
         try:
             html = client.get(ref.url)
             out.append(parse_venue_stats(html, ref))
+        except (RateLimitTripped, BudgetExceeded):
+            # These are deliberate stops, not per-venue failures. Swallowing
+            # them meant a run that hit a 429 wall kept firing one real request
+            # per remaining venue into an active rate-limit -- the exact
+            # behaviour PoliteClient exists to prevent.
+            log.error("Rate limit reached at venue %d/%d -- aborting the run.",
+                      i, len(refs))
+            raise
         except Exception as exc:  # one bad venue must not kill the run
             log.error("venue %s (%s) failed: %s", ref.venue_id, ref.name, exc)
             out.append(Venue(ref=ref, total=None, unique=None, monthly=None, you=None))

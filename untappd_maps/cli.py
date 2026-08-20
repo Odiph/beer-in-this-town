@@ -32,7 +32,12 @@ from .export import (
     write_kml,
 )
 from .geocode import geocode_missing
-from .http_client import PoliteClient
+from .guardrails import Tripped
+from .http_client import (
+    BudgetExceeded,
+    PoliteClient,
+    RateLimitTripped,
+)
 from .models import VenueRef
 from .mymaps_upload import manual_instructions, upload_kml
 from .parsers import ParseError, assert_corpus_quality, parse_venue_stats
@@ -368,6 +373,18 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
     try:
         journal = pin_places(places, s, list_name, limit=limit, region=region,
                              min_gap_s=min_gap, max_gap_s=max_gap)
+    except Tripped as exc:
+        # A guardrail fired on purpose. This MUST NOT look like an ordinary
+        # error: the remedy is to wait, never to retry. Previously this was
+        # string-matched into 'list_missing', whose remedy told the caller to
+        # re-run -- the opposite of what a trip means.
+        return fail("pin", Problem(
+            code="guardrail_tripped",
+            message=str(exc),
+            remedy="Wait. Do not re-run until the cool-off expires; check "
+                   "`python -m untappd_maps status --json`. Do not delete "
+                   "state/rate_ledger.json.",
+        ))
     except RuntimeError as exc:
         text = str(exc)
         code = "not_signed_in" if "Not signed in" in text else "list_missing"
@@ -517,6 +534,21 @@ def main(argv: list[str] | None = None) -> int:
             code="interrupted",
             message="Interrupted by the user.",
             remedy="Re-run the same command; progress is journalled and resumes.",
+        ))
+    except (RateLimitTripped, BudgetExceeded) as exc:
+        # Deliberate throttle abort. Advising an immediate retry here would
+        # walk straight back into the rate limit.
+        env = fail(args.cmd, Problem(
+            code="rate_limited",
+            message=str(exc),
+            remedy="Wait several hours before retrying. The disk cache means "
+                   "little work is repeated when you do.",
+        ))
+    except Tripped as exc:
+        env = fail(args.cmd, Problem(
+            code="guardrail_tripped",
+            message=str(exc),
+            remedy="Wait for the cool-off to expire. Do not retry.",
         ))
     except Exception as exc:
         log.error("Run aborted: %s", exc, exc_info=verbose)
