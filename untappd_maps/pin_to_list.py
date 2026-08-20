@@ -187,21 +187,34 @@ def _pin_once(page, list_name: str) -> str:
 
     _save_button(page).click(timeout=15_000)
 
-    # Match the row by its accessible name. Position is irrelevant, so a reflow
-    # cannot make this hit the neighbouring list -- the bug that put a Singapore
-    # bar into a London list during the manual attempt.
+    # Let the picker finish opening before touching it. Without this the first
+    # two attempts are reliably swallowed: the menu is still animating, Maps
+    # discards the click, and we burn three interactions per place instead of
+    # one -- slower, and three times the footprint for a rate-limited script.
     row = (
         page.get_by_role("menuitemradio", name=list_name, exact=False)
         .or_(page.get_by_role("menuitemcheckbox", name=list_name, exact=False))
         .first
     )
+    row.wait_for(state="visible", timeout=15_000)
+    page.wait_for_timeout(1200)  # settle: the menu animates after it is visible
+
+    # Match the row by its accessible name. Position is irrelevant, so a reflow
+    # cannot make this hit the neighbouring list -- the bug that put a Singapore
+    # bar into a London list during the manual attempt.
     row.click(timeout=15_000)
+
+    # Dismiss the picker and give Maps time to actually commit the write before
+    # verifying. Reloading too early reads the OLD state, which reads as a
+    # failure -- and the retry then toggles the place straight back off again.
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(4000)
 
     # The picker does not reliably re-render, so never trust it. Reload and read
     # the place panel instead.
-    page.wait_for_timeout(2500)
     page.goto(place_url, wait_until="domcontentloaded", timeout=60_000)
     page.wait_for_selector(SAVE_BTN, timeout=25_000)
+    page.wait_for_timeout(1500)
     return _saved_in(page)
 
 
@@ -383,7 +396,13 @@ def pin_places(
 
                 time.sleep(random.uniform(min_gap_s, max_gap_s))
         finally:
-            ctx.close()
+            # The browser may already be gone (crash, or the user closed it).
+            # Teardown must never mask a completed run: the journal is safe on
+            # disk either way.
+            try:
+                ctx.close()
+            except Exception as exc:
+                log.debug("Browser teardown was already done: %s", exc)
 
     ok = sum(1 for v in journal.values() if v == "ok")
     log.info(
