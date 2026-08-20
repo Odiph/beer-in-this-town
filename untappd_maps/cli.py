@@ -107,66 +107,97 @@ def cmd_doctor(s: Settings) -> Envelope:
 # --------------------------------------------------------------------------
 # Pipeline commands
 # --------------------------------------------------------------------------
-def cmd_bootstrap(s: Settings, timeout_s: float = 300.0) -> Envelope:
-    """One-time: open real Chrome, let the human log in, save the cookie state."""
+def cmd_bootstrap(s: Settings, timeout_s: float = 900.0) -> Envelope:
+    """One-time login, in a browser Google is willing to accept.
+
+    Google refuses to complete a sign-in inside an automation-controlled
+    browser: "Couldn't sign you in -- This browser or app may not be secure."
+    Playwright-launched Chrome always carries those automation flags, so the
+    login can never happen there.
+
+    So we split it: a plain Chrome process (no Playwright, no automation flags)
+    handles the login into our own profile directory, and Playwright reuses the
+    resulting session afterwards. Google blocks the sign-in *flow*, not an
+    existing session.
+    """
     from playwright.sync_api import sync_playwright
 
+    from .chrome_launch import find_chrome, launch_for_login
+
+    if find_chrome() is None:
+        return fail("bootstrap", Problem(
+            code="chrome_not_found",
+            message="Could not find a Google Chrome installation.",
+            remedy="Install Google Chrome, or log in manually: launch Chrome "
+                   f'with --user-data-dir="{s.profile_dir}", sign in, close it, '
+                   "then re-run bootstrap.",
+        ))
+
+    proc = launch_for_login(s.profile_dir)
+    if proc is None:  # pragma: no cover -- guarded by find_chrome above
+        return fail("bootstrap", Problem(
+            code="chrome_not_found",
+            message="Chrome could not be started.",
+            remedy="Launch it by hand with the profile directory above.",
+        ))
+
     print(
-        "\nA Chrome window will open on Google Maps.\n"
-        "  1. Log in to Google in that window.\n"
-        "  2. Optionally also visit untappd.com and log in, so the YOU\n"
-        "     check-in column is populated.\n"
-        "  3. That is all -- this detects the session by itself and closes.\n"
-        "     No need to press anything here.\n\n"
-        "This profile is separate from your everyday Chrome profile on purpose:\n"
-        "pointing Playwright at your live profile requires Chrome to be fully\n"
-        "closed and can disturb its session state.\n",
+        "\nA normal Chrome window is opening -- not an automated one, which is\n"
+        "the whole point: Google refuses logins in automation-controlled\n"
+        "browsers.\n\n"
+        "  1. Sign in to your Google account in that window.\n"
+        "  2. While you are there, log in to untappd.com too, so the YOU\n"
+        "     check-in column gets populated.\n"
+        "  3. CLOSE the Chrome window when you are done.\n\n"
+        "Closing it is the signal that you have finished. This then captures\n"
+        "the session and exits.\n",
         file=sys.stderr,
     )
+
+    try:
+        proc.wait(timeout=timeout_s)
+    except Exception:
+        proc.kill()
+        return fail("bootstrap", Problem(
+            code="login_timed_out",
+            message=f"Chrome was still open after {timeout_s / 60:.0f} minutes.",
+            remedy="Re-run bootstrap, sign in, and close the window.",
+        ))
+
+    # The profile now holds the cookies. Reuse it headlessly to capture state.
+    time.sleep(2)  # let Chrome flush its cookie store to disk
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             user_data_dir=str(s.profile_dir),
             channel="chrome",
-            headless=False,
-            viewport={"width": 1280, "height": 900},
+            headless=True,
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto("https://www.google.com/maps", wait_until="domcontentloaded")
-
-        # Poll for a real Google session rather than waiting on Enter: stdin is
-        # not interactive when this is launched from an agent or a `!` shell,
-        # where input() hits EOF instantly and we would save an empty session.
-        deadline = time.time() + timeout_s
-        signed_in = False
-        while time.time() < deadline:
-            try:
-                if page.locator(
-                    "a[aria-label*='Google Account'], img[alt*='Google Account']"
-                ).count() > 0:
-                    signed_in = True
-                    break
-            except Exception:
-                pass  # page mid-navigation; try again
-            time.sleep(3)
-
-        if not signed_in:
-            ctx.close()
-            return fail("bootstrap", Problem(
-                code="login_timed_out",
-                message=f"No Google session detected within {timeout_s / 60:.0f} "
-                        "minutes.",
-                remedy="Re-run bootstrap and complete the Google login in the "
-                       "window that opens.",
-            ))
-
-        ctx.storage_state(path=str(s.storage_state))
+        page.goto("https://www.google.com/maps", wait_until="domcontentloaded",
+                  timeout=60_000)
+        page.wait_for_timeout(5000)
+        signed_in = page.locator(
+            "a[aria-label*='Google Account'], img[alt*='Google Account']"
+        ).count() > 0
+        if signed_in:
+            ctx.storage_state(path=str(s.storage_state))
         ctx.close()
+
+    if not signed_in:
+        return fail("bootstrap", Problem(
+            code="login_not_detected",
+            message="Chrome closed, but no Google session was found in the "
+                    "profile.",
+            remedy="Re-run bootstrap and make sure you complete the Google "
+                   "sign-in before closing the window.",
+        ))
 
     return Envelope(
         command="bootstrap",
         ok=True,
-        data={"storage_state": str(s.storage_state)},
-        next_actions=["python -m untappd_maps selfcheck --json"],
+        data={"storage_state": str(s.storage_state),
+              "profile_dir": str(s.profile_dir)},
+        next_actions=["python -m untappd_maps status --json"],
     )
 
 
@@ -362,8 +393,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="check preconditions (deps, session, geocoder)")
     boot = sub.add_parser("bootstrap", parents=[common],
                           help="one-time interactive login")
-    boot.add_argument("--timeout", type=float, default=300.0,
-                      help="seconds to wait for the login (default 300)")
+    boot.add_argument("--timeout", type=float, default=900.0,
+                      help="seconds to wait for you to close Chrome "
+                           "(default 900)")
 
     check = sub.add_parser("selfcheck", parents=[common],
                            help="verify selectors still work (1 request)")
