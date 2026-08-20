@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -106,15 +107,17 @@ def cmd_doctor(s: Settings) -> Envelope:
 # --------------------------------------------------------------------------
 # Pipeline commands
 # --------------------------------------------------------------------------
-def cmd_bootstrap(s: Settings) -> Envelope:
+def cmd_bootstrap(s: Settings, timeout_s: float = 300.0) -> Envelope:
     """One-time: open real Chrome, let the human log in, save the cookie state."""
     from playwright.sync_api import sync_playwright
 
     print(
-        "\nA Chrome window will open.\n"
-        "  1. Log in to https://untappd.com\n"
-        "  2. Log in to https://myaccount.google.com\n"
-        "  3. Come back here and press Enter.\n"
+        "\nA Chrome window will open on Google Maps.\n"
+        "  1. Log in to Google in that window.\n"
+        "  2. Optionally also visit untappd.com and log in, so the YOU\n"
+        "     check-in column is populated.\n"
+        "  3. That is all -- this detects the session by itself and closes.\n"
+        "     No need to press anything here.\n\n"
         "This profile is separate from your everyday Chrome profile on purpose:\n"
         "pointing Playwright at your live profile requires Chrome to be fully\n"
         "closed and can disturb its session state.\n",
@@ -128,8 +131,34 @@ def cmd_bootstrap(s: Settings) -> Envelope:
             viewport={"width": 1280, "height": 900},
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto("https://untappd.com/login")
-        input("Press Enter once you are logged in to BOTH sites... ")
+        page.goto("https://www.google.com/maps", wait_until="domcontentloaded")
+
+        # Poll for a real Google session rather than waiting on Enter: stdin is
+        # not interactive when this is launched from an agent or a `!` shell,
+        # where input() hits EOF instantly and we would save an empty session.
+        deadline = time.time() + timeout_s
+        signed_in = False
+        while time.time() < deadline:
+            try:
+                if page.locator(
+                    "a[aria-label*='Google Account'], img[alt*='Google Account']"
+                ).count() > 0:
+                    signed_in = True
+                    break
+            except Exception:
+                pass  # page mid-navigation; try again
+            time.sleep(3)
+
+        if not signed_in:
+            ctx.close()
+            return fail("bootstrap", Problem(
+                code="login_timed_out",
+                message=f"No Google session detected within {timeout_s / 60:.0f} "
+                        "minutes.",
+                remedy="Re-run bootstrap and complete the Google login in the "
+                       "window that opens.",
+            ))
+
         ctx.storage_state(path=str(s.storage_state))
         ctx.close()
 
@@ -331,7 +360,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="where the pipeline is up to, and what to run next")
     sub.add_parser("doctor", parents=[common],
                    help="check preconditions (deps, session, geocoder)")
-    sub.add_parser("bootstrap", parents=[common], help="one-time interactive login")
+    boot = sub.add_parser("bootstrap", parents=[common],
+                          help="one-time interactive login")
+    boot.add_argument("--timeout", type=float, default=300.0,
+                      help="seconds to wait for the login (default 300)")
 
     check = sub.add_parser("selfcheck", parents=[common],
                            help="verify selectors still work (1 request)")
@@ -397,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "doctor":
             env = cmd_doctor(s)
         elif args.cmd == "bootstrap":
-            env = cmd_bootstrap(s)
+            env = cmd_bootstrap(s, args.timeout)
         elif args.cmd == "selfcheck":
             env = cmd_selfcheck(s, args.slug, args.venue_id)
         elif args.cmd == "run":
