@@ -63,10 +63,25 @@ MAX_CONSECUTIVE_MISSES = 8
 SAVE_BTN = "button[aria-label^='Save'], button[aria-label^='Saved']"
 
 
+def journal_key(name: str, address: str | None) -> str:
+    """Identify a place by name AND address.
+
+    Keying on the bare name silently collapsed chains: two outlets both called
+    "Harry's" or "Brewerkz" shared one entry, so the second was skipped as
+    already done and never pinned -- invisible in the summary counts.
+    """
+    return f"{name} | {address}" if address else name
+
+
 def _load_journal() -> dict[str, str]:
     if JOURNAL.exists():
         return json.loads(JOURNAL.read_text(encoding="utf-8"))
     return {}
+
+
+def _lookup(journal: dict[str, str], name: str, address: str | None) -> str | None:
+    """Read an entry, honouring journals written before keys included address."""
+    return journal.get(journal_key(name, address)) or journal.get(name)
 
 
 def _save_journal(journal: dict[str, str]) -> None:
@@ -89,19 +104,23 @@ def _search_url(name: str, address: str | None, region: str | None = None) -> st
     return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(query)
 
 
-def _saved_in(page) -> str:
+def _saved_in(page) -> str | None:
     """Read the "Saved in <list>" line from the open place panel.
 
-    Returns an empty string when the place is in no list. This is the ground
-    truth we verify against -- the picker checkmarks refresh unreliably.
+    Returns "" when the place is definitively in no list, and **None when we
+    could not tell**. The distinction is not pedantic: collapsing "unknown" to
+    "not saved" means a transient read failure on an already-saved place makes
+    us click its (checked) row, which UNCHECKS it. A run could then leave the
+    user's list smaller than it found it.
     """
     try:
         node = page.get_by_text("Saved in ", exact=False).first
         if node.count() == 0:
             return ""
         return node.inner_text(timeout=3000).replace("Saved in ", "").strip()
-    except Exception:
-        return ""
+    except Exception as exc:
+        log.debug("Could not read the saved-in line: %s", exc)
+        return None
 
 
 def _open_place(page, name: str, address: str | None, region: str | None) -> bool:
@@ -130,6 +149,41 @@ def _open_place(page, name: str, address: str | None, region: str | None) -> boo
 
 def _save_button(page):
     return page.locator(SAVE_BTN).first
+
+
+def _normalise(text: str) -> set[str]:
+    """Word set for loose name comparison: lowercase, alphanumeric only."""
+    return {
+        "".join(ch for ch in word.lower() if ch.isalnum())
+        for word in text.split()
+    } - {""}
+
+
+def place_matches(requested: str, heading: str, threshold: float = 0.5) -> bool:
+    """Does the open place plausibly correspond to the one we asked for?
+
+    Google rewrites names ("Brewerkz" -> "Brewerkz Riverside Point", "TAP -
+    9 Penang" -> "TAP Craft Beer Bar"), so exact matching is useless. What we
+    are guarding against is the genuinely different venue: searching a generic
+    name and silently saving somebody else's bar, then journalling it "ok".
+
+    Overlap is measured against the REQUESTED name, so extra words Google adds
+    cost nothing while missing words are penalised.
+    """
+    want, got = _normalise(requested), _normalise(heading)
+    if not want:
+        return True
+    return len(want & got) / len(want) >= threshold
+
+
+def _place_heading(page) -> str | None:
+    try:
+        node = page.locator("h1").first
+        if node.count() == 0:
+            return None
+        return node.inner_text(timeout=3000).strip()
+    except Exception:
+        return None
 
 
 def _assert_ready(page, list_name: str) -> None:
@@ -179,7 +233,7 @@ def _assert_ready(page, list_name: str) -> None:
     log.info("Pre-flight OK: signed in, list %r exists.", list_name)
 
 
-def _pin_once(page, list_name: str) -> str:
+def _pin_once(page, list_name: str) -> str | None:
     """Open the picker, click the target list by name, return the verified list.
 
     Returns the "Saved in ..." text after a reload, so the caller can tell the
@@ -291,7 +345,7 @@ def pin_places(
     ledger.assert_can_start()
 
     journal = _load_journal()
-    todo = [(n, a) for (n, a) in places if journal.get(n) != "ok"]
+    todo = [(n, a) for (n, a) in places if _lookup(journal, n, a) != "ok"]
 
     allowed = ledger.budget_for_this_run(limit)
     if len(todo) > allowed:
@@ -350,7 +404,7 @@ def pin_places(
                     time.sleep(limits.break_seconds)
 
                 if not _open_place(page, name, address, region):
-                    journal[name] = "not-found"
+                    journal[journal_key(name, address)] = "not-found"
                     log.warning("  no Google Maps result -- skipped")
                     _save_journal(journal)
                     # A miss still counts toward the breaker and still waits.
@@ -372,9 +426,29 @@ def pin_places(
                     continue
                 consecutive_misses = 0
 
+                heading = _place_heading(page)
+                if heading and not place_matches(name, heading):
+                    # Saving the wrong venue and journalling it "ok" is the same
+                    # silent-wrong-outcome family as the wrong-list bug, one
+                    # level up. Refuse rather than guess.
+                    journal[journal_key(name, address)] = "ambiguous"
+                    log.warning("  Maps opened %r, which does not match -- "
+                                "skipped", heading)
+                    _save_journal(journal)
+                    time.sleep(random.uniform(min_gap_s, max_gap_s))
+                    continue
+
                 already = _saved_in(page)
+                if already is None:
+                    # Unknown state. Clicking now could uncheck an already-saved
+                    # place, so leave it alone and retry on a later run.
+                    log.warning("  could not read the saved-in line -- skipping "
+                                "this place rather than risk un-saving it")
+                    breaker.record_failure()
+                    time.sleep(random.uniform(min_gap_s, max_gap_s))
+                    continue
                 if list_name.lower() in already.lower():
-                    journal[name] = "ok"
+                    journal[journal_key(name, address)] = "ok"
                     log.info("  already in %s", list_name)
                     _save_journal(journal)
                     continue
@@ -398,6 +472,11 @@ def pin_places(
                         page.wait_for_timeout(1500)
                         continue
 
+                    if landed is None:
+                        log.warning("  attempt %d: could not verify -- not "
+                                    "assuming either way", attempt)
+                        page.wait_for_timeout(2000)
+                        continue
                     if list_name.lower() in landed.lower():
                         outcome = "ok"
                         log.info("  saved (verified: %r)", landed)
@@ -412,7 +491,7 @@ def pin_places(
                     )
                     page.wait_for_timeout(2000)
 
-                journal[name] = outcome
+                journal[journal_key(name, address)] = outcome
                 _save_journal(journal)
 
                 if outcome == "ok":

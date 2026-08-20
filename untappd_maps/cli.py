@@ -401,6 +401,7 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
 
     failed = [k for k, v in journal.items() if v == "failed"]
     missing = [k for k, v in journal.items() if v == "not-found"]
+    ambiguous = [k for k, v in journal.items() if v == "ambiguous"]
     saved = [k for k, v in journal.items() if v == "ok"]
 
     actions = []
@@ -413,10 +414,14 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
         command="pin",
         ok=not failed,
         data={"saved": len(saved), "failed": len(failed), "not_found": len(missing),
-              "failed_names": failed[:20], "not_found_names": missing[:20],
-              "list": list_name},
-        warnings=([f"{len(missing)} place(s) had no Google Maps match"]
-                  if missing else []),
+              "ambiguous": len(ambiguous), "failed_names": failed[:20],
+              "not_found_names": missing[:20],
+              "ambiguous_names": ambiguous[:20], "list": list_name},
+        warnings=(
+            ([f"{len(missing)} place(s) had no Google Maps match"] if missing else [])
+            + ([f"{len(ambiguous)} place(s) resolved to a different venue "
+                "and were skipped -- check them by hand"] if ambiguous else [])
+        ),
         next_actions=actions,
     )
 

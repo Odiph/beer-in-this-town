@@ -22,6 +22,23 @@ from .config import CACHE_DIR, Settings
 log = logging.getLogger(__name__)
 
 
+def _retry_after_seconds(header: str | None, fallback: int) -> float:
+    """Parse Retry-After in either permitted form; never raise."""
+    if not header:
+        return fallback
+    try:
+        return max(0.0, float(int(header)))
+    except (TypeError, ValueError):
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        when = parsedate_to_datetime(header)
+        return max(0.0, when.timestamp() - time.time()) or fallback
+    except Exception:
+        return fallback
+
+
 class RateLimitTripped(RuntimeError):
     """We were throttled repeatedly. Stop before this becomes a ban."""
 
@@ -153,7 +170,11 @@ class PoliteClient:
                         "and lower target_count before retrying."
                     )
                 fallback = self.s.backoff_ladder_s[min(attempt, 2)]
-                delay = int(resp.headers.get("Retry-After", 0)) or fallback
+                # Retry-After is legally either seconds or an HTTP-date;
+                # int() on the date form used to kill the run outright.
+                delay = _retry_after_seconds(
+                    resp.headers.get("Retry-After"), fallback
+                )
                 log.warning("HTTP %s -- sleeping %ss", resp.status_code, delay)
                 time.sleep(delay)
                 continue
@@ -177,21 +198,24 @@ class PoliteClient:
         ) from last_error
 
     def robots_disallows_scraping(self) -> bool:
-        """Crude but honest: is /v/ or /search Disallow-ed for User-agent: *?"""
+        """Would a compliant crawler be refused the paths we use?
+
+        Delegated to urllib.robotparser rather than hand-rolled: the previous
+        version matched only paths starting with /v/ or /search, so a blanket
+        `Disallow: /` -- the strictest rule there is -- sailed straight through.
+        It also mishandled grouped User-agent lines.
+        """
+        from urllib.robotparser import RobotFileParser
+
         try:
             txt = self.get("https://untappd.com/robots.txt", use_cache=False)
-        except Exception:
+        except Exception:  # absence of robots.txt is not a prohibition
             return False
-        in_star_block = False
-        for raw in txt.splitlines():
-            line = raw.split("#", 1)[0].strip()
-            if not line:
-                continue
-            key, _, value = line.partition(":")
-            key, value = key.strip().lower(), value.strip()
-            if key == "user-agent":
-                in_star_block = value == "*"
-            elif (key == "disallow" and in_star_block and value
-                    and value.startswith(("/v/", "/search"))):
-                return True
-        return False
+
+        parser = RobotFileParser()
+        parser.parse(txt.splitlines())
+        agent = self.s.user_agent
+        return not all(
+            parser.can_fetch(agent, path)
+            for path in ("https://untappd.com/v/x/1", "https://untappd.com/search")
+        )
