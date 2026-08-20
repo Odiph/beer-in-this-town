@@ -9,7 +9,7 @@ $Stamp   = Get-Date -Format "yyyy-MM-dd_HHmmss"
 $LogFile = Join-Path $LogDir "run_$Stamp.log"
 
 Set-Location $Root
-& (Join-Path $Root ".venv\Scripts\python.exe") -m untappd_maps run `
+& (Join-Path $Root ".venv\Scripts\python.exe") -m beer_in_this_town run `
     --query "singapore" --count 100 --title "Singapore Bars" --no-upload `
     *>&1 | Tee-Object -FilePath $LogFile
 

@@ -212,7 +212,7 @@ def _assert_ready(page, list_name: str) -> None:
             "Not signed in to Google in this Chrome profile.\n"
             "This is a dedicated profile, separate from your everyday Chrome,\n"
             "so it needs its own one-time login:\n"
-            "  python -m untappd_maps bootstrap"
+            "  python -m beer_in_this_town bootstrap"
         )
 
     page.goto(

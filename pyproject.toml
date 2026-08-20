@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "untappd-maps"
+name = "beer-in-this-town"
 version = "0.1.0"
-description = "Agent-driven pipeline: scrape Untappd venue stats, export CSV/KML, import into Google Maps."
+description = "Where to get a beer in this town: scrape venue check-in stats, export CSV/KML, and put them on your map."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -31,10 +31,10 @@ browser = ["playwright>=1.45"]
 dev = ["pytest>=8.0", "ruff>=0.5"]
 
 [project.scripts]
-untappd-maps = "untappd_maps.cli:main"
+beertown = "beer_in_this_town.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["untappd_maps"]
+packages = ["beer_in_this_town"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

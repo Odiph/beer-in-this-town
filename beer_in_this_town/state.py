@@ -93,32 +93,32 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
     """Literal commands to run next. Ordered; the first one is the recommendation."""
     if not state["logged_in"]:
         return [
-            "python -m untappd_maps bootstrap",
-            "# then: python -m untappd_maps selfcheck --json",
+            "python -m beer_in_this_town bootstrap",
+            "# then: python -m beer_in_this_town selfcheck --json",
         ]
 
     if not state["latest_csv"]:
         return [
-            f"python -m untappd_maps run --query {s.query} "
+            f"python -m beer_in_this_town run --query {s.query} "
             f"--count {s.target_count} --no-upload --json",
         ]
 
     actions: list[str] = []
     if not state["latest_kml"]:
         actions.append(
-            f"python -m untappd_maps run --query {s.query} "
+            f"python -m beer_in_this_town run --query {s.query} "
             f"--count {s.target_count} --no-upload --json"
         )
 
     pins = state["pin_progress"]
     if pins["ok"] == 0:
         actions.append(
-            f'python -m untappd_maps pin --csv "{state["latest_csv"]}" '
+            f'python -m beer_in_this_town pin --csv "{state["latest_csv"]}" '
             f'--list "{s.map_title}" --limit 3 --json   # trial run first'
         )
     elif pins["failed"]:
         actions.append(
-            f'python -m untappd_maps pin --csv "{state["latest_csv"]}" '
+            f'python -m beer_in_this_town pin --csv "{state["latest_csv"]}" '
             f'--list "{s.map_title}" --json   # retries only what failed'
         )
 

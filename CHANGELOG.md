@@ -26,7 +26,7 @@ First public release.
 - **Guardrails** for the account-writing paths: a rolling 24h write ledger
   persisted to disk, a circuit breaker, interstitial detection, and a
   persisted cool-off. All fail closed.
-- Claude Code skill at `.claude/skills/untappd-maps/`.
+- Claude Code skill at `.claude/skills/beer-in-this-town/`.
 
 ### Notes on correctness
 The parsing layer is built so that wrong numbers are impossible rather than

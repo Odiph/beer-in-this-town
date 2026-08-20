@@ -33,7 +33,7 @@ strict selectors, label-driven extraction, a corpus quality gate.
 
 ## Style
 
-`ruff check untappd_maps tests` must pass. Type annotations on function
+`ruff check beer_in_this_town tests` must pass. Type annotations on function
 signatures. Immutable dataclasses for data that crosses a boundary.
 
 ## Legal
