@@ -60,6 +60,54 @@ def find_chrome() -> Path | None:
     return None
 
 
+GOOGLE_SESSION_COOKIES = (
+    "SID", "SSID", "HSID", "APISID", "SAPISID", "__Secure-1PSID",
+)
+
+
+def profile_has_google_session(profile_dir: Path) -> bool | None:
+    """Is there a Google session in this profile's cookie store?
+
+    Returns None when the answer cannot be determined — typically because
+    Chrome is running and holds the database. Callers must treat None as
+    "unknown", never as "no": reporting a missing login when we simply could
+    not read the file would send the user round the login loop for nothing.
+
+    Only cookie NAMES are inspected. Values are encrypted and we neither need
+    nor want them.
+    """
+    import shutil
+    import sqlite3
+    import tempfile
+
+    candidates = [
+        profile_dir / "Default" / "Network" / "Cookies",
+        profile_dir / "Default" / "Cookies",
+    ]
+    store = next((c for c in candidates if c.exists()), None)
+    if store is None:
+        return None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp) / "cookies.sqlite"
+        try:
+            shutil.copy2(store, copy)
+            con = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+            try:
+                placeholders = ",".join("?" * len(GOOGLE_SESSION_COOKIES))
+                row = con.execute(
+                    "SELECT count(*) FROM cookies "
+                    "WHERE host_key LIKE '%google.com' "
+                    f"AND name IN ({placeholders})",
+                    GOOGLE_SESSION_COOKIES,
+                ).fetchone()
+            finally:
+                con.close()
+        except (OSError, sqlite3.Error):
+            return None  # locked or mid-write: unknown, not absent
+    return bool(row and row[0])
+
+
 def launch_for_login(
     profile_dir: Path, url: str = "https://accounts.google.com/"
 ) -> subprocess.Popen | None:

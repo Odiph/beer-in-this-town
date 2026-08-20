@@ -107,7 +107,8 @@ def cmd_doctor(s: Settings) -> Envelope:
 # --------------------------------------------------------------------------
 # Pipeline commands
 # --------------------------------------------------------------------------
-def cmd_bootstrap(s: Settings, timeout_s: float = 900.0) -> Envelope:
+def cmd_bootstrap(s: Settings, timeout_s: float = 900.0,
+                  capture_only: bool = False) -> Envelope:
     """One-time login, in a browser Google is willing to accept.
 
     Google refuses to complete a sign-in inside an automation-controlled
@@ -122,7 +123,20 @@ def cmd_bootstrap(s: Settings, timeout_s: float = 900.0) -> Envelope:
     """
     from playwright.sync_api import sync_playwright
 
-    from .chrome_launch import find_chrome, launch_for_login
+    from .chrome_launch import (
+        find_chrome,
+        launch_for_login,
+        profile_has_google_session,
+    )
+
+    if capture_only:
+        if not s.profile_dir.exists():
+            return fail("bootstrap", Problem(
+                code="no_profile",
+                message=f"No profile at {s.profile_dir}.",
+                remedy="python -m untappd_maps bootstrap",
+            ))
+        return _capture_session(s, sync_playwright)
 
     if find_chrome() is None:
         return fail("bootstrap", Problem(
@@ -154,17 +168,39 @@ def cmd_bootstrap(s: Settings, timeout_s: float = 900.0) -> Envelope:
         file=sys.stderr,
     )
 
-    try:
-        proc.wait(timeout=timeout_s)
-    except Exception:
-        proc.kill()
+    # Poll while waiting so we can tell the user the moment the login lands,
+    # rather than leaving them guessing whether it worked.
+    deadline = time.time() + timeout_s
+    announced = False
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            break  # window closed: the agreed finish signal
+        if not announced and profile_has_google_session(s.profile_dir):
+            announced = True
+            print(
+                "\n  Google session detected. Close the Chrome window to "
+                "finish.\n",
+                file=sys.stderr,
+            )
+        time.sleep(5)
+    else:
+        # Timed out with Chrome still open. Do NOT kill it -- the user may be
+        # mid-login, and killing Chrome can corrupt the profile.
         return fail("bootstrap", Problem(
             code="login_timed_out",
             message=f"Chrome was still open after {timeout_s / 60:.0f} minutes.",
-            remedy="Re-run bootstrap, sign in, and close the window.",
+            remedy="Close the Chrome window, then run: "
+                   "python -m untappd_maps bootstrap --capture",
         ))
 
-    # The profile now holds the cookies. Reuse it headlessly to capture state.
+    return _capture_session(s, sync_playwright)
+
+
+def _capture_session(s: Settings, sync_playwright) -> Envelope:
+    """Read the session out of a profile Chrome has finished writing.
+
+    Requires Chrome to be closed: it holds an exclusive lock on the profile.
+    """
     time.sleep(2)  # let Chrome flush its cookie store to disk
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
@@ -393,6 +429,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="check preconditions (deps, session, geocoder)")
     boot = sub.add_parser("bootstrap", parents=[common],
                           help="one-time interactive login")
+    boot.add_argument("--capture", action="store_true",
+                      help="skip the login window and capture the session "
+                           "from the existing profile (Chrome must be closed)")
     boot.add_argument("--timeout", type=float, default=900.0,
                       help="seconds to wait for you to close Chrome "
                            "(default 900)")
@@ -461,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "doctor":
             env = cmd_doctor(s)
         elif args.cmd == "bootstrap":
-            env = cmd_bootstrap(s, args.timeout)
+            env = cmd_bootstrap(s, args.timeout, args.capture)
         elif args.cmd == "selfcheck":
             env = cmd_selfcheck(s, args.slug, args.venue_id)
         elif args.cmd == "run":
