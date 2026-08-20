@@ -40,6 +40,14 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from .config import STATE_DIR, Settings
+from .guardrails import (
+    CircuitBreaker,
+    Limits,
+    RateLedger,
+    Tripped,
+    detect_block,
+    looks_signed_out,
+)
 
 log = logging.getLogger(__name__)
 
@@ -212,6 +220,35 @@ def _unsave(page, wrong_list: str) -> None:
         )
 
 
+def _abort_if_blocked(page, ledger: RateLedger) -> None:
+    """Stop the run the moment Google shows an interstitial or signs us out.
+
+    These pages are served as HTTP 200, so there is no error to catch -- the
+    only signal is the text on screen. Continuing past one is the single
+    fastest way to turn a warning into a ban.
+    """
+    try:
+        text = page.locator("body").inner_text(timeout=10_000)
+    except Exception:
+        return  # a transient read failure is not evidence of a block
+
+    signal = detect_block(text)
+    if signal:
+        ledger.start_cooloff(f"block signal on page: {signal!r}")
+        raise Tripped(
+            f"Google served an interstitial ({signal!r}). Stopping immediately "
+            "and starting a cool-off. Open Google Maps in a normal browser, "
+            "confirm the account is healthy, and try again later."
+        )
+
+    if looks_signed_out(text):
+        ledger.start_cooloff("signed out mid-run")
+        raise Tripped(
+            "Signed out mid-run -- the session was invalidated. Stopping. "
+            "Re-run bootstrap and check the account before continuing."
+        )
+
+
 def pin_places(
     places: list[tuple[str, str | None]],
     s: Settings,
@@ -222,6 +259,7 @@ def pin_places(
     region: str | None = None,
     min_gap_s: float = MIN_GAP_S,
     max_gap_s: float = MAX_GAP_S,
+    limits: Limits | None = None,
 ) -> dict[str, str]:
     """Save each (name, address) into the named Google Maps list.
 
@@ -230,14 +268,29 @@ def pin_places(
     """
     from playwright.sync_api import sync_playwright
 
+    limits = limits or Limits()
+    ledger = RateLedger(limits)
+    breaker = CircuitBreaker(limits.max_consecutive_failures)
+
+    # Fail closed BEFORE opening a browser: cool-off and daily budget first.
+    ledger.assert_can_start()
+
     journal = _load_journal()
     todo = [(n, a) for (n, a) in places if journal.get(n) != "ok"]
-    if limit:
-        todo = todo[:limit]
+
+    allowed = ledger.budget_for_this_run(limit)
+    if len(todo) > allowed:
+        log.warning(
+            "Trimming this run to %d place(s): per-run cap %d, %d left in the "
+            "rolling 24h budget. Re-run later to continue -- progress resumes.",
+            allowed, limits.max_per_run, ledger.remaining_today(),
+        )
+        todo = todo[:allowed]
 
     log.info(
-        "%d place(s) to pin into %r (%d already done)",
+        "%d place(s) to pin into %r (%d already done, %d writes left today)",
         len(todo), list_name, sum(1 for v in journal.values() if v == "ok"),
+        ledger.remaining_today(),
     )
     if not todo:
         return journal
@@ -256,6 +309,29 @@ def pin_places(
 
             for i, (name, address) in enumerate(todo, 1):
                 log.info("[%3d/%d] %s", i, len(todo), name)
+
+                # --- guardrails, checked before every single write ---------
+                _abort_if_blocked(page, ledger)
+
+                if breaker.is_tripped:
+                    ledger.start_cooloff(
+                        f"{breaker.consecutive} consecutive failures"
+                    )
+                    raise Tripped(
+                        f"Stopped after {breaker.consecutive} consecutive failures. "
+                        "Repeated failures are exactly when a script looks least "
+                        "human, so this stops rather than retries. Cool-off set; "
+                        "progress is journalled and resumes."
+                    )
+
+                if ledger.remaining_today() <= 0:
+                    log.warning("Daily write budget reached -- stopping cleanly.")
+                    break
+
+                # A longer, human-shaped pause every so often.
+                if i > 1 and (i - 1) % limits.break_every == 0:
+                    log.info("  taking a %.0fs break", limits.break_seconds)
+                    time.sleep(limits.break_seconds)
 
                 if not _open_place(page, name, address, region):
                     journal[name] = "not-found"
@@ -296,7 +372,13 @@ def pin_places(
 
                 journal[name] = outcome
                 _save_journal(journal)
-                if outcome == "failed":
+
+                if outcome == "ok":
+                    # Only a real write counts against the budget.
+                    ledger.record_write()
+                    breaker.record_success()
+                else:
+                    breaker.record_failure()
                     log.error("  giving up on %s after %d attempts", name, MAX_ATTEMPTS)
 
                 time.sleep(random.uniform(min_gap_s, max_gap_s))
