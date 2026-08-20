@@ -79,3 +79,24 @@ stderr. Parse stdout; ignore stderr unless debugging.
 - The one-time `bootstrap` login (credentials).
 - Creating the target saved list in Google Maps.
 - Deciding whether to use `pin` at all.
+
+## Anti-ban guardrails (do not weaken these)
+
+`pin` writes to a live Google account. Four independent guardrails, layered so
+defeating one still leaves the others:
+
+| Guardrail | Behaviour |
+|---|---|
+| **Rate ledger** | Rolling 24h write budget, **persisted to disk**. Restarting does not reset it. Default 100/day, 60/run. |
+| **Circuit breaker** | 3 consecutive failures → stop and start a cool-off. Repeated failure is when a script looks least human. |
+| **Block detection** | Scans every page for CAPTCHA / "unusual traffic" / "not a robot" / forced sign-out. Any hit aborts instantly. Google serves these as HTTP 200, so text is the only signal. |
+| **Cool-off** | 6h, persisted. Applied after any trip or detected block. |
+
+Rules for agents:
+
+1. **Never delete `state/rate_ledger.json`** to get a fresh allowance. The
+   persistence is the entire point.
+2. **Never raise `max_per_day` / `max_per_run`** on your own initiative.
+3. **Never retry past a `Tripped` error.** It means stop, not try again.
+4. If a run trims itself ("Trimming this run to N places"), that is correct
+   behaviour — report it and resume later, do not work around it.
