@@ -5,12 +5,12 @@ Every command accepts --json and then prints exactly one envelope on stdout
 carrying a machine-readable error code and a remedy, so an agent can recover
 without parsing tracebacks.
 
-  python -m untappd_maps status --json      # where am I, what is next
-  python -m untappd_maps doctor --json      # are the preconditions met
-  python -m untappd_maps bootstrap          # one-time interactive login
-  python -m untappd_maps selfcheck --json   # 1 request: are selectors alive
-  python -m untappd_maps run --json         # scrape -> CSV + KML + diff
-  python -m untappd_maps pin  --json        # save into a Google Maps list
+  python -m beer_in_this_town status --json      # where am I, what is next
+  python -m beer_in_this_town doctor --json      # are the preconditions met
+  python -m beer_in_this_town bootstrap          # one-time interactive login
+  python -m beer_in_this_town selfcheck --json   # 1 request: are selectors alive
+  python -m beer_in_this_town run --json         # scrape -> CSV + KML + diff
+  python -m beer_in_this_town pin  --json        # save into a Google Maps list
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ from .pin_to_list import pin_places, places_from_csv
 from .scrape import collect_venue_refs, fetch_venues
 from .state import inspect_state, next_actions
 
-log = logging.getLogger("untappd_maps")
+log = logging.getLogger("beer_in_this_town")
 
 
 def setup_logging(verbose: bool, as_json: bool) -> None:
@@ -97,7 +97,7 @@ def cmd_doctor(s: Settings) -> Envelope:
     data["session_file"] = "present" if s.storage_state.exists() else "missing"
     data["profile_dir"] = "present" if s.profile_dir.exists() else "missing"
     if not s.storage_state.exists():
-        problems.append("no saved session -- run: python -m untappd_maps bootstrap")
+        problems.append("no saved session -- run: python -m beer_in_this_town bootstrap")
 
     data["geocoder"] = "google" if s.google_geocoding_key else "nominatim (free, 1 req/s)"
 
@@ -106,7 +106,7 @@ def cmd_doctor(s: Settings) -> Envelope:
         ok=not problems,
         data=data,
         warnings=problems,
-        next_actions=["python -m untappd_maps status --json"],
+        next_actions=["python -m beer_in_this_town status --json"],
     )
 
 
@@ -140,7 +140,7 @@ def cmd_bootstrap(s: Settings, timeout_s: float = 900.0,
             return fail("bootstrap", Problem(
                 code="no_profile",
                 message=f"No profile at {s.profile_dir}.",
-                remedy="python -m untappd_maps bootstrap",
+                remedy="python -m beer_in_this_town bootstrap",
             ))
         return _capture_session(s, sync_playwright)
 
@@ -196,7 +196,7 @@ def cmd_bootstrap(s: Settings, timeout_s: float = 900.0,
             code="login_timed_out",
             message=f"Chrome was still open after {timeout_s / 60:.0f} minutes.",
             remedy="Close the Chrome window, then run: "
-                   "python -m untappd_maps bootstrap --capture",
+                   "python -m beer_in_this_town bootstrap --capture",
         ))
 
     return _capture_session(s, sync_playwright)
@@ -239,7 +239,7 @@ def _capture_session(s: Settings, sync_playwright) -> Envelope:
         ok=True,
         data={"storage_state": str(s.storage_state),
               "profile_dir": str(s.profile_dir)},
-        next_actions=["python -m untappd_maps status --json"],
+        next_actions=["python -m beer_in_this_town status --json"],
     )
 
 
@@ -256,7 +256,7 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
             code="selectors_stale",
             message=str(exc),
             remedy="Inspect the dumped HTML in debug/ and update the selectors "
-                   "in untappd_maps/parsers.py",
+                   "in beer_in_this_town/parsers.py",
         ))
     except Exception as exc:
         return fail("selfcheck", Problem(
@@ -277,7 +277,7 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
         ok=True,
         data={"url": ref.url, "total": venue.total, "unique": venue.unique,
               "monthly": venue.monthly, "coords_embedded": venue.has_coords},
-        next_actions=["python -m untappd_maps run --json"],
+        next_actions=["python -m beer_in_this_town run --json"],
     )
 
 
@@ -351,7 +351,7 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
         },
         warnings=warnings,
         next_actions=[
-            f'python -m untappd_maps pin --csv "{csv_path}" '
+            f'python -m beer_in_this_town pin --csv "{csv_path}" '
             f'--list "{s.map_title}" --limit 3 --json'
         ],
     )
@@ -365,7 +365,7 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
         return fail("pin", Problem(
             code="csv_missing",
             message=f"CSV not found: {path}",
-            remedy="python -m untappd_maps run --json",
+            remedy="python -m beer_in_this_town run --json",
         ))
 
     places = places_from_csv(path)
@@ -383,13 +383,13 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
             code="guardrail_tripped",
             message=str(exc),
             remedy="Wait. Do not re-run until the cool-off expires; check "
-                   "`python -m untappd_maps status --json`. Do not delete "
+                   "`python -m beer_in_this_town status --json`. Do not delete "
                    "state/rate_ledger.json.",
         ))
     except RuntimeError as exc:
         text = str(exc)
         code = "not_signed_in" if "Not signed in" in text else "list_missing"
-        remedy = ("python -m untappd_maps bootstrap" if code == "not_signed_in"
+        remedy = ("python -m beer_in_this_town bootstrap" if code == "not_signed_in"
                   else f"Create the list {list_name!r} by hand in Google Maps "
                        "(Saved -> New list), then re-run.")
         return fail("pin", Problem(code=code, message=text, remedy=remedy))
@@ -408,7 +408,7 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
     actions = []
     if failed:
         actions.append(
-            f'python -m untappd_maps pin --csv "{path}" --list "{list_name}" --json'
+            f'python -m beer_in_this_town pin --csv "{path}" --list "{list_name}" --json'
         )
 
     return Envelope(
@@ -436,7 +436,7 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
         return fail("notes", Problem(
             code="csv_missing",
             message=f"CSV not found: {path}",
-            remedy="python -m untappd_maps run --json",
+            remedy="python -m beer_in_this_town run --json",
         ))
 
     places = notes_from_csv(path)
@@ -469,7 +469,7 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
               "not_in_list": tally["not-in-list"], "list": list_name},
         warnings=([f"{len(unpinned)} place(s) are not in the list yet; "
                    "run pin first"] if unpinned else []),
-        next_actions=([f'python -m untappd_maps notes --csv "{path}" '
+        next_actions=([f'python -m beer_in_this_town notes --csv "{path}" '
                        f'--list "{list_name}" --json']
                       if tally["failed"] else []),
     )
@@ -477,7 +477,7 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
 
 def build_parser() -> argparse.ArgumentParser:
     # Shared flags live on a parent parser so they work in BOTH positions:
-    # `untappd_maps --json status` and `untappd_maps status --json`. An agent
+    # `beer_in_this_town --json status` and `beer_in_this_town status --json`. An agent
     # should not have to remember which side of the subcommand a flag goes on.
     # default=SUPPRESS is load-bearing: with a normal default the SUBparser
     # writes its own False over a True set before the subcommand, so
@@ -490,7 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="emit one machine-readable envelope on stdout "
                              "(logs go to stderr)")
 
-    p = argparse.ArgumentParser(prog="untappd_maps", parents=[common])
+    p = argparse.ArgumentParser(prog="beer_in_this_town", parents=[common])
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status", parents=[common],

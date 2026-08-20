@@ -10,7 +10,7 @@ labels: bug
 
 **Command you ran**
 ```
-python -m untappd_maps ... --json
+python -m beer_in_this_town ... --json
 ```
 
 **The JSON envelope** (if you have it — it carries the error code and remedy)

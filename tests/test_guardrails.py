@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from untappd_maps.guardrails import (
+from beer_in_this_town.guardrails import (
     CircuitBreaker,
     Limits,
     RateLedger,

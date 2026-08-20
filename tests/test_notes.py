@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from untappd_maps.notes import format_note, notes_from_csv
+from beer_in_this_town.notes import format_note, notes_from_csv
 
 
 @pytest.mark.unit
@@ -73,7 +73,7 @@ def test_note_carries_the_data_date():
 
 @pytest.mark.unit
 def test_date_comes_from_the_filename_stamp(tmp_path):
-    from untappd_maps.notes import data_date
+    from beer_in_this_town.notes import data_date
 
     path = tmp_path / "venues_singapore_2026-08-20.csv"
     path.write_text("x", encoding="utf-8")
@@ -84,7 +84,7 @@ def test_date_comes_from_the_filename_stamp(tmp_path):
 def test_date_falls_back_to_mtime_when_unstamped(tmp_path):
     import re
 
-    from untappd_maps.notes import data_date
+    from beer_in_this_town.notes import data_date
 
     path = tmp_path / "custom.csv"
     path.write_text("x", encoding="utf-8")

@@ -6,7 +6,7 @@ If you are an agent, read this and nothing else is required.
 ## The loop
 
 ```
-python -m untappd_maps status --json      →  read `next_actions`
+python -m beer_in_this_town status --json      →  read `next_actions`
 run the first action                      →  read the envelope
 repeat until `next_actions` is empty
 ```
@@ -26,7 +26,7 @@ stderr. Parse stdout; ignore stderr unless debugging.
   "schema_version": "1.0",
   "data": { "venues": 100, "csv": "...", "kml": "..." },
   "warnings": ["4 venue(s) have no coordinates and are not pinned"],
-  "next_actions": ["python -m untappd_maps pin --csv \"...\" --limit 3 --json"],
+  "next_actions": ["python -m beer_in_this_town pin --csv \"...\" --limit 3 --json"],
   "error": null
 }
 ```

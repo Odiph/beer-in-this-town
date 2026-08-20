@@ -1,6 +1,6 @@
-# untappd-maps
+# beer in this town
 
-Turn an Untappd venue search into a map.
+**Find out where to get a beer in this town — then put it on your map.**
 
 Scrapes Untappd venue listings for a city, pulls each venue's **Venue Stats**
 (total / unique / monthly check-ins), and exports a CSV plus a KML you can
@@ -10,8 +10,8 @@ Designed to be **driven by a coding agent**: every command speaks JSON, reports
 its own state, and tells you what to run next. It works fine as a plain CLI too.
 
 ```bash
-python -m untappd_maps status --json      # where am I, what is next
-python -m untappd_maps run --query singapore --count 100 --json
+python -m beer_in_this_town status --json      # where am I, what is next
+python -m beer_in_this_town run --query singapore --count 100 --json
 ```
 
 ---
@@ -31,7 +31,7 @@ python -m venv .venv
 pip install -e ".[dev,browser]"
 playwright install chromium   # only if the system Chrome channel is missing
 
-python -m untappd_maps bootstrap   # one-time: log in to Untappd (and Google)
+python -m beer_in_this_town bootstrap   # one-time: log in to Untappd (and Google)
 ```
 
 `bootstrap` uses a **dedicated** Chrome profile, not your everyday one —
@@ -41,9 +41,9 @@ can disturb its session.
 ## Use
 
 ```bash
-python -m untappd_maps doctor --json      # deps, session, geocoder
-python -m untappd_maps selfcheck --json   # 1 request: are the selectors alive
-python -m untappd_maps run --query singapore --count 100 --no-upload --json
+python -m beer_in_this_town doctor --json      # deps, session, geocoder
+python -m beer_in_this_town selfcheck --json   # 1 request: are the selectors alive
+python -m beer_in_this_town run --query singapore --count 100 --no-upload --json
 ```
 
 Outputs land in `data/`:
@@ -121,7 +121,7 @@ strictly less informative than the KML layer where the stats show in each pin.
 The one place per-venue data can live is the note attached to a saved place:
 
 ```powershell
-python -m untappd_maps notes --csv dataenues_singapore_2026-08-21.csv `
+python -m beer_in_this_town notes --csv dataenues_singapore_2026-08-21.csv `
     --list "Singapore Bars"
 ```
 
@@ -150,7 +150,7 @@ matches is skipped.
 ## Agent-driven use
 
 See **[AGENTS.md](AGENTS.md)** for the full contract, and
-`.claude/skills/untappd-maps/SKILL.md` for the Claude Code skill.
+`.claude/skills/beer-in-this-town/SKILL.md` for the Claude Code skill.
 
 The short version: run `status --json`, execute the first entry in
 `next_actions`, repeat. Failures return a valid envelope with a machine-readable

@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from untappd_maps.agent_io import Envelope, Problem, fail
-from untappd_maps.export import diff_against_previous, write_csv, write_kml
-from untappd_maps.models import Venue, VenueRef
-from untappd_maps.pin_to_list import _search_url, places_from_csv
+from beer_in_this_town.agent_io import Envelope, Problem, fail
+from beer_in_this_town.export import diff_against_previous, write_csv, write_kml
+from beer_in_this_town.models import Venue, VenueRef
+from beer_in_this_town.pin_to_list import _search_url, places_from_csv
 
 
 @pytest.fixture
@@ -69,7 +69,7 @@ def test_csv_roundtrip(tmp_path, venue):
 # --- diffing --------------------------------------------------------------
 @pytest.mark.unit
 def test_first_run_reports_everything_as_new(tmp_path, venue, monkeypatch):
-    monkeypatch.setattr("untappd_maps.export.PREVIOUS_RUN", tmp_path / "none.json")
+    monkeypatch.setattr("beer_in_this_town.export.PREVIOUS_RUN", tmp_path / "none.json")
     diff = diff_against_previous([venue])
     assert len(diff["new"]) == 1
     assert diff["gone"] == []
@@ -81,7 +81,7 @@ def test_changed_stats_are_detected(tmp_path, venue, monkeypatch):
 
     baseline = tmp_path / "prev.json"
     baseline.write_text(json.dumps({venue.ref.venue_id: venue.to_row()}), "utf-8")
-    monkeypatch.setattr("untappd_maps.export.PREVIOUS_RUN", baseline)
+    monkeypatch.setattr("beer_in_this_town.export.PREVIOUS_RUN", baseline)
 
     diff = diff_against_previous([dataclasses.replace(venue, total=20300)])
     assert diff["new"] == []
@@ -133,12 +133,12 @@ def test_envelope_is_valid_json_with_stable_keys():
 @pytest.mark.unit
 def test_failure_envelope_carries_a_machine_readable_remedy():
     env = fail("pin", Problem(code="not_signed_in", message="nope",
-                              remedy="python -m untappd_maps bootstrap"))
+                              remedy="python -m beer_in_this_town bootstrap"))
     payload = json.loads(env.to_json())
     assert payload["ok"] is False
     assert payload["error"]["code"] == "not_signed_in"
     # A remedy that is a runnable command is surfaced as a next action.
-    assert payload["next_actions"] == ["python -m untappd_maps bootstrap"]
+    assert payload["next_actions"] == ["python -m beer_in_this_town bootstrap"]
 
 
 # --- place identity and journal keys (review findings M2, M3) -------------
@@ -152,7 +152,7 @@ def test_failure_envelope_carries_a_machine_readable_remedy():
     ],
 )
 def test_place_matches_accepts_google_renamings(requested, heading):
-    from untappd_maps.pin_to_list import place_matches
+    from beer_in_this_town.pin_to_list import place_matches
 
     assert place_matches(requested, heading)
 
@@ -170,14 +170,14 @@ def test_place_matches_accepts_google_renamings(requested, heading):
     ],
 )
 def test_place_matches_rejects_a_different_venue(requested, heading):
-    from untappd_maps.pin_to_list import place_matches
+    from beer_in_this_town.pin_to_list import place_matches
 
     assert not place_matches(requested, heading)
 
 
 @pytest.mark.unit
 def test_journal_key_separates_same_named_outlets():
-    from untappd_maps.pin_to_list import journal_key
+    from beer_in_this_town.pin_to_list import journal_key
 
     a = journal_key("Harry's", "1 Boat Quay, Singapore")
     b = journal_key("Harry's", "9 Orchard Road, Singapore")
@@ -187,7 +187,7 @@ def test_journal_key_separates_same_named_outlets():
 @pytest.mark.unit
 def test_journal_lookup_honours_pre_migration_keys():
     """A journal written before keys included the address must still count."""
-    from untappd_maps.pin_to_list import _lookup
+    from beer_in_this_town.pin_to_list import _lookup
 
     old_style = {"Malthouse": "ok"}
     assert _lookup(old_style, "Malthouse", "685 East Coast Rd") == "ok"
@@ -195,7 +195,7 @@ def test_journal_lookup_honours_pre_migration_keys():
 
 @pytest.mark.unit
 def test_retry_after_accepts_both_legal_forms():
-    from untappd_maps.http_client import _retry_after_seconds
+    from beer_in_this_town.http_client import _retry_after_seconds
 
     assert _retry_after_seconds("120", 60) == 120
     # HTTP-date form used to raise ValueError and kill the run

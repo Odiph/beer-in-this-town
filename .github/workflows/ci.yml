@@ -28,7 +28,7 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Lint
-        run: ruff check untappd_maps tests
+        run: ruff check beer_in_this_town tests
 
       - name: Test
         # Offline only. Nothing in CI touches Untappd or Google.
@@ -37,5 +37,5 @@ jobs:
       - name: Agent contract smoke test
         # The JSON envelope is the public API; assert it stays parseable.
         run: |
-          python -m untappd_maps status --json > envelope.json
+          python -m beer_in_this_town status --json > envelope.json
           python -c "import json,sys; d=json.load(open('envelope.json')); assert d['schema_version']=='1.0'; assert 'next_actions' in d; print('envelope ok')"

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from untappd_maps.models import Venue, VenueRef
-from untappd_maps.parsers import (
+from beer_in_this_town.models import Venue, VenueRef
+from beer_in_this_town.parsers import (
     ParseError,
     assert_corpus_quality,
     extract_coords,
