@@ -20,10 +20,31 @@ python -m beer_in_this_town run --query singapore --count 100 --json
 
 ## Why this exists
 
-Doing this by hand through an LLM driving a browser cost roughly **1.8M tokens
-per run**, took an hour, and still put places in the wrong list. This does the
-same job in about six minutes for **zero tokens**, and refuses to write output
-it isn't confident in.
+Untappd knows which bars in a city are actually worth going to. Thousands of
+check-ins per venue, updated constantly, and nobody checks into a bad taproom
+twice.
+
+Google Maps is where you actually decide where to walk tonight.
+
+Nothing connects the two. So the data that answers *"where should I drink
+here?"* lives in one app, the map you navigate with lives in another, and
+moving a hundred venues across by hand is an evening you could have spent in
+one of them.
+
+This closes that gap. Point it at a city and you get every venue with its
+check-in counts, landed on your own map — as a bulk-imported layer, or pinned
+into a real saved list with the numbers written into each place's note, so the
+map itself tells you which of the four bars on this street is the one people
+keep going back to.
+
+Useful for planning a trip, working out a city you have just moved to, spotting
+which places are getting busy this month, or keeping a list worth sharing of
+somewhere you already know well.
+
+It runs in about six minutes for a hundred venues, and it is built to be
+**boringly trustworthy**: it verifies every write, paces itself so it will not
+get your account flagged, and refuses to emit data it is not confident in
+rather than quietly handing you wrong numbers.
 
 ## Install
 
