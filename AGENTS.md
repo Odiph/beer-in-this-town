@@ -92,7 +92,7 @@ as `not-in-list` and left alone. A note that already matches is never rewritten.
 - Creating the target saved list in Google Maps.
 - Deciding whether to use `pin` at all.
 
-## Anti-ban guardrails (do not weaken these)
+## Account-safety guardrails (do not weaken these)
 
 `pin` writes to a live Google account. Four independent guardrails, layered so
 defeating one still leaves the others:
