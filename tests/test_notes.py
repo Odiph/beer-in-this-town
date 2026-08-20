@@ -61,3 +61,51 @@ def test_notes_from_csv_skips_rows_without_stats(tmp_path):
     assert len(places) == 1
     assert places[0][0] == "Bar One"
     assert "100 check-ins" in places[0][2]
+
+
+# --- data date ------------------------------------------------------------
+@pytest.mark.unit
+def test_note_carries_the_data_date():
+    note = format_note({"rank": "45", "total": "2628", "unique": "807",
+                        "monthly": "10"}, "2026-08-20")
+    assert note.endswith("as of 2026-08-20")
+
+
+@pytest.mark.unit
+def test_date_comes_from_the_filename_stamp(tmp_path):
+    from untappd_maps.notes import data_date
+
+    path = tmp_path / "venues_singapore_2026-08-20.csv"
+    path.write_text("x", encoding="utf-8")
+    assert data_date(path) == "2026-08-20"
+
+
+@pytest.mark.unit
+def test_date_falls_back_to_mtime_when_unstamped(tmp_path):
+    import re
+
+    from untappd_maps.notes import data_date
+
+    path = tmp_path / "custom.csv"
+    path.write_text("x", encoding="utf-8")
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", data_date(path))
+
+
+@pytest.mark.unit
+def test_note_is_dated_by_the_data_not_by_today(tmp_path):
+    """Regression guard for a pointless-rewrite trap.
+
+    If the note said "as of <today>", every note would differ from the stored
+    one every day, so a daily run would rewrite all of them against a
+    rate-limited budget while saying nothing new. The date must track the data.
+    """
+    path = tmp_path / "venues_singapore_2026-01-15.csv"
+    path.write_text(
+        "rank,name,address,total,unique,monthly\n1,Bar,1 St,100,10,5\n",
+        encoding="utf-8",
+    )
+    (_, _, note) = notes_from_csv(path)[0]
+    assert "as of 2026-01-15" in note
+
+    # Same file read again -> byte-identical note, so nothing is rewritten.
+    assert notes_from_csv(path)[0][2] == note
