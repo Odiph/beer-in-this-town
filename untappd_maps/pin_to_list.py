@@ -57,6 +57,8 @@ JOURNAL = STATE_DIR / "pinned.json"
 MIN_GAP_S = 4.0
 MAX_GAP_S = 9.0
 MAX_ATTEMPTS = 3
+# Consecutive lookup misses that mean 'blocked', not 'bad data'.
+MAX_CONSECUTIVE_MISSES = 8
 
 SAVE_BTN = "button[aria-label^='Save'], button[aria-label^='Saved']"
 
@@ -317,6 +319,7 @@ def pin_places(
             locale="en-US",
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        consecutive_misses = 0
         try:
             _assert_ready(page, list_name)
 
@@ -350,7 +353,24 @@ def pin_places(
                     journal[name] = "not-found"
                     log.warning("  no Google Maps result -- skipped")
                     _save_journal(journal)
+                    # A miss still counts toward the breaker and still waits.
+                    # Without this, a block page whose wording we do not
+                    # recognise makes every lookup "fail" and the run
+                    # machine-guns page loads with no gap and no trip -- the
+                    # least human-looking thing it could possibly do.
+                    consecutive_misses += 1
+                    if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
+                        ledger.start_cooloff(
+                            f"{consecutive_misses} consecutive lookup misses"
+                        )
+                        raise Tripped(
+                            f"{consecutive_misses} places in a row could not be "
+                            "found. That is not a data problem -- the session is "
+                            "blocked or broken. Stopping; cool-off set."
+                        )
+                    time.sleep(random.uniform(min_gap_s, max_gap_s))
                     continue
+                consecutive_misses = 0
 
                 already = _saved_in(page)
                 if list_name.lower() in already.lower():
@@ -361,10 +381,19 @@ def pin_places(
 
                 outcome = "failed"
                 for attempt in range(1, MAX_ATTEMPTS + 1):
+                    # Charge the budget BEFORE the interaction. Clicking Save is
+                    # a real mutation request whether or not our verification
+                    # later agrees, and each retry is another one. Counting only
+                    # verified successes let a flaky day put ~3x the believed
+                    # traffic through the account.
+                    ledger.record_write()
                     try:
                         landed = _pin_once(page, list_name)
                     except Exception as exc:
                         log.warning("  attempt %d error: %s", attempt, exc)
+                        # An interstitial can appear mid-attempt; without this
+                        # check the retries hammer a blocked page.
+                        _abort_if_blocked(page, ledger)
                         page.keyboard.press("Escape")
                         page.wait_for_timeout(1500)
                         continue
@@ -387,8 +416,6 @@ def pin_places(
                 _save_journal(journal)
 
                 if outcome == "ok":
-                    # Only a real write counts against the budget.
-                    ledger.record_write()
                     breaker.record_success()
                 else:
                     breaker.record_failure()
