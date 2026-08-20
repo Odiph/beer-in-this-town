@@ -2,6 +2,8 @@
 
 **Find out where to get a beer in this town — then put it on your map.**
 
+![demo](docs/demo.gif)
+
 Scrapes Untappd venue listings for a city, pulls each venue's **Venue Stats**
 (total / unique / monthly check-ins), and exports a CSV plus a KML you can
 import into Google Maps.
