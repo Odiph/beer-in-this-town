@@ -21,7 +21,9 @@ import csv
 import json
 import logging
 import random
+import re
 import time
+from datetime import date
 from pathlib import Path
 
 from .config import STATE_DIR, Settings
@@ -38,7 +40,27 @@ NOTE_FIELD = (
 )
 
 
-def format_note(row: dict[str, str]) -> str:
+DATE_IN_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def data_date(path: Path) -> str:
+    """When the DATA was captured -- not today.
+
+    This is deliberate. If the note said "as of <today>" it would differ from
+    the stored note on every run, so every note would be rewritten daily
+    against a rate-limited budget while saying nothing new. Dating the data
+    instead means a note changes only when the underlying numbers do.
+
+    Taken from the filename stamp our own exports carry, falling back to the
+    file's modification time.
+    """
+    match = DATE_IN_NAME.search(path.name)
+    if match:
+        return match.group(1)
+    return date.fromtimestamp(path.stat().st_mtime).isoformat()
+
+
+def format_note(row: dict[str, str], as_of: str | None = None) -> str:
     """Compact, human-readable, and stable across runs.
 
     Stability matters: the pass compares the existing note to this string to
@@ -69,6 +91,8 @@ def format_note(row: dict[str, str]) -> str:
         bits.append(f"{unique} unique")
     if monthly is not None:
         bits.append(f"{monthly}/month")
+    if as_of:
+        bits.append(f"as of {as_of}")
     # ASCII separator on purpose: a middot survives Maps fine but
     # mangles in Windows console logs, and the note is compared as a
     # string to decide whether to rewrite.
@@ -80,6 +104,7 @@ def notes_from_csv(path: Path) -> list[tuple[str, str | None, str]]:
     with path.open(encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.DictReader(fh))
 
+    as_of = data_date(path)
     out: list[tuple[str, str | None, str]] = []
     for row in rows:
         name = (row.get("name") or row.get("Name") or "").strip()
@@ -89,7 +114,7 @@ def notes_from_csv(path: Path) -> list[tuple[str, str | None, str]]:
         city = (row.get("city") or "").strip()
         if address and city and city.lower() not in address.lower():
             address = f"{address}, {city}"
-        note = format_note(row)
+        note = format_note(row, as_of)
         if note:
             out.append((name, address, note))
     return out
