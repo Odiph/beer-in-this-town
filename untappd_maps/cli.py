@@ -40,6 +40,7 @@ from .http_client import (
 )
 from .models import VenueRef
 from .mymaps_upload import manual_instructions, upload_kml
+from .notes import add_notes, notes_from_csv
 from .parsers import ParseError, assert_corpus_quality, parse_venue_stats
 from .pin_to_list import pin_places, places_from_csv
 from .scrape import collect_venue_refs, fetch_venues
@@ -427,6 +428,53 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
 
 
 # --------------------------------------------------------------------------
+def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
+              region: str | None, min_gap: float, max_gap: float) -> Envelope:
+    """Write the Untappd stats into each saved place's note field."""
+    path = Path(csv_path)
+    if not path.exists():
+        return fail("notes", Problem(
+            code="csv_missing",
+            message=f"CSV not found: {path}",
+            remedy="python -m untappd_maps run --json",
+        ))
+
+    places = notes_from_csv(path)
+    log.info("Read %d place(s) with stats from %s", len(places), path)
+
+    try:
+        journal = add_notes(places, s, list_name, limit=limit, region=region,
+                            min_gap_s=min_gap, max_gap_s=max_gap)
+    except Tripped as exc:
+        return fail("notes", Problem(
+            code="guardrail_tripped",
+            message=str(exc),
+            remedy="Wait for the cool-off. Do not retry or delete the ledger.",
+        ))
+    except Exception as exc:
+        return fail("notes", Problem(
+            code="notes_failed",
+            message=str(exc),
+            remedy="Re-run the same command; progress is journalled.",
+        ))
+
+    tally = {k: sum(1 for v in journal.values() if v == k)
+             for k in ("ok", "failed", "not-found", "ambiguous", "not-in-list")}
+    unpinned = [k for k, v in journal.items() if v == "not-in-list"]
+    return Envelope(
+        command="notes",
+        ok=tally["failed"] == 0,
+        data={"written": tally["ok"], "failed": tally["failed"],
+              "not_found": tally["not-found"], "ambiguous": tally["ambiguous"],
+              "not_in_list": tally["not-in-list"], "list": list_name},
+        warnings=([f"{len(unpinned)} place(s) are not in the list yet; "
+                   "run pin first"] if unpinned else []),
+        next_actions=([f'python -m untappd_maps notes --csv "{path}" '
+                       f'--list "{list_name}" --json']
+                      if tally["failed"] else []),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     # Shared flags live on a parent parser so they work in BOTH positions:
     # `untappd_maps --json status` and `untappd_maps status --json`. An agent
@@ -491,6 +539,18 @@ def build_parser() -> argparse.ArgumentParser:
                      help="minimum seconds between places (default 8)")
     pin.add_argument("--max-gap", type=float, default=16.0,
                      help="maximum seconds between places (default 16)")
+    notes = sub.add_parser(
+        "notes",
+        parents=[common],
+        help="write Untappd stats into the note on each saved place",
+    )
+    notes.add_argument("--csv", required=True)
+    notes.add_argument("--list", dest="list_name", default="Singapore Bars")
+    notes.add_argument("--limit", type=int, default=None)
+    notes.add_argument("--min-gap", type=float, default=5.0)
+    notes.add_argument("--max-gap", type=float, default=11.0)
+    notes.add_argument("--region", default="Singapore")
+
     pin.add_argument("--region", default="Singapore",
                      help="appended to each search so a name cannot match the "
                           "wrong country; pass '' to disable")
@@ -505,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(verbose, as_json)
     s = Settings.from_env()
 
-    if args.cmd in {"run", "pin"}:
+    if args.cmd in {"run", "pin", "notes"}:
         s = replace(
             s,
             query=getattr(args, "query", s.query),
@@ -529,6 +589,9 @@ def main(argv: list[str] | None = None) -> int:
             env = cmd_run(s, upload=not args.no_upload,
                           force_browser=args.browser_search,
                           skip_robots=args.i_read_robots)
+        elif args.cmd == "notes":
+            env = cmd_notes(s, args.csv, args.list_name, args.limit,
+                            args.region or None, args.min_gap, args.max_gap)
         elif args.cmd == "pin":
             env = cmd_pin(s, args.csv, args.list_name, args.limit,
                           args.region or None, args.min_gap, args.max_gap)
