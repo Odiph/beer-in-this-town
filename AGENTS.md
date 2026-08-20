@@ -48,6 +48,7 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `corpus_quality_gate` | <90% of venues parsed cleanly | Read `debug/*.html`, fix selectors in `parsers.py`, re-run. Nothing was written. |
 | `selectors_stale` | `selfcheck` could not parse a known-good page | Same as above. This is the cheap early warning. |
 | `csv_missing` | No input data | Run `run` first. |
+| `notes_failed` | The notes pass failed | Re-run; progress resumes. |
 | `interrupted` | Ctrl-C | Re-run the same command; progress is journalled. |
 | `unexpected_error` | Unhandled | Re-run with `-v` for a traceback. |
 
@@ -67,11 +68,22 @@ stderr. Parse stdout; ignore stderr unless debugging.
    `parse_strictness` — fix the selector and say what changed.
 6. **Ask before anything irreversible** that touches the user's account.
 
+## The `notes` command
+
+Writes Untappd stats into the note on each saved place. Same rules as `pin`: it
+writes to the account, so never run it without an explicit human request, and
+trial it with `--limit` first.
+
+It only annotates places already in the target list; anything else is recorded
+as `not-in-list` and left alone. A note that already matches is never rewritten.
+
 ## Idempotency
 
 - `run` — safe to repeat. Cached for 12h; re-running costs almost no requests.
 - `pin` — resumable and idempotent. `state/pinned.json` records every place;
-  re-running skips successes and retries only failures.
+  re-running skips successes and retries failures. Places recorded `not-found`
+  or `ambiguous` are retried too, since both can be transient.
+- `notes` — resumable via `state/noted.json`; a matching note is skipped.
 - `status`, `doctor`, `selfcheck` — read-only.
 
 ## What needs a human

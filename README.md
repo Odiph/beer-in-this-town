@@ -114,6 +114,39 @@ after an interruption. It never creates a list — you make that by hand.
 
 Agents are instructed not to run it without an explicit human request.
 
+## Adding the stats to a saved list
+
+A saved list is just pins — it carries no data of its own, which makes it
+strictly less informative than the KML layer where the stats show in each pin.
+The one place per-venue data can live is the note attached to a saved place:
+
+```powershell
+python -m untappd_maps notes --csv dataenues_singapore_2026-08-21.csv `
+    --list "Singapore Bars"
+```
+
+Each note reads:
+
+```
+Untappd #45 | 2,628 check-ins | 807 unique | 10/month | as of 2026-08-20
+```
+
+The date tracks **when the data was captured**, not when the note was written,
+so re-running does not rewrite every note with a new date. A note that already
+matches is skipped.
+
+## Commands
+
+| Command | What it does | Touches your account |
+|---|---|---|
+| `status` | Where the pipeline is, what to run next | no |
+| `doctor` | Dependencies, session, geocoder | no |
+| `bootstrap` | One-time login (opens a real Chrome) | reads |
+| `selfcheck` | One request: are the selectors alive | no |
+| `run` | Scrape → CSV + KML + diff | no |
+| `pin` | Save into a Google Maps list | **writes** |
+| `notes` | Write stats into each place's note | **writes** |
+
 ## Agent-driven use
 
 See **[AGENTS.md](AGENTS.md)** for the full contract, and
