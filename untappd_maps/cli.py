@@ -1,0 +1,431 @@
+"""Command-line entry point, designed to be driven by a coding agent.
+
+Every command accepts --json and then prints exactly one envelope on stdout
+(see agent_io.py). Logs go to stderr. Failures still print a valid envelope
+carrying a machine-readable error code and a remedy, so an agent can recover
+without parsing tracebacks.
+
+  python -m untappd_maps status --json      # where am I, what is next
+  python -m untappd_maps doctor --json      # are the preconditions met
+  python -m untappd_maps bootstrap          # one-time interactive login
+  python -m untappd_maps selfcheck --json   # 1 request: are selectors alive
+  python -m untappd_maps run --json         # scrape -> CSV + KML + diff
+  python -m untappd_maps pin  --json        # save into a Google Maps list
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from dataclasses import replace
+from pathlib import Path
+
+from .agent_io import Envelope, Problem, emit, fail, log_to_stderr
+from .config import DATA_DIR, Settings, ensure_dirs
+from .export import (
+    commit_run,
+    diff_against_previous,
+    today_stamp,
+    write_csv,
+    write_diff_outputs,
+    write_kml,
+)
+from .geocode import geocode_missing
+from .http_client import PoliteClient
+from .models import VenueRef
+from .mymaps_upload import manual_instructions, upload_kml
+from .parsers import ParseError, assert_corpus_quality, parse_venue_stats
+from .pin_to_list import pin_places, places_from_csv
+from .scrape import collect_venue_refs, fetch_venues
+from .state import inspect_state, next_actions
+
+log = logging.getLogger("untappd_maps")
+
+
+def setup_logging(verbose: bool, as_json: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stdout,
+    )
+    if as_json:
+        log_to_stderr()
+
+
+# --------------------------------------------------------------------------
+# Agent-facing introspection
+# --------------------------------------------------------------------------
+def cmd_status(s: Settings) -> Envelope:
+    state = inspect_state(s)
+    return Envelope(
+        command="status",
+        ok=True,
+        data=state,
+        next_actions=next_actions(state, s),
+    )
+
+
+def cmd_doctor(s: Settings) -> Envelope:
+    """Check preconditions without touching the network more than necessary."""
+    problems: list[str] = []
+    data: dict[str, object] = {}
+
+    try:
+        import httpx  # noqa: F401
+        data["httpx"] = "ok"
+    except ImportError:
+        problems.append("httpx missing -- pip install -r requirements.txt")
+    try:
+        import bs4  # noqa: F401
+        data["beautifulsoup4"] = "ok"
+    except ImportError:
+        problems.append("beautifulsoup4 missing -- pip install -r requirements.txt")
+    try:
+        import playwright  # noqa: F401
+        data["playwright"] = "ok"
+    except ImportError:
+        problems.append("playwright missing (only needed for bootstrap/pin)")
+
+    data["session_file"] = "present" if s.storage_state.exists() else "missing"
+    data["profile_dir"] = "present" if s.profile_dir.exists() else "missing"
+    if not s.storage_state.exists():
+        problems.append("no saved session -- run: python -m untappd_maps bootstrap")
+
+    data["geocoder"] = "google" if s.google_geocoding_key else "nominatim (free, 1 req/s)"
+
+    return Envelope(
+        command="doctor",
+        ok=not problems,
+        data=data,
+        warnings=problems,
+        next_actions=["python -m untappd_maps status --json"],
+    )
+
+
+# --------------------------------------------------------------------------
+# Pipeline commands
+# --------------------------------------------------------------------------
+def cmd_bootstrap(s: Settings) -> Envelope:
+    """One-time: open real Chrome, let the human log in, save the cookie state."""
+    from playwright.sync_api import sync_playwright
+
+    print(
+        "\nA Chrome window will open.\n"
+        "  1. Log in to https://untappd.com\n"
+        "  2. Log in to https://myaccount.google.com\n"
+        "  3. Come back here and press Enter.\n"
+        "This profile is separate from your everyday Chrome profile on purpose:\n"
+        "pointing Playwright at your live profile requires Chrome to be fully\n"
+        "closed and can disturb its session state.\n",
+        file=sys.stderr,
+    )
+    with sync_playwright() as p:
+        ctx = p.chromium.launch_persistent_context(
+            user_data_dir=str(s.profile_dir),
+            channel="chrome",
+            headless=False,
+            viewport={"width": 1280, "height": 900},
+        )
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto("https://untappd.com/login")
+        input("Press Enter once you are logged in to BOTH sites... ")
+        ctx.storage_state(path=str(s.storage_state))
+        ctx.close()
+
+    return Envelope(
+        command="bootstrap",
+        ok=True,
+        data={"storage_state": str(s.storage_state)},
+        next_actions=["python -m untappd_maps selfcheck --json"],
+    )
+
+
+def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
+    """Cheap pre-flight: one venue page, full shape assertion."""
+    ref = VenueRef(venue_id=venue_id, slug=slug, name="selfcheck",
+                   category=None, address=None, city=None)
+    try:
+        with PoliteClient(s) as client:
+            html = client.get(ref.url, use_cache=False)
+            venue = parse_venue_stats(html, ref)
+    except ParseError as exc:
+        return fail("selfcheck", Problem(
+            code="selectors_stale",
+            message=str(exc),
+            remedy="Inspect the dumped HTML in debug/ and update the selectors "
+                   "in untappd_maps/parsers.py",
+        ))
+    except Exception as exc:
+        return fail("selfcheck", Problem(
+            code="fetch_failed",
+            message=str(exc),
+            remedy="Check connectivity, then retry. Repeated 403s mean a block.",
+        ))
+
+    if not venue.has_public_stats:
+        return fail("selfcheck", Problem(
+            code="stats_missing",
+            message="Known-good venue page yielded no stats.",
+            remedy="Inspect debug/ and update parsers.py",
+        ))
+
+    return Envelope(
+        command="selfcheck",
+        ok=True,
+        data={"url": ref.url, "total": venue.total, "unique": venue.unique,
+              "monthly": venue.monthly, "coords_embedded": venue.has_coords},
+        next_actions=["python -m untappd_maps run --json"],
+    )
+
+
+def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
+            skip_robots: bool) -> Envelope:
+    ensure_dirs()
+    stamp = today_stamp()
+
+    with PoliteClient(s) as client:
+        if s.respect_robots and not skip_robots and client.robots_disallows_scraping():
+            return fail("run", Problem(
+                code="robots_disallow",
+                message="untappd.com/robots.txt disallows /v/ or /search for *.",
+                remedy="Pass --i-read-robots to override, accepting that it is "
+                       "against the site's stated wishes and its ToS.",
+            ))
+
+        refs = collect_venue_refs(client, s, force_browser=force_browser)
+        log.info("Collected %d venue references", len(refs))
+
+        def progress(i: int, n: int, ref: VenueRef) -> None:
+            log.info("[%3d/%d] %s", i, n, ref.name)
+
+        venues = fetch_venues(client, refs, progress=progress)
+
+    # Gate: abort before writing anything if the parse looks degraded.
+    try:
+        assert_corpus_quality(venues, s.parse_strictness)
+    except ParseError as exc:
+        return fail("run", Problem(
+            code="corpus_quality_gate",
+            message=str(exc),
+            remedy="Inspect debug/*.html and update parsers.py, then re-run. "
+                   "Nothing was written -- this is the gate working.",
+        ), venues_scraped=len(venues))
+
+    venues = geocode_missing(venues, s)
+
+    csv_path = write_csv(venues, DATA_DIR / f"venues_{s.query}_{stamp}.csv")
+    kml_path = write_kml(venues, DATA_DIR / f"venues_{s.query}_{stamp}.kml", s.map_title)
+
+    diff = diff_against_previous(venues)
+    write_diff_outputs(diff, stamp)
+    commit_run(venues)
+
+    warnings = []
+    without_coords = [v.ref.name for v in venues if not v.has_coords]
+    if without_coords:
+        warnings.append(
+            f"{len(without_coords)} venue(s) have no coordinates and are not "
+            f"pinned in the KML: {', '.join(without_coords[:5])}"
+        )
+
+    map_url = None
+    if upload:
+        map_url = upload_kml(kml_path, s)
+        if not map_url:
+            warnings.append("My Maps automation failed; import the KML by hand.")
+            print(manual_instructions(kml_path, s.map_title), file=sys.stderr)
+
+    return Envelope(
+        command="run",
+        ok=True,
+        data={
+            "venues": len(venues),
+            "csv": str(csv_path),
+            "kml": str(kml_path),
+            "new_since_last_run": len(diff["new"]),
+            "changed": len(diff["changed"]),
+            "my_maps_url": map_url,
+        },
+        warnings=warnings,
+        next_actions=[
+            f'python -m untappd_maps pin --csv "{csv_path}" '
+            f'--list "{s.map_title}" --limit 3 --json'
+        ],
+    )
+
+
+def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
+            region: str | None, min_gap: float, max_gap: float) -> Envelope:
+    """Save places from a CSV into a real Google Maps saved list."""
+    path = Path(csv_path)
+    if not path.exists():
+        return fail("pin", Problem(
+            code="csv_missing",
+            message=f"CSV not found: {path}",
+            remedy="python -m untappd_maps run --json",
+        ))
+
+    places = places_from_csv(path)
+    log.info("Read %d place(s) from %s", len(places), path)
+
+    try:
+        journal = pin_places(places, s, list_name, limit=limit, region=region,
+                             min_gap_s=min_gap, max_gap_s=max_gap)
+    except RuntimeError as exc:
+        text = str(exc)
+        code = "not_signed_in" if "Not signed in" in text else "list_missing"
+        remedy = ("python -m untappd_maps bootstrap" if code == "not_signed_in"
+                  else f"Create the list {list_name!r} by hand in Google Maps "
+                       "(Saved -> New list), then re-run.")
+        return fail("pin", Problem(code=code, message=text, remedy=remedy))
+    except Exception as exc:
+        return fail("pin", Problem(
+            code="pin_failed",
+            message=str(exc),
+            remedy="Re-run the same command; progress is journalled and resumes.",
+        ))
+
+    failed = [k for k, v in journal.items() if v == "failed"]
+    missing = [k for k, v in journal.items() if v == "not-found"]
+    saved = [k for k, v in journal.items() if v == "ok"]
+
+    actions = []
+    if failed:
+        actions.append(
+            f'python -m untappd_maps pin --csv "{path}" --list "{list_name}" --json'
+        )
+
+    return Envelope(
+        command="pin",
+        ok=not failed,
+        data={"saved": len(saved), "failed": len(failed), "not_found": len(missing),
+              "failed_names": failed[:20], "not_found_names": missing[:20],
+              "list": list_name},
+        warnings=([f"{len(missing)} place(s) had no Google Maps match"]
+                  if missing else []),
+        next_actions=actions,
+    )
+
+
+# --------------------------------------------------------------------------
+def build_parser() -> argparse.ArgumentParser:
+    # Shared flags live on a parent parser so they work in BOTH positions:
+    # `untappd_maps --json status` and `untappd_maps status --json`. An agent
+    # should not have to remember which side of the subcommand a flag goes on.
+    # default=SUPPRESS is load-bearing: with a normal default the SUBparser
+    # writes its own False over a True set before the subcommand, so
+    # `--json status` would silently print human text instead of JSON.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("-v", "--verbose", action="store_true",
+                        default=argparse.SUPPRESS)
+    common.add_argument("--json", action="store_true",
+                        default=argparse.SUPPRESS,
+                        help="emit one machine-readable envelope on stdout "
+                             "(logs go to stderr)")
+
+    p = argparse.ArgumentParser(prog="untappd_maps", parents=[common])
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("status", parents=[common],
+                   help="where the pipeline is up to, and what to run next")
+    sub.add_parser("doctor", parents=[common],
+                   help="check preconditions (deps, session, geocoder)")
+    sub.add_parser("bootstrap", parents=[common], help="one-time interactive login")
+
+    check = sub.add_parser("selfcheck", parents=[common],
+                           help="verify selectors still work (1 request)")
+    check.add_argument("--slug", default="american-taproom-waterloo")
+    check.add_argument("--id", dest="venue_id", default="7480946")
+
+    run = sub.add_parser("run", parents=[common],
+                         help="scrape, export, diff, and optionally upload")
+    run.add_argument("--query", default="singapore")
+    run.add_argument("--count", type=int, default=100)
+    run.add_argument("--title", default=None, help='My Maps title, e.g. "Singapore Bars"')
+    run.add_argument("--no-upload", action="store_true", help="write files only")
+    run.add_argument("--browser-search", action="store_true",
+                     help="force the Show More click path instead of HTTP pagination")
+    run.add_argument("--i-read-robots", action="store_true",
+                     help="proceed even if robots.txt disallows these paths")
+    run.add_argument("--delay", type=float, default=None,
+                     help="override the minimum inter-request delay in seconds")
+
+    pin = sub.add_parser(
+        "pin",
+        parents=[common],
+        help="save places from a CSV into a real Google Maps saved list "
+             "(pins on the everyday map, not a My Maps layer)",
+    )
+    pin.add_argument("--csv", required=True, help="any CSV this project writes")
+    pin.add_argument("--list", dest="list_name", default="Singapore Bars",
+                     help="exact name of the existing Google Maps list")
+    pin.add_argument("--limit", type=int, default=None,
+                     help="only do the first N (use for a small trial run)")
+    pin.add_argument("--min-gap", type=float, default=8.0,
+                     help="minimum seconds between places (default 8)")
+    pin.add_argument("--max-gap", type=float, default=16.0,
+                     help="maximum seconds between places (default 16)")
+    pin.add_argument("--region", default="Singapore",
+                     help="appended to each search so a name cannot match the "
+                          "wrong country; pass '' to disable")
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    # SUPPRESS means the attribute is absent unless the flag was passed.
+    as_json = getattr(args, "json", False)
+    verbose = getattr(args, "verbose", False)
+    setup_logging(verbose, as_json)
+    s = Settings.from_env()
+
+    if args.cmd in {"run", "pin"}:
+        s = replace(
+            s,
+            query=getattr(args, "query", s.query),
+            target_count=getattr(args, "count", s.target_count),
+            map_title=getattr(args, "title", None) or getattr(
+                args, "list_name", s.map_title),
+        )
+        if getattr(args, "delay", None):
+            s = replace(s, min_delay_s=args.delay, max_delay_s=args.delay * 2.0)
+
+    try:
+        if args.cmd == "status":
+            env = cmd_status(s)
+        elif args.cmd == "doctor":
+            env = cmd_doctor(s)
+        elif args.cmd == "bootstrap":
+            env = cmd_bootstrap(s)
+        elif args.cmd == "selfcheck":
+            env = cmd_selfcheck(s, args.slug, args.venue_id)
+        elif args.cmd == "run":
+            env = cmd_run(s, upload=not args.no_upload,
+                          force_browser=args.browser_search,
+                          skip_robots=args.i_read_robots)
+        elif args.cmd == "pin":
+            env = cmd_pin(s, args.csv, args.list_name, args.limit,
+                          args.region or None, args.min_gap, args.max_gap)
+        else:  # pragma: no cover -- argparse enforces the choices
+            raise SystemExit(f"unknown command {args.cmd}")
+    except KeyboardInterrupt:
+        env = fail(args.cmd, Problem(
+            code="interrupted",
+            message="Interrupted by the user.",
+            remedy="Re-run the same command; progress is journalled and resumes.",
+        ))
+    except Exception as exc:
+        log.error("Run aborted: %s", exc, exc_info=verbose)
+        env = fail(args.cmd, Problem(
+            code="unexpected_error",
+            message=f"{type(exc).__name__}: {exc}",
+            remedy="Re-run with -v for a traceback.",
+        ))
+
+    emit(env, as_json)
+    return 0 if env.ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

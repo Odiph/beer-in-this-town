@@ -1,0 +1,119 @@
+"""Address -> lat/lng, but only for venues Untappd did not already hand us.
+
+Cost note: Google Geocoding is $5.00/1000 with a 10,000/month free allowance on
+the Geocoding Essentials SKU (per-SKU free tiers replaced the old shared $200
+credit in March 2025). At ~100 venues/week with most coords embedded, expect
+single-digit paid calls per run -- i.e. $0.00 -- but billing must be enabled on
+the key regardless. Set GOOGLE_GEOCODING_KEY to use it; otherwise the script
+falls back to Nominatim at a strict 1 request/second.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import time
+
+import httpx
+
+from .config import STATE_DIR, Settings
+from .models import Venue
+
+log = logging.getLogger(__name__)
+
+GEOCACHE = STATE_DIR / "geocache.json"
+GOOGLE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+
+
+def _load_cache() -> dict[str, list[float]]:
+    if GEOCACHE.exists():
+        return json.loads(GEOCACHE.read_text(encoding="utf-8"))
+    return {}
+
+
+def _save_cache(cache: dict[str, list[float]]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    GEOCACHE.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+
+
+def _query_for(v: Venue) -> str:
+    parts = [v.ref.name, v.ref.address, v.ref.city]
+    return ", ".join(p for p in parts if p)
+
+
+def _google(client: httpx.Client, key: str, query: str) -> tuple[float, float] | None:
+    r = client.get(GOOGLE_URL, params={"address": query, "key": key})
+    r.raise_for_status()
+    data = r.json()
+    status = data.get("status")
+    if status == "ZERO_RESULTS":
+        return None
+    if status != "OK":
+        # REQUEST_DENIED / OVER_QUERY_LIMIT are configuration or billing
+        # problems -- surface them, do not quietly degrade.
+        raise RuntimeError(
+            f"Google Geocoding returned {status}: {data.get('error_message')}"
+        )
+    loc = data["results"][0]["geometry"]["location"]
+    return float(loc["lat"]), float(loc["lng"])
+
+
+def _nominatim(
+    client: httpx.Client, query: str, email: str | None
+) -> tuple[float, float] | None:
+    params: dict[str, object] = {"q": query, "format": "jsonv2", "limit": 1}
+    if email:
+        params["email"] = email
+    r = client.get(NOMINATIM_URL, params=params)
+    r.raise_for_status()
+    results = r.json()
+    if not results:
+        return None
+    return float(results[0]["lat"]), float(results[0]["lon"])
+
+
+def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
+    """Return a NEW list with coordinates filled in where they were missing."""
+    cache = _load_cache()
+    todo = [v for v in venues if not v.has_coords]
+    if not todo:
+        log.info("All %d venues had embedded coordinates -- no geocoding needed.",
+                 len(venues))
+        return list(venues)
+
+    log.info("Geocoding %d/%d venues without embedded coordinates",
+             len(todo), len(venues))
+    resolved: dict[str, tuple[float, float, str]] = {}
+
+    ua = {"User-Agent": f"untappd-maps/1.0 ({s.nominatim_email or 'no-contact-set'})"}
+    with httpx.Client(timeout=20.0, headers=ua) as client:
+        for v in todo:
+            query = _query_for(v)
+            if not query:
+                continue
+            if query in cache:
+                lat, lng = cache[query]
+                resolved[v.ref.venue_id] = (lat, lng, "cache")
+                continue
+            try:
+                if s.google_geocoding_key:
+                    hit = _google(client, s.google_geocoding_key, query)
+                    source = "google"
+                else:
+                    hit = _nominatim(client, query, s.nominatim_email)
+                    source = "nominatim"
+                    time.sleep(s.nominatim_delay_s)  # OSM policy: <= 1 req/sec
+            except Exception as exc:
+                log.error("geocode failed for %r: %s", query, exc)
+                continue
+            if hit is None:
+                log.warning("no geocode result for %r", query)
+                continue
+            cache[query] = [hit[0], hit[1]]
+            resolved[v.ref.venue_id] = (hit[0], hit[1], source)
+
+    _save_cache(cache)
+    return [
+        v.with_coords(*resolved[v.ref.venue_id]) if v.ref.venue_id in resolved else v
+        for v in venues
+    ]

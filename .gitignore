@@ -1,0 +1,16 @@
+.venv/
+chrome-profile/
+storage_state.json
+cache/
+debug/
+logs/
+data/venues_*
+data/new_venues_*
+state/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/

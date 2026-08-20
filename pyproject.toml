@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "untappd-maps"
+version = "0.1.0"
+description = "Agent-driven pipeline: scrape Untappd venue stats, export CSV/KML, import into Google Maps."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+keywords = ["untappd", "google-maps", "kml", "scraping", "agent", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dependencies = [
+    "httpx[http2]>=0.27",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.2",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.45"]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+untappd-maps = "untappd_maps.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["untappd_maps"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: fast, offline, no network or browser",
+    "integration: touches the network or a browser",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:bs4.*",
+]
+
+[tool.ruff]
+line-length = 90
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "B008",    # function call in default arg -- not used here
+    "SIM105",  # contextlib.suppress is not always clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
