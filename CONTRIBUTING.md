@@ -1,10 +1,15 @@
 # Contributing
 
+By taking part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+See the README for [prerequisites](README.md#prerequisites) — Python 3.11+ and,
+for anything browser-driven, a system Chrome.
+
 ## Setup
 
 ```bash
-python -m venv .venv && .venv/Scripts/activate
-pip install -e ".[dev,browser]"
+python -m venv .venv
+source .venv/bin/activate         # Windows: .venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev,browser]"
 pytest -q -m unit
 ```
 
