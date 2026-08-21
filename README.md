@@ -55,20 +55,60 @@ places to a saved list** — no API surface, no OAuth scope, no URL parameter, n
 intent. [Here is the full research](#there-is-no-api-for-this-we-checked), with
 the workarounds ranked.
 
+## Prerequisites
+
+| | Required for | Notes |
+|---|---|---|
+| **Python 3.11 or 3.12** | everything | CI tests both, on Linux and Windows. |
+| **Google Chrome or Chromium** | `bootstrap`, `pin`, `notes` | Found automatically on `PATH`, or at the standard Windows / macOS / Linux install paths. `run` scrapes over plain HTTP, but falls back to driving Chrome if Untappd's pagination changes. |
+| **An Untappd account** | optional | Everything public works signed out; without a session the **YOU** column is empty and `bootstrap` warns you. |
+| **A Google account** | `pin`, `notes` only | You also create the saved list by hand first — these commands never create one. |
+
+Linux and Windows are covered by CI. macOS is not tested, though Chrome
+discovery handles it.
+
+No API keys are needed. Geocoding defaults to Nominatim (free, throttled to
+1 request/second by OpenStreetMap's policy); two optional environment variables
+change that:
+
+| Variable | Effect |
+|---|---|
+| `GOOGLE_GEOCODING_KEY` | Use Google's geocoder instead of Nominatim — faster, and no 1 req/s ceiling. Addresses are then sent to Google; see [SECURITY.md](SECURITY.md). |
+| `NOMINATIM_EMAIL` | Sent as the contact address OSM's usage policy asks for. Unset, requests identify as `no-contact-set`. |
+
 ## Install
 
 ```bash
-python -m venv .venv
-.venv/Scripts/activate        # Windows;  source .venv/bin/activate elsewhere
-pip install -e ".[dev,browser]"
-playwright install chromium   # only if the system Chrome channel is missing
+git clone https://github.com/Odiph/beer-in-this-town.git
+cd beer-in-this-town
 
-beertown bootstrap   # one-time: log in to Untappd (and Google)
+python -m venv .venv
+source .venv/bin/activate         # Windows: .venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev,browser]"
+playwright install chromium       # only if no system Chrome was found
+
+beertown doctor                   # confirms deps, session and geocoder
+beertown bootstrap                # one-time: log in to Untappd (and Google)
 ```
+
+That installs the package in editable mode and puts `beertown` on your `PATH`.
+`python -m beer_in_this_town <command>` is equivalent everywhere, and works
+without installing at all if you would rather just `pip install -r
+requirements.txt`.
 
 `bootstrap` uses a **dedicated** Chrome profile, not your everyday one —
 pointing Playwright at a live profile requires Chrome to be fully closed and
 can disturb its session.
+
+### Upgrading
+
+```bash
+git pull
+python -m pip install -e ".[dev,browser]"   # picks up dependency changes
+```
+
+Your session, journals and rate ledger live in `state/`, `data/` and
+`storage_state.json`, none of which are touched by an upgrade.
 
 ## Use
 
@@ -231,11 +271,10 @@ drains on its own; once everything is done it exits in seconds having done
 nothing.
 
 ```powershell
-$script = "$PWD
-un_catchup.ps1"
+$script = Join-Path $PWD "run_catchup.ps1"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
-Register-ScheduledTask -TaskName "beertown catchup" -Force `
+Register-ScheduledTask -TaskName "beer-in-this-town catchup" -Force `
     -Action $action -Trigger (New-ScheduledTaskTrigger -Daily -At "01:15") `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
 ```
@@ -253,6 +292,14 @@ schtasks /Create /TN "Untappd Venues" `
 
 Tick "Run task as soon as possible after a scheduled start is missed" and
 "Start only if network is available".
+
+## Contributing
+
+Bug reports, selector fixes and new venue sites are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules,
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for how we behave, and
+[SECURITY.md](SECURITY.md) before reporting anything sensitive or pasting a
+`debug/` dump into an issue.
 
 ## Licence
 
