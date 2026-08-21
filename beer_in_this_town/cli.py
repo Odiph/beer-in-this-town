@@ -82,17 +82,20 @@ def cmd_doctor(s: Settings) -> Envelope:
         import httpx  # noqa: F401
         data["httpx"] = "ok"
     except ImportError:
-        problems.append("httpx missing -- pip install -r requirements.txt")
+        problems.append("httpx missing -- pip install -e \".[browser]\"")
     try:
         import bs4  # noqa: F401
         data["beautifulsoup4"] = "ok"
     except ImportError:
-        problems.append("beautifulsoup4 missing -- pip install -r requirements.txt")
+        problems.append("beautifulsoup4 missing -- pip install -e \".[browser]\"")
     try:
         import playwright  # noqa: F401
         data["playwright"] = "ok"
     except ImportError:
-        problems.append("playwright missing (only needed for bootstrap/pin)")
+        problems.append(
+            "playwright missing (only needed for bootstrap/pin) "
+            "-- pip install -e \".[browser]\""
+        )
 
     data["session_file"] = "present" if s.storage_state.exists() else "missing"
     data["profile_dir"] = "present" if s.profile_dir.exists() else "missing"
