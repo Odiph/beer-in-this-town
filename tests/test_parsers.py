@@ -35,6 +35,29 @@ SEARCH_HTML = """
 </div>
 """
 
+# Not every card carries all three style lines. Reading them positionally means
+# a missing category silently shifts the address into the category column and
+# the city into the address column -- a whole CSV of plausible, wrong data.
+SEARCH_HTML_SPARSE = """
+<div class="beer-item">
+  <p class="name"><a href="/v/no-category/111">No Category</a></p>
+  <p class="style">42 Somewhere Road</p>
+  <p class="style">Singapore, Singapore</p>
+</div>
+<div class="beer-item">
+  <p class="name"><a href="/v/no-address/222">No Address</a></p>
+  <p class="style">Beer Bar</p>
+  <p class="style">Singapore, Singapore</p>
+</div>
+<div class="beer-item">
+  <p class="name"><a href="/v/city-only/333">City Only</a></p>
+  <p class="style">Singapore, Singapore</p>
+</div>
+<div class="beer-item">
+  <p class="name"><a href="/v/bare/444">Bare</a></p>
+</div>
+"""
+
 VENUE_HTML = """
 <div class="stats">
   <li><span>20,259</span><span>Total</span></li>
@@ -71,10 +94,48 @@ def test_search_extracts_identity(refs):
 
 
 @pytest.mark.unit
-def test_search_extracts_positional_style_fields(refs):
+def test_search_extracts_style_fields(refs):
     assert refs[0].category.startswith("American Restaurant")
     assert refs[0].address == "261 Waterloo St, #01-23"
     assert refs[0].city == "Singapore, Singapore"
+
+
+@pytest.fixture
+def sparse():
+    return {r.slug: r for r in parse_search_page(SEARCH_HTML_SPARSE)}
+
+
+@pytest.mark.unit
+def test_missing_category_does_not_shift_the_address_up(sparse):
+    # The regression: read positionally, this card reported
+    # category="42 Somewhere Road" and address="Singapore, Singapore".
+    r = sparse["no-category"]
+    assert r.category is None
+    assert r.address == "42 Somewhere Road"
+    assert r.city == "Singapore, Singapore"
+
+
+@pytest.mark.unit
+def test_missing_address_does_not_shift_the_city_up(sparse):
+    r = sparse["no-address"]
+    assert r.category == "Beer Bar"
+    assert r.address is None
+    assert r.city == "Singapore, Singapore"
+
+
+@pytest.mark.unit
+def test_city_only_card_fills_only_the_city(sparse):
+    r = sparse["city-only"]
+    assert r.category is None
+    assert r.address is None
+    assert r.city == "Singapore, Singapore"
+
+
+@pytest.mark.unit
+def test_card_with_no_style_lines_is_still_parsed(sparse):
+    r = sparse["bare"]
+    assert r.name == "Bare"
+    assert (r.category, r.address, r.city) == (None, None, None)
 
 
 @pytest.mark.unit

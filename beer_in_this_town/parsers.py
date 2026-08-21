@@ -69,6 +69,44 @@ def _clean(text: str | None) -> str | None:
     return collapsed or None
 
 
+def _split_style_lines(
+    lines: list[str],
+) -> tuple[str | None, str | None, str | None]:
+    """Assign a card's `p.style` lines to (category, address, city).
+
+    A full card carries three lines in document order, but plenty carry two and
+    a few carry one. Reading them positionally is how a missing category ends
+    up filed as the venue's category: the address shifts up one slot, the city
+    shifts into address, and the result is a CSV that looks entirely reasonable
+    and is entirely wrong. Same failure mode as the label-vs-position rule the
+    stats parser already follows.
+
+    Two things are relied on, in this order:
+
+    1. The location line is last. That is structural -- Untappd renders it
+       after whatever else the card has.
+    2. When only one line precedes it, a digit decides: street addresses carry
+       numbers ("42 Somewhere Road", "#01-23"), venue categories do not.
+
+    When two lines precede the location there is nothing to disambiguate --
+    the card is complete -- so document order is used, which is correct.
+    A field that cannot be established is left None rather than guessed.
+    """
+    if not lines:
+        return None, None, None
+
+    *rest, city = lines
+
+    if len(rest) >= 2:
+        return rest[0], rest[1], city
+    if len(rest) == 1:
+        line = rest[0]
+        if any(ch.isdigit() for ch in line):
+            return None, line, city
+        return line, None, city
+    return None, None, city
+
+
 def parse_count(text: str) -> int | None:
     """12,345 -> 12345 ; 1.2k -> 1200 ; n/a -> None."""
     m = NUMBER_RE.search(text)
@@ -113,20 +151,19 @@ def parse_search_page(html: str, *, strict: bool = True) -> list[VenueRef]:
             if not m:
                 raise ParseError(f"Unparseable venue href: {href!r}")
 
-            # p.style carries category / address / city in document order, but
-            # not every venue has all three. Read positionally with fallbacks
-            # rather than assuming a fixed count.
-            styles = [_clean(p.get_text()) for p in item.select("p.style")]
-            styles += [None, None, None]
+            styles = [
+                s for p in item.select("p.style") if (s := _clean(p.get_text()))
+            ]
+            category, address, city = _split_style_lines(styles)
 
             refs.append(
                 VenueRef(
                     venue_id=m.group("vid"),
                     slug=m.group("slug"),
                     name=_clean(anchor.get_text()) or "(unnamed)",
-                    category=styles[0],
-                    address=styles[1],
-                    city=styles[2],
+                    category=category,
+                    address=address,
+                    city=city,
                 )
             )
         except ParseError as exc:
