@@ -14,12 +14,34 @@ DEBUG_DIR = ROOT / "debug"
 BASE = "https://untappd.com"
 SEARCH_URL = f"{BASE}/search"
 
-# A current, real Chrome UA. Keep this in sync with the Chrome you actually run;
-# a stale UA is a cheap tell.
-DEFAULT_UA = (
+# A real Chrome UA. Chrome has frozen the minor/build/patch fields at 0.0.0
+# since v107, so the major version is the only part that varies.
+UA_TEMPLATE = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"
 )
+
+# Fallback only, for when no Chrome can be found to ask. Being a fallback is
+# the point: this comment used to say "keep this in sync with the Chrome you
+# actually run, a stale UA is a cheap tell" -- and then the number sat at 128
+# while the installed Chrome reached 151, because nothing made it happen.
+# `user_agent_for_installed_chrome` now keeps it honest without anyone
+# remembering to.
+FALLBACK_CHROME_MAJOR = "151"
+DEFAULT_UA = UA_TEMPLATE.format(major=FALLBACK_CHROME_MAJOR)
+
+
+def user_agent_for_installed_chrome() -> str:
+    """Claim the Chrome that is actually installed here.
+
+    Consistency is the whole value: the requests already carry Chrome's fetch
+    metadata and ride a session created by a real Chrome, so naming a version
+    that no longer exists is the one part that would not add up.
+    """
+    from .chrome_launch import chrome_major_version
+
+    major = chrome_major_version()
+    return UA_TEMPLATE.format(major=major) if major else DEFAULT_UA
 
 
 @dataclass(frozen=True)
@@ -37,18 +59,21 @@ class Settings:
     user_agent: str = DEFAULT_UA
 
     # --- politeness -----------------------------------------------------
-    min_delay_s: float = 2.0
-    max_delay_s: float = 4.5
-    hourly_budget: int = 600
+    # Every number here is a defence, not a preference. `http_client.py`'s
+    # module docstring explains what each one is defending against and why
+    # raising it is not free -- read that before touching any of them.
+    min_delay_s: float = 2.0      # jittered gap between requests, lower bound
+    max_delay_s: float = 4.5      # ...and upper. Jitter matters: fixed is a tell
+    hourly_budget: int = 600      # hard per-hour ceiling; raises, never sleeps
     max_retries: int = 3
-    backoff_ladder_s: tuple[int, ...] = (60, 180, 600)
-    max_consecutive_429: int = 3
-    cache_ttl_s: int = 12 * 3600
+    backoff_ladder_s: tuple[int, ...] = (60, 180, 600)  # climb on 429/503
+    max_consecutive_429: int = 3  # then abort: three in a row means stop, not wait
+    cache_ttl_s: int = 12 * 3600  # a re-run costs ~no requests
     request_timeout_s: float = 30.0
 
     # --- correctness gates ----------------------------------------------
     parse_strictness: float = 0.90  # fraction of venues that must yield full stats
-    respect_robots: bool = True
+    respect_robots: bool = True     # refuse to start if robots.txt says no
 
     # --- geocoding ------------------------------------------------------
     google_geocoding_key: str | None = None
@@ -60,6 +85,7 @@ class Settings:
         s = Settings()
         return replace(
             s,
+            user_agent=user_agent_for_installed_chrome(),
             google_geocoding_key=os.environ.get("GOOGLE_GEOCODING_KEY") or None,
             nominatim_email=os.environ.get("NOMINATIM_EMAIL") or None,
         )

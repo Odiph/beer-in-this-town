@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from beer_in_this_town import guardrails
+from beer_in_this_town import config, guardrails
 from beer_in_this_town.guardrails import (
     STALE_LOCK_SECONDS,
     CircuitBreaker,
@@ -345,3 +345,27 @@ def test_recording_a_write_refreshes_the_lock(limits, ledger_path):
         RateLedger(limits, ledger_path).record_write()
 
         assert time.time() - lock.stat().st_mtime < STALE_LOCK_SECONDS
+
+
+# --- user-agent honesty ---------------------------------------------------
+@pytest.mark.unit
+def test_user_agent_names_the_chrome_that_is_installed(monkeypatch):
+    """A UA naming a Chrome that no longer exists is the tell it warns about."""
+    monkeypatch.setattr(config, "user_agent_for_installed_chrome",
+                        lambda: config.UA_TEMPLATE.format(major="151"))
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
+                        lambda: "151")
+    assert "Chrome/151.0.0.0" in config.user_agent_for_installed_chrome()
+
+
+@pytest.mark.unit
+def test_user_agent_falls_back_when_no_chrome_is_installed(monkeypatch):
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
+                        lambda: None)
+    assert config.user_agent_for_installed_chrome() == config.DEFAULT_UA
+
+
+@pytest.mark.unit
+def test_the_ua_is_never_left_with_a_literal_placeholder():
+    assert "{major}" not in config.DEFAULT_UA
+    assert config.DEFAULT_UA.startswith("Mozilla/5.0")
