@@ -56,6 +56,15 @@ SEARCH_HTML_SPARSE = """
 <div class="beer-item">
   <p class="name"><a href="/v/bare/444">Bare</a></p>
 </div>
+<div class="beer-item">
+  <p class="name"><a href="/v/no-location/555">No Location</a></p>
+  <p class="style">Beer Bar</p>
+  <p class="style">42 Somewhere Road</p>
+</div>
+<div class="beer-item">
+  <p class="name"><a href="/v/address-only/666">Address Only</a></p>
+  <p class="style">42 Somewhere Road</p>
+</div>
 """
 
 VENUE_HTML = """
@@ -124,11 +133,35 @@ def test_missing_address_does_not_shift_the_city_up(sparse):
 
 
 @pytest.mark.unit
-def test_city_only_card_fills_only_the_city(sparse):
+def test_a_lone_style_line_is_left_unassigned(sparse):
+    """"Beer Bar" and "Singapore, Singapore" are the same shape.
+
+    Nothing distinguishes a category from a location on a one-line card, so
+    nothing is assigned. Filing it as the city would put venue types in the
+    city column of every unlocated venue.
+    """
     r = sparse["city-only"]
-    assert r.category is None
-    assert r.address is None
-    assert r.city == "Singapore, Singapore"
+    assert (r.category, r.address, r.city) == (None, None, None)
+
+
+@pytest.mark.unit
+def test_a_card_with_no_location_line_does_not_invent_one(sparse):
+    """The last line is only the location line if it looks like one.
+
+    Assuming it unconditionally files a street address as the venue's city --
+    and city is not cosmetic: places_from_csv falls back to it when there is
+    no address.
+    """
+    r = sparse["no-location"]
+    assert r.category == "Beer Bar"
+    assert r.address == "42 Somewhere Road"
+    assert r.city is None
+
+
+@pytest.mark.unit
+def test_a_lone_address_is_recognised_by_its_number(sparse):
+    r = sparse["address-only"]
+    assert (r.category, r.address, r.city) == (None, "42 Somewhere Road", None)
 
 
 @pytest.mark.unit

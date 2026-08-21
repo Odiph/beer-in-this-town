@@ -69,6 +69,12 @@ def _clean(text: str | None) -> str | None:
     return collapsed or None
 
 
+def _has_digit(line: str) -> bool:
+    """Street addresses carry numbers ("42 Somewhere Road", "#01-23"). Venue
+    categories and city lines do not."""
+    return any(ch.isdigit() for ch in line)
+
+
 def _split_style_lines(
     lines: list[str],
 ) -> tuple[str | None, str | None, str | None]:
@@ -81,28 +87,52 @@ def _split_style_lines(
     and is entirely wrong. Same failure mode as the label-vs-position rule the
     stats parser already follows.
 
-    Two things are relied on, in this order:
+    The location line is last *when the card has one* -- and that qualifier is
+    load-bearing. Rather than assume it, the last line has to look like a
+    location (no street number) before it is accepted as one; a card whose last
+    line carries digits has no city line at all, and treating it as one would
+    file a street address as the venue's city.
 
-    1. The location line is last. That is structural -- Untappd renders it
-       after whatever else the card has.
-    2. When only one line precedes it, a digit decides: street addresses carry
-       numbers ("42 Somewhere Road", "#01-23"), venue categories do not.
+    Where a single line precedes the location, a digit decides. That is a
+    judgement, not a certainty, so it is logged: an address with no number in
+    it ("The Green, Church Lane") lands in the category, and downstream that
+    matters -- `places_from_csv` falls back to city-only and `journal_key`
+    degrades to the bare name, which is how two outlets of one chain collide.
 
-    When two lines precede the location there is nothing to disambiguate --
-    the card is complete -- so document order is used, which is correct.
-    A field that cannot be established is left None rather than guessed.
+    A lone line is genuinely ambiguous -- "Beer Bar" and "Singapore, Singapore"
+    are the same shape -- so nothing is assigned rather than guessed. This
+    module's whole premise is that no data beats confident wrong data.
     """
     if not lines:
         return None, None, None
 
-    *rest, city = lines
+    if len(lines) == 1:
+        only = lines[0]
+        if _has_digit(only):
+            return None, only, None
+        log.info(
+            "Card has one style line, %r, which could be a category or a "
+            "location. Filing neither -- guessing here would put a venue type "
+            "in the city column or vice versa.", only,
+        )
+        return None, None, None
+
+    *rest, last = lines
+    if _has_digit(last):
+        # No location line on this card: the last line is a street address.
+        log.debug("Last style line %r carries digits, so this card has no "
+                  "location line.", last)
+        rest, city = lines, None
+    else:
+        city = last
 
     if len(rest) >= 2:
         return rest[0], rest[1], city
     if len(rest) == 1:
         line = rest[0]
-        if any(ch.isdigit() for ch in line):
+        if _has_digit(line):
             return None, line, city
+        log.debug("Filing %r as a category: it carries no street number.", line)
         return line, None, city
     return None, None, city
 
@@ -170,6 +200,16 @@ def parse_search_page(html: str, *, strict: bool = True) -> list[VenueRef]:
             # One malformed card must not kill a 100-venue run, but it has to be
             # visible in the log and counted against the strictness gate.
             log.error("Skipping malformed search item: %s", exc)
+
+    # The corpus gate downstream only inspects stats, so a page where the style
+    # lines went unrecognised would otherwise pass in total silence. Say so.
+    unlocated = sum(1 for r in refs if r.city is None)
+    if unlocated:
+        log.info(
+            "%d of %d card(s) on this page had no recognisable location line. "
+            "Their city column will be empty rather than wrong.",
+            unlocated, len(refs),
+        )
     return refs
 
 
