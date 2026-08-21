@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from beer_in_this_town import guardrails
 from beer_in_this_town.guardrails import (
     STALE_LOCK_SECONDS,
     CircuitBreaker,
@@ -247,3 +248,100 @@ def test_a_fresh_lock_from_another_process_is_respected(ledger_path):
 
     with pytest.raises(Tripped, match="already running"), ledger_lock(ledger_path):
         pytest.fail("a live lock must fail closed")
+
+
+@pytest.mark.unit
+def test_a_live_lock_is_left_alone_when_a_second_run_is_refused(ledger_path):
+    lock = ledger_path.with_suffix(".lock")
+    lock.write_text('{"pid": 999999, "started": 0, "token": "theirs"}', encoding="utf-8")
+
+    with pytest.raises(Tripped):
+        _second_run(ledger_path)
+
+    # Refusing must not damage the holder's lock on the way out.
+    assert lock.exists()
+    assert "theirs" in lock.read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
+def test_the_lock_file_is_gone_after_a_clean_exit(ledger_path):
+    lock = ledger_path.with_suffix(".lock")
+    with ledger_lock(ledger_path):
+        assert lock.exists()
+    assert not lock.exists()
+
+
+@pytest.mark.unit
+def test_release_does_not_remove_a_lock_that_belongs_to_another_run(ledger_path):
+    """The failure that turns mutual exclusion back into nothing.
+
+    A run whose lock was judged stale and taken over must not delete the new
+    owner's lock when it finishes -- that would leave a third run free to start
+    alongside the second, with every step looking locally correct.
+    """
+    lock = ledger_path.with_suffix(".lock")
+    with ledger_lock(ledger_path):
+        # Stand in for another run breaking this lock and taking its own.
+        lock.write_text('{"pid": 999999, "started": 0, "token": "theirs"}',
+                        encoding="utf-8")
+
+    assert lock.exists()
+    assert "theirs" in lock.read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
+def test_breaking_a_stale_lock_still_requires_winning_the_create(
+    ledger_path, monkeypatch
+):
+    """Two processes can agree a lock is stale. Only one may end up holding it.
+
+    Reproduces the race by having the break itself hand the lock to somebody
+    else, which is what losing the rename looks like from the loser's side.
+    """
+    lock = ledger_path.with_suffix(".lock")
+    lock.write_text('{"pid": 999999, "started": 0}', encoding="utf-8")
+    old = time.time() - STALE_LOCK_SECONDS - 60
+    os.utime(lock, (old, old))
+
+    real_steal = guardrails._steal
+
+    def steal_then_lose(path):
+        real_steal(path)
+        path.write_text('{"pid": 12345, "started": 0, "token": "winner"}',
+                        encoding="utf-8")
+
+    monkeypatch.setattr(guardrails, "_steal", steal_then_lose)
+
+    with pytest.raises(Tripped, match="already running"):
+        _second_run(ledger_path)
+
+    assert "winner" in lock.read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
+def test_a_heartbeat_stops_a_slow_run_from_looking_abandoned(ledger_path):
+    """Age must mean "idle this long", not "started this long ago".
+
+    A run that is slow but still writing would otherwise have its lock stolen
+    out from under it while it was still spending budget.
+    """
+    lock = ledger_path.with_suffix(".lock")
+    with ledger_lock(ledger_path):
+        old = time.time() - STALE_LOCK_SECONDS - 60
+        os.utime(lock, (old, old))
+        guardrails.heartbeat()
+
+        with pytest.raises(Tripped, match="already running"):
+            _second_run(ledger_path)
+
+
+@pytest.mark.unit
+def test_recording_a_write_refreshes_the_lock(limits, ledger_path):
+    lock = ledger_path.with_suffix(".lock")
+    with ledger_lock(ledger_path):
+        old = time.time() - STALE_LOCK_SECONDS - 60
+        os.utime(lock, (old, old))
+
+        RateLedger(limits, ledger_path).record_write()
+
+        assert time.time() - lock.stat().st_mtime < STALE_LOCK_SECONDS

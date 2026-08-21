@@ -32,7 +32,7 @@ from .export import (
     write_kml,
 )
 from .geocode import geocode_missing
-from .guardrails import Tripped
+from .guardrails import AlreadyRunning, Tripped
 from .http_client import (
     BudgetExceeded,
     PoliteClient,
@@ -377,6 +377,20 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
     try:
         journal = pin_places(places, s, list_name, limit=limit, region=region,
                              min_gap_s=min_gap, max_gap_s=max_gap)
+    except AlreadyRunning as exc:
+        # Distinct from a cool-off: nothing has to elapse, another process is
+        # simply holding the ledger. Reusing guardrail_tripped told the caller
+        # to wait out a cool-off that does not exist, while `status` -- which
+        # knows nothing about the lock -- reported all clear. An agent
+        # following the envelope loop would spin on that.
+        return fail("pin", Problem(
+            code="already_running",
+            message=str(exc),
+            remedy="Another run holds the write budget. Wait for it to finish, "
+                   "then re-run this exact command; progress is journalled. Do "
+                   "not delete the lock unless you are certain nothing is "
+                   "running.",
+        ))
     except Tripped as exc:
         # A guardrail fired on purpose. This MUST NOT look like an ordinary
         # error: the remedy is to wait, never to retry. Previously this was
@@ -448,6 +462,20 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
     try:
         journal = add_notes(places, s, list_name, limit=limit, region=region,
                             min_gap_s=min_gap, max_gap_s=max_gap)
+    except AlreadyRunning as exc:
+        # Distinct from a cool-off: nothing has to elapse, another process is
+        # simply holding the ledger. Reusing guardrail_tripped told the caller
+        # to wait out a cool-off that does not exist, while `status` -- which
+        # knows nothing about the lock -- reported all clear. An agent
+        # following the envelope loop would spin on that.
+        return fail("notes", Problem(
+            code="already_running",
+            message=str(exc),
+            remedy="Another run holds the write budget. Wait for it to finish, "
+                   "then re-run this exact command; progress is journalled. Do "
+                   "not delete the lock unless you are certain nothing is "
+                   "running.",
+        ))
     except Tripped as exc:
         return fail("notes", Problem(
             code="guardrail_tripped",
@@ -614,6 +642,13 @@ def main(argv: list[str] | None = None) -> int:
             message=str(exc),
             remedy="Wait several hours before retrying. The disk cache means "
                    "little work is repeated when you do.",
+        ))
+    except AlreadyRunning as exc:
+        env = fail(args.cmd, Problem(
+            code="already_running",
+            message=str(exc),
+            remedy="Another run holds the write budget. Wait for it to finish, "
+                   "then re-run; progress is journalled.",
         ))
     except Tripped as exc:
         env = fail(args.cmd, Problem(

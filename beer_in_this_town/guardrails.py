@@ -32,6 +32,7 @@ import functools
 import json
 import logging
 import os
+import secrets
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -74,15 +75,27 @@ BLOCK_SIGNALS = (
 )
 
 
-# A run is capped at max_per_run writes paced at 8-16s plus periodic breaks, so
-# even the longest legitimate run finishes well inside an hour. Past that, the
-# holder is a crashed process whose lock file outlived it -- most likely killed
-# mid-run, which is exactly when the OS never got to clean up.
+# How long a lock may go untouched before it is treated as abandoned.
+#
+# This is a liveness threshold, not a run-duration budget: a live run refreshes
+# its lock on every write (see `heartbeat`), so the age measured here is time
+# since the holder last did anything, not time since it started. A run that is
+# slow but working never looks stale, however long it takes.
 STALE_LOCK_SECONDS = 2 * 3600
 
 
 class Tripped(RuntimeError):
     """A guardrail fired. The caller must stop, not retry."""
+
+
+class AlreadyRunning(Tripped):
+    """Another run holds the ledger. Wait for it -- there is no cool-off to sit out."""
+
+
+# The lock this process holds, as (path, token), or None. `heartbeat` needs to
+# find it from inside RateLedger.record_write, which has no reference to the
+# context manager that took it.
+_held: tuple[Path, str] | None = None
 
 
 @contextmanager
@@ -97,44 +110,152 @@ def ledger_lock(path: Path = LEDGER) -> Iterator[None]:
     file showed only half of it. The ledger is the guardrail that surviving a
     restart is supposed to make undefeatable, so it has to be single-writer.
 
-    `O_CREAT | O_EXCL` is the portable primitive here -- one atomic
-    create-or-fail on both Windows and POSIX, with no fcntl/msvcrt split.
+    `O_CREAT | O_EXCL` is the portable primitive -- one atomic create-or-fail
+    on both Windows and POSIX, with no fcntl/msvcrt split. Every step that can
+    hand ownership to somebody is built from an atomic operation, because the
+    moment contention exists is the only moment any of this matters.
 
-    Fails CLOSED: an existing, recent lock stops the run rather than assuming
-    the other process died.
+    Fails CLOSED throughout: uncertainty stops the run.
     """
+    global _held
+
     lock = path.with_suffix(".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_hex(8)
 
+    _take(lock, token)
+    _held = (lock, token)
     try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        age = _lock_age_s(lock)
-        if age is None or age < STALE_LOCK_SECONDS:
-            raise Tripped(
-                f"Another run is already running (lock at {lock}). Two runs "
-                "sharing one budget would spend it twice over. Wait for it to "
-                "finish. If you are certain nothing is running -- a previous "
-                f"run was killed, say -- delete {lock.name}."
-            ) from None
-        log.warning(
-            "Breaking a stale ledger lock at %s (%.1fh old, older than the "
-            "%.1fh any real run can take). Its owner is gone.",
-            lock, age / 3600, STALE_LOCK_SECONDS / 3600,
-        )
-        fd = os.open(lock, os.O_CREAT | os.O_TRUNC | os.O_WRONLY)
-
-    try:
-        os.write(fd, json.dumps({"pid": os.getpid(), "started": _now()}).encode())
-        os.close(fd)
         yield
     finally:
-        # Releasing matters more than reporting: a lock left behind by a
-        # crashed run blocks every future one until it goes stale.
-        try:
-            lock.unlink()
-        except OSError:  # pragma: no cover -- already gone, or unlinkable
-            log.warning("Could not remove the ledger lock at %s", lock)
+        _held = None
+        _release(lock, token)
+
+
+def heartbeat() -> None:
+    """Mark the held lock as still alive. No-op when this process holds none.
+
+    Without this, a lock's age means "time since the run started", so
+    STALE_LOCK_SECONDS silently doubles as a cap on how long a run may take --
+    and a slow-but-healthy run gets its lock stolen out from under it while it
+    is still spending budget. Refreshing on every write makes age mean what
+    the stale check assumes it means.
+    """
+    if _held is None:
+        return
+    lock, _token = _held
+    try:
+        os.utime(lock, None)
+    except OSError:  # pragma: no cover -- lock already stolen or removed
+        log.debug("Could not refresh the ledger lock at %s", lock)
+
+
+def _take(lock: Path, token: str) -> None:
+    """Acquire `lock`, breaking it only if it is genuinely abandoned."""
+    try:
+        _create_exclusive(lock, token)
+        return
+    except FileExistsError:
+        pass
+
+    age = _lock_age_s(lock)
+    if age is None or age < STALE_LOCK_SECONDS:
+        raise AlreadyRunning(_contended_message(lock)) from None
+
+    log.warning(
+        "Breaking a ledger lock at %s that has been untouched for %.1fh "
+        "(limit %.1fh). A live run refreshes it on every write, so its owner "
+        "is gone.", lock, age / 3600, STALE_LOCK_SECONDS / 3600,
+    )
+    _steal(lock)
+
+    # Re-acquire exclusively rather than assuming the break was ours. Two
+    # processes can reach this point together -- a scheduled run and a hand-run
+    # starting the same minute is the whole reason this lock exists -- and a
+    # plain O_CREAT|O_TRUNC here cannot fail, so both would proceed and spend
+    # the budget twice. Exactly one wins the create; the other stops.
+    try:
+        _create_exclusive(lock, token)
+    except FileExistsError:
+        raise AlreadyRunning(_contended_message(lock)) from None
+
+
+def _create_exclusive(lock: Path, token: str) -> None:
+    """Create `lock` or raise FileExistsError. Never truncates an existing one."""
+    fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        payload = {"pid": os.getpid(), "started": _now(), "token": token}
+        os.write(fd, json.dumps(payload).encode("utf-8"))
+    finally:
+        # Closing in its own finally: on Windows an open handle would stop the
+        # lock being removed later, stranding it until it goes stale.
+        os.close(fd)
+
+
+def _steal(lock: Path) -> None:
+    """Take an abandoned lock out of the way, atomically.
+
+    `os.replace` is the atomic step: of any number of processes that decide the
+    same lock is stale, exactly one rename succeeds. The losers find it gone
+    and fall through to the exclusive create, where they lose again -- and
+    stop. Renaming rather than unlinking also leaves the evidence on disk if
+    the break turns out to have been wrong.
+    """
+    stolen = lock.with_name(f"{lock.name}.stale.{os.getpid()}")
+    try:
+        os.replace(lock, stolen)
+    except OSError:
+        return  # someone else broke it first, or it was released meanwhile
+    try:
+        stolen.unlink()
+    except OSError:  # pragma: no cover
+        log.debug("Left a broken lock behind at %s", stolen)
+
+
+def _release(lock: Path, token: str) -> None:
+    """Remove the lock, but only if it is still the one we took.
+
+    A blind unlink here is how mutual exclusion quietly stops existing: if this
+    run's lock was broken as stale and another run took a fresh one, deleting
+    it on the way out leaves the next process free to start alongside that run.
+    Leaving a lock we do not own is the fail-closed choice -- worst case it
+    goes stale and gets broken.
+    """
+    holder = _read_token(lock)
+    if holder is None:
+        log.warning(
+            "The ledger lock at %s was gone before this run released it. "
+            "Another run may have judged it stale and taken over.", lock,
+        )
+        return
+    if holder != token:
+        log.error(
+            "Not removing the ledger lock at %s: it belongs to another run "
+            "now. This run's lock was taken over while it was still working.",
+            lock,
+        )
+        return
+    try:
+        lock.unlink()
+    except OSError:  # pragma: no cover -- already gone, or unlinkable
+        log.warning("Could not remove the ledger lock at %s", lock)
+
+
+def _read_token(lock: Path) -> str | None:
+    try:
+        return str(json.loads(lock.read_text(encoding="utf-8"))["token"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _contended_message(lock: Path) -> str:
+    return (
+        f"Another run is already running (lock at {lock}). Two runs sharing "
+        "one budget would spend it twice over. Wait for it to finish -- there "
+        "is no cool-off to sit out, and re-running now will only trip this "
+        "again. If you are certain nothing is running, a previous run was "
+        f"killed: delete {lock.name}."
+    )
 
 
 def single_writer(fn: Callable[P, T]) -> Callable[P, T]:
@@ -272,6 +393,7 @@ class RateLedger:
         """
         self.events.append(_now())
         self._write()
+        heartbeat()
 
     def start_cooloff(self, reason: str) -> None:
         self.blocked_until = _now() + self.limits.cooloff_hours * 3600
