@@ -176,15 +176,13 @@ Saved lists cap at **3000 entries**.
 ### The `pin` command
 
 The repo ships a `pin` command that drives the Google Maps UI to build a real
-saved list. **Automating the Maps UI is against Google's Terms of Service**
-("do not access the Services through automated means"), unlike the My Maps
-import. It exists because the gap is real and some people will want it anyway.
+saved list. It exists because the gap is real and some people will want it
+anyway — but it is the one part of this project that crosses a line, and
+[Where the lines are](#where-the-lines-are) says exactly which.
 
 If you use it: it verifies every save by reloading the place page, undoes
 wrong-list saves, paces itself at 8–16s, and journals progress so it resumes
 after an interruption. It never creates a list — you make that by hand.
-
-Agents are instructed not to run it without an explicit human request.
 
 ## Adding the stats to a saved list
 
@@ -207,6 +205,38 @@ The date tracks **when the data was captured**, not when the note was written,
 so re-running does not rewrite every note with a new date. A note that already
 matches is skipped.
 
+## Where the lines are
+
+This project touches two services that both say no to some of it. Rather than
+scatter that across a dozen paragraphs, here it is in one place.
+
+| Surface | Status |
+|---|---|
+| Scraping Untappd (`run`, `selfcheck`) | **Against Untappd's ToS**, which prohibits automated access. |
+| KML → Google My Maps (`run`) | **Supported.** A documented bulk-import feature. No line crossed. |
+| Driving the Maps UI (`pin`, `notes`) | **Against Google's ToS** — "do not access the Services through automated means". |
+
+**On the Untappd side**, the pacing is a mitigation, not an exemption: one
+connection, no concurrency, a 12h cache so a re-run costs nothing, and a
+`robots.txt` check that refuses to start if the paths are disallowed. It stays
+far below what a browsing human would generate. That reduces the chance of
+causing anyone a problem. It does not make it permitted.
+
+**On the Google side**, the distinction matters more than it looks. The KML
+import is a feature Google built for this; `pin` and `notes` automate a UI
+Google's terms say not to automate, and they exist only because
+[no API for this exists](#there-is-no-api-for-this-we-checked). They are
+opt-in, never run as part of `run`, and never create a list — you make that by
+hand. The realistic failure mode there is not a crash but a **ban**, which is
+why the guardrails around them fail closed and why agents are instructed not
+to run them without an explicit human request.
+
+If none of that sits right, the project is still useful with the writing half
+untouched: `run` reads, exports, and leaves your accounts alone.
+
+This project is not affiliated with Untappd or Google, and none of the above is
+legal advice. You are responsible for your own use of it.
+
 ## Commands
 
 | Command | What it does | Touches your account |
@@ -221,28 +251,43 @@ matches is skipped.
 
 ## Agent-driven use
 
-See **[AGENTS.md](AGENTS.md)** for the full contract, and
-`.claude/skills/beer-in-this-town/SKILL.md` for the Claude Code skill.
+Every command emits exactly one envelope on stdout:
 
-The short version: run `status --json`, execute the first entry in
-`next_actions`, repeat. Failures return a valid envelope with a machine-readable
-`error.code` and a `remedy` — no traceback parsing.
+```json
+{
+  "command": "run",
+  "ok": true,
+  "schema_version": "1.0",
+  "data": { "venues": 100, "csv": "...", "kml": "..." },
+  "warnings": ["4 venue(s) have no coordinates and are not pinned"],
+  "next_actions": ["python -m beer_in_this_town pin --csv \"...\" --limit 3 --json"],
+  "error": null
+}
+```
+
+`next_actions` holds **literal runnable commands**, best first — not hints. So
+the loop is: run `status --json`, execute the first entry, repeat. A failure
+returns the same shape with `ok: false` and an `error` carrying a
+machine-readable `code` and a `remedy`, so there is no traceback to parse and
+no exit code to interpret. Treat a change in `schema_version` as breaking.
+
+See **[AGENTS.md](AGENTS.md)** for the error codes and the rules agents are
+expected to follow, and `.claude/skills/beer-in-this-town/SKILL.md` for the
+Claude Code skill.
 
 ## Politeness and failing loudly
 
 Single connection, no concurrency, 2.0–4.5s jittered delay, 600 requests/hour
 cap, 12h disk cache, and a deliberate abort after three consecutive throttle
-responses. ~100 venues ≈ 6 minutes.
-
-**Untappd's ToS prohibits automated access.** Low volume, caching and rate
-limiting are mitigations, not an exemption. The script reads `robots.txt` and
-refuses to start if the paths are disallowed.
+responses. ~100 venues ≈ 6 minutes. None of which makes scraping permitted —
+see [Where the lines are](#where-the-lines-are).
 
 Silent-wrong-data is the dangerous failure mode, so:
 
 1. Selector misses **raise**; there is no silent `.get(default=None)`.
 2. Stats match on the literal labels TOTAL/UNIQUE/MONTHLY/YOU, never DOM
-   position.
+   position — and search cards are read the same way, because a venue missing
+   its category line used to shift its address into the category column.
 3. If under 90% of venues yield full stats, the run **aborts and writes
    nothing**.
 4. Every parse failure dumps the offending HTML to `debug/`.
@@ -264,34 +309,15 @@ against Python 3.11 and 3.12, and **never touches Untappd or Google**.
 ## Finishing a big list over several nights
 
 The write guardrails cap how much can be done per day, so a hundred venues is
-deliberately more than one session. `run_catchup.ps1` handles that: it pins
-whatever is still missing, then annotates whatever is already pinned, and both
-halves trim themselves to the remaining budget. Run it nightly and the backlog
-drains on its own; once everything is done it exits in seconds having done
-nothing.
+deliberately more than one session. `run_catchup.ps1` pins whatever is still
+missing, then annotates whatever is already pinned, and both halves trim
+themselves to the remaining budget. Run it nightly and the backlog drains on
+its own; once everything is done it exits in seconds having done nothing.
 
-```powershell
-$script = Join-Path $PWD "run_catchup.ps1"
-$action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
-Register-ScheduledTask -TaskName "beer-in-this-town catchup" -Force `
-    -Action $action -Trigger (New-ScheduledTaskTrigger -Daily -At "01:15") `
-    -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)
-```
+`run_weekly.ps1` re-scrapes on a weekly timer, so the numbers stay current.
 
-`-StartWhenAvailable` matters: the machine is usually asleep at 01:15, and
-without it a missed run is simply skipped.
-
-## Scheduling (Windows)
-
-```powershell
-schtasks /Create /TN "Untappd Venues" `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File <repo>\run_weekly.ps1" `
-  /SC WEEKLY /D SUN /ST 03:00 /RL LIMITED /F
-```
-
-Tick "Run task as soon as possible after a scheduled start is missed" and
-"Start only if network is available".
+**[docs/scheduling.md](docs/scheduling.md)** has both, for Windows Task
+Scheduler and for cron.
 
 ## Contributing
 
@@ -305,5 +331,5 @@ Bug reports, selector fixes and new venue sites are welcome — see
 
 MIT. See [LICENSE](LICENSE).
 
-This project is not affiliated with Untappd or Google. You are responsible for
-your own use of it, including compliance with those services' terms.
+Where this project stands with Untappd's and Google's terms is set out in
+[Where the lines are](#where-the-lines-are).
