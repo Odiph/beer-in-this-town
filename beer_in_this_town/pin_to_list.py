@@ -54,9 +54,16 @@ log = logging.getLogger(__name__)
 
 JOURNAL = STATE_DIR / "pinned.json"
 
-# Pacing. Saving a place is a write; go slower than the read-only scraper.
-MIN_GAP_S = 4.0
-MAX_GAP_S = 9.0
+# Pacing between places. Saving is a write, so this is deliberately slower than
+# the read-only scraper's 2.0-4.5s.
+#
+# These are THE defaults: the CLI derives --min-gap/--max-gap from them rather
+# than repeating literals, because it previously did repeat them and drifted.
+# The module said 4-9s while every real run went at 8-16s, so anyone reading
+# this file to find out how hard the tool hits Google got an answer half the
+# true value. One number to change, one number to trust.
+MIN_GAP_S = 8.0
+MAX_GAP_S = 16.0
 MAX_ATTEMPTS = 3
 # Consecutive lookup misses that mean 'blocked', not 'bad data'.
 MAX_CONSECUTIVE_MISSES = 8
