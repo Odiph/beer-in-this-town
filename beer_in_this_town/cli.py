@@ -40,8 +40,12 @@ from .http_client import (
 )
 from .models import VenueRef
 from .mymaps_upload import manual_instructions, upload_kml
+from .notes import MAX_GAP_S as NOTES_MAX_GAP
+from .notes import MIN_GAP_S as NOTES_MIN_GAP
 from .notes import add_notes, notes_from_csv
 from .parsers import ParseError, assert_corpus_quality, parse_venue_stats
+from .pin_to_list import MAX_GAP_S as PIN_MAX_GAP
+from .pin_to_list import MIN_GAP_S as PIN_MIN_GAP
 from .pin_to_list import pin_places, places_from_csv
 from .scrape import collect_venue_refs, fetch_venues
 from .state import inspect_state, next_actions
@@ -566,10 +570,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="exact name of the existing Google Maps list")
     pin.add_argument("--limit", type=int, default=None,
                      help="only do the first N (use for a small trial run)")
-    pin.add_argument("--min-gap", type=float, default=8.0,
-                     help="minimum seconds between places (default 8)")
-    pin.add_argument("--max-gap", type=float, default=16.0,
-                     help="maximum seconds between places (default 16)")
+    pin.add_argument("--min-gap", type=float, default=PIN_MIN_GAP,
+                     help=f"minimum seconds between places "
+                          f"(default {PIN_MIN_GAP:.0f})")
+    pin.add_argument("--max-gap", type=float, default=PIN_MAX_GAP,
+                     help=f"maximum seconds between places "
+                          f"(default {PIN_MAX_GAP:.0f})")
     notes = sub.add_parser(
         "notes",
         parents=[common],
@@ -578,8 +584,8 @@ def build_parser() -> argparse.ArgumentParser:
     notes.add_argument("--csv", required=True)
     notes.add_argument("--list", dest="list_name", default="Singapore Bars")
     notes.add_argument("--limit", type=int, default=None)
-    notes.add_argument("--min-gap", type=float, default=5.0)
-    notes.add_argument("--max-gap", type=float, default=11.0)
+    notes.add_argument("--min-gap", type=float, default=NOTES_MIN_GAP)
+    notes.add_argument("--max-gap", type=float, default=NOTES_MAX_GAP)
     notes.add_argument("--region", default="Singapore")
 
     pin.add_argument("--region", default="Singapore",

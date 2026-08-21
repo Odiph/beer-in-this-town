@@ -39,6 +39,12 @@ log = logging.getLogger(__name__)
 
 NOTE_JOURNAL = STATE_DIR / "noted.json"
 
+# Pacing between notes. Editing a note is a lighter write than creating a
+# save, so this sits between the scraper and `pin`. As in pin_to_list,
+# these are the single source: the CLI defaults derive from them.
+MIN_GAP_S = 5.0
+MAX_GAP_S = 11.0
+
 NOTE_FIELD = (
     "textarea[placeholder*='Add a note'], "
     "textarea[aria-label*='note'], "
@@ -177,8 +183,8 @@ def add_notes(
     limit: int | None = None,
     headless: bool = False,
     region: str | None = None,
-    min_gap_s: float = 5.0,
-    max_gap_s: float = 11.0,
+    min_gap_s: float = MIN_GAP_S,
+    max_gap_s: float = MAX_GAP_S,
     limits: Limits | None = None,
 ) -> dict[str, str]:
     """Add a stats note to each place already saved in `list_name`."""
