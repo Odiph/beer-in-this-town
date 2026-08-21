@@ -27,7 +27,13 @@ from datetime import date
 from pathlib import Path
 
 from .config import STATE_DIR, Settings
-from .guardrails import CircuitBreaker, Limits, RateLedger, Tripped
+from .guardrails import (
+    CircuitBreaker,
+    Limits,
+    RateLedger,
+    Tripped,
+    single_writer,
+)
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +168,7 @@ def _write_note(page, text: str) -> str | None:
     return _read_note(page)
 
 
+@single_writer
 def add_notes(
     places: list[tuple[str, str | None, str]],
     s: Settings,

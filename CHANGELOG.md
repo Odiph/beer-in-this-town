@@ -6,6 +6,18 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Search-result cards were read positionally, so a venue with no category line
+  had its address filed as its category and its city filed as its address — a
+  CSV that looked entirely reasonable and was entirely wrong. Lines are now
+  anchored on the location line, which is always last, and a field that cannot
+  be established is left empty rather than guessed.
+- The rate ledger had no cross-process lock. Two runs starting together — the
+  nightly catch-up task and a hand-run `pin`, say — each read the full
+  remaining budget and each spent it, and whichever wrote last discarded the
+  other's events entirely. `pin` and `notes` now hold an exclusive lock for the
+  length of a run and fail closed if one is already held.
+
 ## [0.1.0] - 2026-08-21
 
 First public release.

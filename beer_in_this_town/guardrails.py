@@ -11,6 +11,9 @@ leaves the others:
 1. **RateLedger** — a persistent, rolling 24h budget of writes. Survives
    restarts, so you cannot reset the limit by re-running the command. This is
    the one that stops "just re-run it again" from becoming 400 saves in a day.
+   Guarded by a **cross-process lock** (`ledger_lock`), because surviving a
+   restart is worth nothing if two processes can spend the same budget at the
+   same time — which the nightly catch-up task and a hand-run `pin` could.
 2. **CircuitBreaker** — consecutive failures trip it. If the UI stops
    responding the way we expect, that is exactly when a scripted client looks
    least human, so we stop rather than hammer.
@@ -25,16 +28,23 @@ tripping Google's abuse heuristics, which is a different and lesser claim.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ParamSpec, TypeVar
 
 from .config import STATE_DIR
 
 log = logging.getLogger(__name__)
+
+P = ParamSpec("P")
+T = TypeVar("T")
 
 LEDGER = STATE_DIR / "rate_ledger.json"
 
@@ -64,8 +74,90 @@ BLOCK_SIGNALS = (
 )
 
 
+# A run is capped at max_per_run writes paced at 8-16s plus periodic breaks, so
+# even the longest legitimate run finishes well inside an hour. Past that, the
+# holder is a crashed process whose lock file outlived it -- most likely killed
+# mid-run, which is exactly when the OS never got to clean up.
+STALE_LOCK_SECONDS = 2 * 3600
+
+
 class Tripped(RuntimeError):
     """A guardrail fired. The caller must stop, not retry."""
+
+
+@contextmanager
+def ledger_lock(path: Path = LEDGER) -> Iterator[None]:
+    """Hold exclusive ownership of the ledger for the length of a run.
+
+    Without this, two processes -- the nightly catch-up task and someone
+    running `pin` by hand, say -- each read the ledger at start-up, each saw
+    the full remaining budget, and each spent it. Worse, `record_write`
+    persists its own in-memory event list, so the second process to write
+    discarded the first's events entirely: the budget was spent twice and the
+    file showed only half of it. The ledger is the guardrail that surviving a
+    restart is supposed to make undefeatable, so it has to be single-writer.
+
+    `O_CREAT | O_EXCL` is the portable primitive here -- one atomic
+    create-or-fail on both Windows and POSIX, with no fcntl/msvcrt split.
+
+    Fails CLOSED: an existing, recent lock stops the run rather than assuming
+    the other process died.
+    """
+    lock = path.with_suffix(".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        age = _lock_age_s(lock)
+        if age is None or age < STALE_LOCK_SECONDS:
+            raise Tripped(
+                f"Another run is already running (lock at {lock}). Two runs "
+                "sharing one budget would spend it twice over. Wait for it to "
+                "finish. If you are certain nothing is running -- a previous "
+                f"run was killed, say -- delete {lock.name}."
+            ) from None
+        log.warning(
+            "Breaking a stale ledger lock at %s (%.1fh old, older than the "
+            "%.1fh any real run can take). Its owner is gone.",
+            lock, age / 3600, STALE_LOCK_SECONDS / 3600,
+        )
+        fd = os.open(lock, os.O_CREAT | os.O_TRUNC | os.O_WRONLY)
+
+    try:
+        os.write(fd, json.dumps({"pid": os.getpid(), "started": _now()}).encode())
+        os.close(fd)
+        yield
+    finally:
+        # Releasing matters more than reporting: a lock left behind by a
+        # crashed run blocks every future one until it goes stale.
+        try:
+            lock.unlink()
+        except OSError:  # pragma: no cover -- already gone, or unlinkable
+            log.warning("Could not remove the ledger lock at %s", lock)
+
+
+def single_writer(fn: Callable[P, T]) -> Callable[P, T]:
+    """Mark a command as the only thing allowed to spend the budget while it runs.
+
+    Applied to the two account-writing entry points. Held for the whole call,
+    so `pin` and `notes` run one after another -- which is what
+    run_catchup.ps1 already does -- rather than overlapping.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        with ledger_lock():
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def _lock_age_s(lock: Path) -> float | None:
+    """Seconds since the lock was taken, or None if that cannot be told."""
+    try:
+        return max(0.0, _now() - lock.stat().st_mtime)
+    except OSError:
+        return None
 
 
 @dataclass(frozen=True)
