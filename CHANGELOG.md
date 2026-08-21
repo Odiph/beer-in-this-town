@@ -17,6 +17,27 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   remaining budget and each spent it, and whichever wrote last discarded the
   other's events entirely. `pin` and `notes` now hold an exclusive lock for the
   length of a run and fail closed if one is already held.
+- Breaking an abandoned lock was itself not exclusive: two processes could both
+  judge a lock stale and both take it, since the re-open could not fail. The
+  break is now an atomic rename followed by an exclusive create, so exactly one
+  wins and the other stops.
+- Releasing a lock no longer unlinks whatever file happens to be there. A run
+  whose lock had been taken over would delete the new owner's, quietly leaving
+  mutual exclusion switched off. Ownership is proven by a token in the lock.
+- A held lock is refreshed on every write, so its age means "idle this long"
+  rather than "started this long ago". Without that, a slow but healthy run had
+  its lock stolen while it was still spending budget.
+- Lock contention now reports `already_running` rather than
+  `guardrail_tripped`, whose remedy told the caller to wait out a cool-off that
+  does not exist while `status` reported all clear — a loop an agent could spin
+  on.
+
+### Changed
+- Search cards with a single style line are left unassigned rather than filed
+  as a city: `"Beer Bar"` and `"Singapore, Singapore"` are the same shape, and
+  guessing put venue types in the city column. The last line is also checked
+  for a street number before being accepted as the location line, and the
+  category-vs-address judgement is logged when it fires.
 
 ## [0.1.0] - 2026-08-21
 
