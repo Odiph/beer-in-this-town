@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -57,6 +58,45 @@ def find_chrome() -> Path | None:
         path = Path(candidate)
         if path.exists():
             return path
+    return None
+
+
+_VERSION_RE = re.compile(r"\b(\d+)\.\d+\.\d+\.\d+\b")
+
+
+def chrome_major_version() -> str | None:
+    """The major version of the installed Chrome, or None if it cannot be told.
+
+    Used to keep the scraper's User-Agent honest. A UA that names a Chrome
+    release which no longer exists is the cheap tell `config.DEFAULT_UA` warns
+    about, and a hardcoded one goes stale silently -- it was still claiming
+    Chrome 128 long after 151 was what actually ran here.
+
+    Never raises: every failure means "use the fallback", not "stop".
+    """
+    exe = find_chrome()
+    if exe is None:
+        return None
+
+    # Windows: Chrome keeps a versioned directory beside the binary, which is
+    # cheaper and more reliable than launching it -- chrome.exe --version does
+    # not print to stdout there.
+    try:
+        for child in sorted(exe.parent.iterdir(), reverse=True):
+            if child.is_dir() and (m := _VERSION_RE.fullmatch(child.name)):
+                return m.group(1)
+    except OSError:
+        pass
+
+    try:
+        out = subprocess.run(
+            [str(exe), "--version"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if m := _VERSION_RE.search(out.stdout or ""):
+            return m.group(1)
+    except (OSError, subprocess.SubprocessError):
+        pass
     return None
 
 
