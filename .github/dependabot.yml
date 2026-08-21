@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # The CI workflow pins actions by major version; keep those current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+
+  # Runtime deps are floored, not pinned, in pyproject.toml; requirements.txt
+  # is the pinned mirror used for a no-install run.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: chore
+    groups:
+      python-deps:
+        patterns: ["*"]
