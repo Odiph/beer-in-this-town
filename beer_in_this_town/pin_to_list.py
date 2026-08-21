@@ -47,6 +47,7 @@ from .guardrails import (
     Tripped,
     detect_block,
     looks_signed_out,
+    single_writer,
 )
 
 log = logging.getLogger(__name__)
@@ -318,6 +319,7 @@ def _abort_if_blocked(page, ledger: RateLedger) -> None:
         )
 
 
+@single_writer
 def pin_places(
     places: list[tuple[str, str | None]],
     s: Settings,

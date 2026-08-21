@@ -7,16 +7,19 @@ CLOSED — i.e. when uncertain, it stops.
 from __future__ import annotations
 
 import json
+import os
 import time
 
 import pytest
 
 from beer_in_this_town.guardrails import (
+    STALE_LOCK_SECONDS,
     CircuitBreaker,
     Limits,
     RateLedger,
     Tripped,
     detect_block,
+    ledger_lock,
     looks_signed_out,
 )
 
@@ -190,3 +193,57 @@ def test_signed_out_page_is_recognised():
 def test_signed_in_page_is_not_mistaken_for_signed_out():
     """A signed-in page mentions Saved; a bare "Sign in" string is not enough."""
     assert not looks_signed_out("Saved lists. Sign in options. Your places.")
+
+
+# --- cross-process exclusion ----------------------------------------------
+# The ledger is the guardrail that "just run it again" cannot defeat. Two
+# processes reading it at the same moment each saw the full remaining budget,
+# and whichever wrote last silently discarded the other's events -- so the
+# budget could be spent twice over and the file would not even show it.
+def _second_run(path):
+    """Stand in for another process trying to start while one is live."""
+    with ledger_lock(path):
+        pytest.fail("the second run must not be allowed to start")
+
+
+@pytest.mark.unit
+def test_lock_is_held_for_the_duration_of_a_run(ledger_path):
+    with ledger_lock(ledger_path), pytest.raises(Tripped, match="already running"):
+        _second_run(ledger_path)
+
+
+@pytest.mark.unit
+def test_lock_is_released_afterwards(ledger_path):
+    with ledger_lock(ledger_path):
+        pass
+    with ledger_lock(ledger_path):
+        pass  # a second run after the first finished is fine
+
+
+@pytest.mark.unit
+def test_lock_is_released_even_when_the_run_raises(ledger_path):
+    with pytest.raises(RuntimeError), ledger_lock(ledger_path):
+        raise RuntimeError("browser died mid-run")
+    # A crashed run must not lock the user out of every future one.
+    with ledger_lock(ledger_path):
+        pass
+
+
+@pytest.mark.unit
+def test_a_stale_lock_is_broken_rather_than_blocking_forever(ledger_path):
+    lock = ledger_path.with_suffix(".lock")
+    lock.write_text('{"pid": 999999, "started": 0}', encoding="utf-8")
+    old = time.time() - STALE_LOCK_SECONDS - 60
+    os.utime(lock, (old, old))
+
+    with ledger_lock(ledger_path):
+        pass
+
+
+@pytest.mark.unit
+def test_a_fresh_lock_from_another_process_is_respected(ledger_path):
+    lock = ledger_path.with_suffix(".lock")
+    lock.write_text('{"pid": 999999, "started": 0}', encoding="utf-8")
+
+    with pytest.raises(Tripped, match="already running"), ledger_lock(ledger_path):
+        pytest.fail("a live lock must fail closed")
