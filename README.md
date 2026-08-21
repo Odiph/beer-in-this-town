@@ -282,6 +282,14 @@ cap, 12h disk cache, and a deliberate abort after three consecutive throttle
 responses. ~100 venues ≈ 6 minutes. None of which makes scraping permitted —
 see [Where the lines are](#where-the-lines-are).
 
+Each of those is a defence rather than a preference, and every one is
+enumerated with its reasoning in the module docstring of
+[`http_client.py`](beer_in_this_town/http_client.py) — what it guards against,
+and why raising it is not free. The stricter set guarding the *write* side is
+mapped the same way in
+[`guardrails.py`](beer_in_this_town/guardrails.py). Read those before changing
+any of the numbers in `config.py`.
+
 Silent-wrong-data is the dangerous failure mode, so:
 
 1. Selector misses **raise**; there is no silent `.get(default=None)`.

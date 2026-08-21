@@ -32,7 +32,21 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   does not exist while `status` reported all clear — a loop an agent could spin
   on.
 
+- The User-Agent claimed Chrome 128 while the installed Chrome was 151. The
+  comment beside it said to keep it in sync because a stale UA is a cheap tell,
+  and nothing made that happen. It is now derived from the Chrome actually
+  installed, falling back to a constant when none can be found.
+- `pin`'s pacing was declared twice and had drifted: `pin_to_list` said 4–9s
+  while the CLI passed 8–16s, so the module a reader would consult to find out
+  how hard the tool hits Google gave half the real figure. The module constants
+  are now the single source and the CLI derives its defaults from them.
+
 ### Changed
+- The measures that keep scraping unobtrusive are now enumerated in one place,
+  in `http_client.py`'s module docstring: what each one defends against, why
+  jitter and a hard hourly ceiling are not interchangeable with slowness, and
+  what raising any of them costs. `guardrails.py` gained the matching pointer
+  for the write side, and `config.py`'s knobs each say what they are for.
 - Search cards with a single style line are left unassigned rather than filed
   as a city: `"Beer Bar"` and `"Singapore, Singapore"` are the same shape, and
   guessing put venue types in the city column. The last line is also checked

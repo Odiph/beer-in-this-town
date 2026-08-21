@@ -25,6 +25,12 @@ leaves the others:
 
 None of this makes automating the Maps UI permitted. It reduces the chance of
 tripping Google's abuse heuristics, which is a different and lesser claim.
+
+This module covers the **write** side only -- what protects the Google account
+while `pin` and `notes` are running. The **read** side, which is what keeps the
+Untappd scraping from being noticed, is a separate and less strict set: pacing,
+the hourly ceiling, the disk cache, backoff, and robots.txt. Those live in
+`http_client.py`, whose module docstring maps them the same way this one does.
 """
 from __future__ import annotations
 

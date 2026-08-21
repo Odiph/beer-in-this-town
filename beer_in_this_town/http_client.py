@@ -4,6 +4,60 @@ Design goals, in priority order:
   1. Never get the Untappd account banned.
   2. Never silently return stale or wrong bytes.
   3. Speed (a distant third).
+
+What actually protects the account, and where
+---------------------------------------------
+These are spread over several call sites, so here is the whole set in one
+place. Read this before changing any number: each one is load-bearing, and the
+ones that look like mere slowness are the ones doing the most work.
+
+*Volume* -- the only measure that matters if the others fail.
+  * `min_delay_s` / `max_delay_s` (2.0-4.5s, `config.py`) applied in
+    `_throttle` before **every** request, jittered rather than fixed. A fixed
+    interval is itself a signature; nothing human arrives on a metronome.
+  * `hourly_budget` (600/h) is a hard ceiling per rolling hour, enforced by
+    raising `BudgetExceeded` rather than by sleeping. Sleeping through a
+    ceiling turns a stop into an unattended overnight crawl.
+  * One connection, no concurrency. `PoliteClient` holds a single
+    `httpx.Client` and every caller shares it; there is no code path that
+    fans out. Concurrency is the single clearest tell of a script.
+  * `cache_ttl_s` (12h) means a re-run costs almost no requests. Most reruns
+    happen while debugging a parser, which is exactly when a naive client
+    would hammer the same pages repeatedly.
+
+*Reading the room* -- stopping when the far end signals displeasure.
+  * 429/503 -> honour `Retry-After` if present, else climb the
+    `backoff_ladder_s` (60s, 180s, 600s).
+  * `max_consecutive_429` (3) -> `RateLimitTripped`, a deliberate abort. Not a
+    longer sleep: three throttles in a row means the pacing is wrong for
+    current conditions, and continuing is how a throttle becomes a block.
+  * 403 -> stop immediately and tell the human to open the site in a browser.
+    A 403 is usually an IP or account block already in progress, and retrying
+    into one is the worst available move.
+
+*Looking like the browser we claim to be* -- consistency, not disguise.
+  * A real, current Chrome UA (`DEFAULT_UA`) plus the `Sec-Fetch-*`,
+    `Accept-Language` and `Upgrade-Insecure-Requests` headers a real Chrome
+    sends. The point is not to hide: it is that a client claiming to be Chrome
+    while omitting headers every Chrome sends is more conspicuous than one
+    claiming nothing. Keep the UA in step with the Chrome actually installed;
+    a UA from a version that no longer exists is a cheap tell.
+  * `xhr=True` swaps in the header set a real in-page fetch would carry, so
+    the pagination requests match how the site issues them itself.
+  * Session cookies come from the same Chrome profile `bootstrap` logged in
+    with, so the requests belong to a real session rather than a fresh
+    anonymous one that browses like a crawler.
+
+*Consent* -- `robots_disallows_scraping` parses `robots.txt` with
+`urllib.robotparser` and the run refuses to start if our paths are disallowed
+(`respect_robots`, on by default). This is the one measure that is about their
+wishes rather than our safety.
+
+None of this makes scraping permitted -- Untappd's terms prohibit automated
+access, and low volume is a mitigation, not an exemption. What it does is keep
+the load negligible and make an accidental hammering impossible. The write
+side (`pin`/`notes` against Google) has its own, stricter set; see
+`guardrails.py`.
 """
 from __future__ import annotations
 
@@ -74,6 +128,12 @@ class PoliteClient:
             timeout=settings.request_timeout_s,
             follow_redirects=True,
             cookies=_cookies_from_storage_state(settings.storage_state, domain_filter),
+            # Claim to be Chrome, then send what Chrome sends. A request with a
+            # Chrome UA and none of Chrome's fetch metadata is more obviously
+            # scripted than one that claims nothing at all -- the mismatch is
+            # the signal, not the UA. These are the headers a real top-level
+            # navigation carries; `xhr=True` in get() swaps in the in-page
+            # fetch set instead.
             headers={
                 "User-Agent": settings.user_agent,
                 "Accept": "text/html,application/xhtml+xml,application/xml;"
@@ -97,14 +157,26 @@ class PoliteClient:
         self._client.close()
 
     def _throttle(self) -> None:
+        """Gate every request on both the hourly ceiling and the per-request gap.
+
+        Called from inside the retry loop, so retries are paced too -- a burst
+        of retries against a struggling server is exactly the pattern that
+        turns a transient error into a block.
+        """
         now = time.time()
         if now - self._window_start >= 3600:
             self._window_start, self._window_count = now, 0
         if self._window_count >= self.s.hourly_budget:
+            # Raise rather than sleep until the window rolls. A ceiling that
+            # you can wait out is not a ceiling: it would quietly convert an
+            # oversized job into an all-night crawl with nobody watching.
             raise BudgetExceeded(
                 f"Hourly budget of {self.s.hourly_budget} requests exhausted. "
                 "Re-run later; the disk cache means little work is repeated."
             )
+        # Jittered, not fixed: a constant interval is its own signature.
+        # Measured from the last request rather than slept unconditionally, so
+        # time already spent parsing counts towards the gap.
         wait = random.uniform(self.s.min_delay_s, self.s.max_delay_s)
         elapsed = now - self._last_request_at
         if elapsed < wait:
