@@ -17,3 +17,6 @@ build/
 data/
 !docs/
 !data/.gitkeep
+
+# Private working files: drafts, one-off verification scripts.
+.local/
