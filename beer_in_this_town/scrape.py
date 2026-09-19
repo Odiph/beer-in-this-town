@@ -13,7 +13,7 @@ from collections.abc import Callable
 from .config import SEARCH_URL, Settings
 from .http_client import BudgetExceeded, PoliteClient, RateLimitTripped
 from .models import Venue, VenueRef
-from .parsers import parse_search_page, parse_venue_stats
+from .parsers import ParseError, parse_search_page, parse_venue_stats
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +75,7 @@ def search_via_http(client: PoliteClient, s: Settings) -> list[VenueRef]:
 
 def search_via_browser(s: Settings) -> list[VenueRef]:
     """Fallback: drive real Chrome and click Show More until we have enough."""
+    from playwright.sync_api import TimeoutError as PWTimeout
     from playwright.sync_api import sync_playwright
 
     url = f"{SEARCH_URL}?q={s.query}&type=venues"
@@ -88,6 +89,17 @@ def search_via_browser(s: Settings) -> list[VenueRef]:
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(url, wait_until="domcontentloaded")
+
+        # Results are rendered client-side (Algolia injects them into
+        # #algolia-hits), so they do not exist at domcontentloaded. Counting
+        # straight away sees zero items and concludes the page is empty.
+        try:
+            page.wait_for_selector(".beer-item", timeout=30_000)
+        except PWTimeout:
+            log.warning(
+                "No .beer-item appeared within 30s -- the query may genuinely "
+                "have no results, or the search markup changed again."
+            )
 
         # Show More has carried several class names over the years; match on the
         # accessible name, which is stable.
@@ -127,6 +139,14 @@ def collect_venue_refs(
         return search_via_http(client, s)
     except PaginationUnsupported as exc:
         log.warning("%s", exc)
+        return search_via_browser(s)
+    except ParseError as exc:
+        # Untappd now renders search results client-side (Algolia), so the
+        # HTTP response carries an empty #algolia-hits container and nothing
+        # to parse. That is not a fatal condition -- it is exactly what the
+        # browser path exists for, so fall back instead of aborting the run.
+        log.warning("Search page had no parseable results (%s); "
+                    "falling back to the browser path.", exc)
         return search_via_browser(s)
 
 
