@@ -47,7 +47,7 @@ from .parsers import ParseError, assert_corpus_quality, parse_venue_stats
 from .pin_to_list import MAX_GAP_S as PIN_MAX_GAP
 from .pin_to_list import MIN_GAP_S as PIN_MIN_GAP
 from .pin_to_list import pin_places, places_from_csv
-from .scrape import collect_venue_refs, fetch_venues
+from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
 from .state import inspect_state, next_actions
 
 log = logging.getLogger("beer_in_this_town")
@@ -302,7 +302,27 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
                        "against the site's stated wishes and its ToS.",
             ))
 
-        refs = collect_venue_refs(client, s, force_browser=force_browser)
+        try:
+            refs = collect_venue_refs(client, s, force_browser=force_browser)
+        except SearchLoginRequired as exc:
+            return fail("run", Problem(
+                code="search_login_required",
+                message=str(exc),
+                remedy=f"Sign in to Untappd once in the browser profile at "
+                       f"{s.profile_dir}; the search path reuses it. Note that "
+                       f"bootstrap only detects a Google session and will "
+                       f"report login_not_detected for an Untappd-only login.",
+            ))
+        except ParseError as exc:
+            # Both search paths failed to parse. Say which gate caught it, so
+            # this does not surface as a bare unexpected_error.
+            return fail("run", Problem(
+                code="selectors_stale",
+                message=str(exc),
+                remedy="Neither the HTTP nor the browser search page parsed. "
+                       "Inspect debug/*.html and update the search selectors "
+                       "in beer_in_this_town/parsers.py, then re-run.",
+            ))
         log.info("Collected %d venue references", len(refs))
 
         def progress(i: int, n: int, ref: VenueRef) -> None:
@@ -331,6 +351,12 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
     commit_run(venues)
 
     warnings = []
+    if len(venues) < s.target_count:
+        warnings.append(
+            f"Asked for {s.target_count} venues and got {len(venues)}. Either "
+            f"the query has no more, or search paging stopped early -- check "
+            f"the log for where it stopped before trusting the totals."
+        )
     without_coords = [v.ref.name for v in venues if not v.has_coords]
     if without_coords:
         warnings.append(
