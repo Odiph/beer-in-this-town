@@ -93,6 +93,23 @@ def _retry_after_seconds(header: str | None, fallback: int) -> float:
         return fallback
 
 
+# Consecutive URLs that failed at the transport before the run stops.
+# Mirrors max_consecutive_429: a handful of dead URLs is a flaky page,
+# a run of them is a network that is not there.
+MAX_CONSECUTIVE_TRANSPORT_ERRORS = 3
+
+
+class TransportUnavailable(RuntimeError):
+    """The connection itself is gone, repeatedly. Stop rather than sleep.
+
+    There is a deliberate trip for consecutive 429s but there was none for a
+    transport that simply is not there. Each venue retried three times over
+    60/180/600s and `fetch_venues` swallowed the result per venue, so a dead
+    network turned a hundred-venue run into roughly twenty-three hours of
+    sleeping before the corpus gate finally failed on an empty result.
+    """
+
+
 class RateLimitTripped(RuntimeError):
     """We were throttled repeatedly. Stop before this becomes a ban."""
 
@@ -149,6 +166,7 @@ class PoliteClient:
         self._window_start = time.time()
         self._window_count = 0
         self._consecutive_429 = 0
+        self._consecutive_transport_errors = 0
 
     def __enter__(self) -> PoliteClient:
         return self
@@ -232,6 +250,7 @@ class PoliteClient:
                 continue
 
             self._last_request_at = time.time()
+            self._consecutive_transport_errors = 0
 
             if resp.status_code in (429, 503):
                 self._consecutive_429 += 1
@@ -265,6 +284,18 @@ class PoliteClient:
                 cache_path.write_text(html, encoding="utf-8")
             return html
 
+        # Every attempt for this URL failed at the transport. Count it: one
+        # unreachable host looks the same as a hundred, and only the run of
+        # them tells you the network is gone rather than a page being flaky.
+        self._consecutive_transport_errors += 1
+        if self._consecutive_transport_errors >= MAX_CONSECUTIVE_TRANSPORT_ERRORS:
+            raise TransportUnavailable(
+                f"{self._consecutive_transport_errors} consecutive URLs failed "
+                f"at the transport ({last_error}). The network or the host is "
+                f"gone; continuing would sleep through the backoff ladder once "
+                f"per remaining venue."
+            ) from last_error
+
         raise RuntimeError(
             f"GET failed after {self.s.max_retries} attempts: {url}"
         ) from last_error
@@ -281,6 +312,12 @@ class PoliteClient:
 
         try:
             txt = self.get("https://untappd.com/robots.txt", use_cache=False)
+        except (RateLimitTripped, TransportUnavailable):
+            # A 403 here is a block already in progress, and a dead transport
+            # is a dead transport. Swallowing either read as "robots does not
+            # forbid this" and carried on requesting into it -- the one move
+            # this module's 403 rule says never to make.
+            raise
         except Exception:  # absence of robots.txt is not a prohibition
             return False
 
