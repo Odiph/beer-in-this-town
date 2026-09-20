@@ -212,6 +212,7 @@ def add_notes(
 
     from .pin_to_list import (
         _abort_if_blocked,
+        _assert_ready,
         _open_place,
         _place_heading,
         _saved_in,
@@ -253,6 +254,17 @@ def add_notes(
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
+            # The same pre-flight `pin` runs, and for the same reason:
+            # signed-out Google Maps loads perfectly happily. Without it a
+            # signed-out profile read every place as "not in the list",
+            # journalled a hundred rows `not-in-list`, reported ok: true and
+            # told the user to run pin first -- a wrong diagnosis reached by
+            # loading a hundred pages while signed out. The other outcome was
+            # worse: the block detector recognised the signed-out page and
+            # started a six-hour cool-off, which also blocks `pin`, for a
+            # condition `pin` itself reports as not_signed_in with no cool-off.
+            _assert_ready(page, list_name)
+
             for i, (name, address, note) in enumerate(todo, 1):
                 key = journal_key(name, address)
                 log.info("[%3d/%d] %s", i, len(todo), name)

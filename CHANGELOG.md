@@ -29,6 +29,28 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   at the boundary with `bad_format` rather than writing no map quietly.
 
 ### Fixed
+- `notes` had no pre-flight. Signed-out Google Maps loads perfectly happily, so
+  a signed-out profile either read every place as "not in the list" — a hundred
+  page loads, `ok: true`, and a warning telling the user to run `pin` first,
+  which was the wrong diagnosis — or tripped the block detector and started a
+  six-hour cool-off that also blocks `pin`, for a condition `pin` itself
+  reports as `not_signed_in` with no cool-off at all. It now runs the same
+  pre-flight `pin` does, and maps its errors the same way.
+- `robots_disallows_scraping` swallowed a 403. That is a block already in
+  progress, and swallowing it read as "robots does not forbid this", so the run
+  carried on requesting into the block — the one move the module's own 403 rule
+  says never to make.
+- A dead network made `run` sleep instead of stopping: three retries over
+  60/180/600s per venue, swallowed per venue, so a hundred venues meant roughly
+  twenty-three hours of sleeping before the corpus gate failed. Three
+  consecutive transport failures now stop the run with `network_unavailable`.
+- Nominatim's rate limit was skipped exactly when it mattered. The pause sat
+  after the call inside the `try`, so a timeout or a 429 skipped it and
+  consecutive failures hit OSM back to back.
+- `status` could not see the write guardrails that several error remedies send
+  the caller to it to check — cool-off, budget, and whether another run holds
+  the lock. It reports all three now, and the contended-lock message no longer
+  ends by inviting a manual delete of the lock `AGENTS.md` says not to delete.
 - The agent contract steered an agent into the account write it forbids.
   `AGENTS.md` says to run the first `next_action` and repeat until the list is
   empty, and also that `pin` must never run without a human asking. `pin` was
