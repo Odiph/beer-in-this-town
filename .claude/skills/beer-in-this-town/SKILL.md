@@ -1,6 +1,6 @@
 ---
 name: beer-in-this-town
-description: Scrape Untappd venue listings for a city (name, category, address, check-in stats), export CSV/KML, and get the results onto Google Maps. Use when the user wants bar/brewery/taproom data for a location, Untappd venue stats, or a map of drinking spots. Also use when asked to refresh or diff a previous pull.
+description: Collect Untappd's public venue listings for a city (name, category, address, check-in stats), export CSV/KML/GeoJSON/GPX, and get the results onto a map. Use when the user wants bar/brewery/taproom data for a location, Untappd venue stats, or a map of drinking spots. Also use when asked to refresh or diff a previous pull.
 ---
 
 # beer-in-this-town
