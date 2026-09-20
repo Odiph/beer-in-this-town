@@ -219,3 +219,123 @@ def test_a_probe_that_ran_and_failed_still_asks_for_a_login(blank):
     untappd = _row(checks.collect(blank, proven), "untappd")
     assert untappd.state == ATTENTION
     assert untappd.action == "connect"
+
+
+# --- what a brand-new user is told to do ---------------------------------
+
+@pytest.mark.unit
+def test_a_user_with_no_session_is_not_sent_to_run(blank):
+    """`run` signed out of Untappd builds a five-venue corpus and calls it done.
+
+    The old first action was exactly that, on the reasoning that a session
+    was only needed for the YOU column. The 5-result search cap makes that
+    false, and a truncated scrape is worse than no scrape because the diff,
+    the baseline and the KML are then all wrong together.
+    """
+    from beer_in_this_town.state import inspect_state, next_actions
+
+    state = inspect_state(blank)
+    actions = next_actions(state, blank)
+
+    assert state["logged_in"] is False
+    assert not any("run " in a for a in actions), \
+        "a signed-out user was pointed at run"
+    assert actions == ["python -m beer_in_this_town selfcheck --json"]
+
+
+@pytest.mark.unit
+def test_the_first_hint_names_the_dashboard_and_both_accounts(blank):
+    from beer_in_this_town.state import hints, inspect_state
+
+    said = " ".join(hints(inspect_state(blank), blank))
+    assert "beertown ui" in said
+    assert "Untappd" in said, "only Google was mentioned, which is the old bug"
+    assert "5 results" in said
+
+
+@pytest.mark.unit
+def test_selfcheck_is_safe_to_hand_an_agent(blank):
+    """Whatever is in next_actions is, in effect, authorised. AGENTS.md rule 2."""
+    from beer_in_this_town.state import inspect_state, next_actions
+
+    joined = " ".join(next_actions(inspect_state(blank), blank))
+    for forbidden in (" pin ", " notes ", "bootstrap", " ui "):
+        assert forbidden not in f" {joined} "
+
+
+# --- the dashboard leads, rather than reporting --------------------------
+
+def _steps_for(s, proven=None):
+    return checks.next_step(checks.collect(s, proven))
+
+
+@pytest.mark.unit
+def test_a_new_user_is_told_to_sign_in_not_shown_a_checklist(blank, monkeypatch):
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
+                        lambda: __import__("pathlib").Path("chrome"))
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
+                        lambda: "151")
+    step = _steps_for(blank)
+    assert step.key == "connect"
+    assert step.action == "connect"
+    assert step.cta
+    # Both accounts named, so the Untappd half cannot be quietly skipped.
+    assert "Google" in step.body and "Untappd" in step.body
+
+
+@pytest.mark.unit
+def test_a_missing_chrome_outranks_the_sign_in(blank, monkeypatch):
+    """No point telling someone to sign in when the window cannot open."""
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
+                        lambda: None)
+    step = _steps_for(blank)
+    assert step.key == "chrome"
+    assert step.action == "", "offered a button for something we cannot do"
+
+
+@pytest.mark.unit
+def test_signed_in_but_untested_leads_to_the_test(blank, monkeypatch):
+    for name, value in (("find_chrome", lambda: __import__("pathlib").Path("c")),
+                        ("chrome_major_version", lambda: "151"),
+                        ("profile_has_google_session", lambda d: True),
+                        ("profile_has_untappd_session", lambda d: True)):
+        monkeypatch.setattr(f"beer_in_this_town.chrome_launch.{name}", value)
+    blank.profile_dir.mkdir(parents=True)
+    blank.storage_state.write_text("{}", encoding="utf-8")
+
+    step = _steps_for(blank)
+    assert step.key == "verify"
+    assert step.action == "verify"
+    assert step.done is False
+
+
+@pytest.mark.unit
+def test_only_a_verified_setup_asks_for_the_city(blank, monkeypatch):
+    """The city question is the last step, and it is gated on both accounts.
+
+    Asking for a city while Untappd is signed out would hand someone a
+    command that builds a five-venue corpus.
+    """
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
+                        lambda: __import__("pathlib").Path("c"))
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
+                        lambda: "151")
+
+    half = {"google": VerifyResult(True, "ok")}
+    assert _steps_for(blank, half).key != "run"
+
+    both = {"google": VerifyResult(True, "ok"),
+            "untappd": VerifyResult(True, "ok")}
+    step = _steps_for(blank, both)
+    assert step.key == "run"
+    assert step.done is True
+    assert "city" in step.title.lower()
+
+
+@pytest.mark.unit
+def test_the_page_offers_a_way_to_make_an_account(blank):
+    """Someone with no Untappd account cannot "sign in" to one."""
+    page = (__import__("pathlib").Path("beer_in_this_town/ui/index.html")
+            .read_text(encoding="utf-8"))
+    assert "untappd.com/signup" in page
+    assert "accounts.google.com/signup" in page

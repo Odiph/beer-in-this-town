@@ -210,10 +210,24 @@ def cmd_doctor(s: Settings) -> Envelope:
             "-- pip install -e \".[browser]\""
         )
 
-    data["session_file"] = "present" if s.storage_state.exists() else "missing"
+    # "present", not "logged in". The file existing says a login happened
+    # once, not that the account still works -- and reporting the stronger
+    # claim is how a dead session reaches a hundred-request run. `beertown
+    # ui` is what actually tests them.
+    data["session_file"] = ("present (untested)"
+                            if s.storage_state.exists() else "missing")
     data["profile_dir"] = "present" if s.profile_dir.exists() else "missing"
+    notes: list[str] = []
     if not s.storage_state.exists():
-        problems.append("no saved session -- run: python -m beer_in_this_town bootstrap")
+        problems.append("no saved session -- run: beertown ui")
+    else:
+        # A note, not a problem: an untested session is not a broken one, and
+        # making `doctor` permanently red would train everyone to ignore it.
+        notes.append(
+            "The saved session has not been tested. Run `beertown ui` to "
+            "check both accounts actually work -- a cookie on disk is not a "
+            "working login, and a dead one only shows up mid-run."
+        )
 
     data["geocoder"] = "google" if s.google_geocoding_key else "nominatim (free, 1 req/s)"
 
@@ -222,6 +236,7 @@ def cmd_doctor(s: Settings) -> Envelope:
         ok=not problems,
         data=data,
         warnings=problems,
+        hints=notes,
         next_actions=["python -m beer_in_this_town status --json"],
     )
 
