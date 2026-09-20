@@ -104,6 +104,51 @@ class AlreadyRunning(Tripped):
 _held: tuple[Path, str] | None = None
 
 
+def inspect_guardrails(limits: Limits, path: Path = LEDGER) -> dict[str, object]:
+    """What the write guardrails currently say, without changing any of it.
+
+    Several error remedies tell the caller to check `status` -- for a cool-off,
+    for whether another run holds the budget -- and `status` could not see
+    either. An agent that tripped a guardrail therefore asked, was told all
+    clear, and re-ran straight back into it. AGENTS.md documented that hole
+    rather than closing it.
+
+    Read-only on purpose: `RateLedger` prunes in memory but this never calls
+    anything that persists, so `status` stays the free, side-effect-free
+    command it is advertised as.
+    """
+    ledger = RateLedger(limits, path=path)
+    cooloff_h = ledger.cooloff_remaining_s() / 3600
+    used = ledger.used_today()
+
+    lock_path = path.with_suffix(".lock")
+    lock: dict[str, object] | None = None
+    if lock_path.exists():
+        age = _lock_age_s(lock_path)
+        try:
+            body = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            # A half-written or clobbered lock still blocks a run, so saying
+            # nothing about it is the one unhelpful answer.
+            body = {}
+        lock = {
+            "pid": body.get("pid"),
+            "age_h": round((age or 0) / 3600, 2),
+            "stale": age is not None and age >= STALE_LOCK_SECONDS,
+            "path": str(lock_path),
+        }
+
+    return {
+        "used_today": used,
+        "remaining_today": ledger.remaining_today(),
+        "max_per_day": limits.max_per_day,
+        "cooloff_remaining_h": round(cooloff_h, 2),
+        "can_write": cooloff_h <= 0 and ledger.remaining_today() > 0,
+        "ledger_corrupt": ledger.corrupt,
+        "lock": lock,
+    }
+
+
 @contextmanager
 def ledger_lock(path: Path = LEDGER) -> Iterator[None]:
     """Hold exclusive ownership of the ledger for the length of a run.
@@ -255,12 +300,25 @@ def _read_token(lock: Path) -> str | None:
 
 
 def _contended_message(lock: Path) -> str:
+    """Why the run stopped, and what to do -- which is never "delete this".
+
+    The message used to end by inviting a manual delete, which AGENTS.md
+    explicitly forbids and which throws away the only evidence that a run died
+    mid-write. It is also unnecessary: an abandoned lock is broken
+    automatically once it has been untouched for STALE_LOCK_SECONDS, because a
+    live run refreshes it on every write.
+    """
+    hours = STALE_LOCK_SECONDS / 3600
     return (
         f"Another run is already running (lock at {lock}). Two runs sharing "
         "one budget would spend it twice over. Wait for it to finish -- there "
         "is no cool-off to sit out, and re-running now will only trip this "
-        "again. If you are certain nothing is running, a previous run was "
-        f"killed: delete {lock.name}."
+        "again. "
+        f"If nothing is actually running, a previous run was killed before it "
+        f"could release the lock. Leave it alone: it is broken automatically "
+        f"once untouched for {hours:.0f}h, and "
+        "`python -m beer_in_this_town status --json` reports its age under "
+        "write_guardrails.lock in the meantime."
     )
 
 

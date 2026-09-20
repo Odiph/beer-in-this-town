@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DATA_DIR, STATE_DIR, Settings, scope_slug
+from .guardrails import Limits, inspect_guardrails
 
 LAST_RUN = STATE_DIR / "last_run.json"
 LEGACY_PINNED = STATE_DIR / "pinned.json"
@@ -117,6 +118,9 @@ def inspect_state(s: Settings) -> dict[str, Any]:
         "venues_in_baseline": len(previous),
         "pin_progress": pin_counts,
         "pin_progress_scope": pin_scope,
+        # The write guardrails, which `status` could not previously see even
+        # though several error remedies send the caller here to check them.
+        "write_guardrails": inspect_guardrails(Limits()),
         "stages": [{"name": st.name, "done": st.done, "detail": st.detail}
                    for st in stages],
     }
@@ -159,6 +163,27 @@ def hints(state: dict[str, Any], s: Settings) -> list[str]:
                 "yourself -- it opens a browser and waits for you to sign in."]
 
     out: list[str] = []
+    guards = state.get("write_guardrails") or {}
+    if guards.get("cooloff_remaining_h"):
+        out.append(
+            f"A write cool-off is active with "
+            f"{guards['cooloff_remaining_h']:.1f}h remaining. `pin` and `notes` "
+            f"will refuse to start until it expires. Wait it out; do not delete "
+            f"state/rate_ledger.json."
+        )
+    lock = guards.get("lock")
+    if lock and lock.get("stale"):
+        out.append(
+            f"A ledger lock has been untouched for {lock['age_h']:.1f}h "
+            f"(pid {lock.get('pid')}). If nothing is running, the next `pin` "
+            f"will break it automatically -- no need to delete it by hand."
+        )
+    elif lock:
+        out.append(
+            f"Another run holds the write budget (pid {lock.get('pid')}, "
+            f"{lock['age_h']:.1f}h). Wait for it rather than starting a second."
+        )
+
     list_name = state.get("last_run", {}).get("map_title") or s.map_title
     csv_path = state.get("latest_csv")
     pins = state["pin_progress"]
