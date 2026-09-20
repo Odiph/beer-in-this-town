@@ -90,8 +90,36 @@ def fail(command: str, problem: Problem, **data: Any) -> Envelope:
         ok=False,
         data=data,
         error=problem,
-        next_actions=[problem.remedy] if problem.remedy.startswith("python") else [],
+        next_actions=_runnable(problem.remedy),
+        hints=[] if _runnable(problem.remedy) else [problem.remedy],
     )
+
+
+# Commands that must never be handed to an agent to run: two write to the
+# user's Google account, and `bootstrap` opens a browser and blocks for up to
+# fifteen minutes waiting for a person.
+_HUMAN_ONLY = ("bootstrap", " pin ", " notes ")
+
+
+def _runnable(remedy: str) -> list[str]:
+    """A remedy, promoted to a next action only if it is safe to execute.
+
+    `fail()` used to promote anything starting with "python", which quietly
+    put `bootstrap`, `pin` and `notes` back into `next_actions` after they had
+    been removed from `status` -- so the contract still steered an agent into
+    the account write, just through a different door. Whatever is not
+    promoted still reaches the caller as a hint.
+    """
+    if not remedy.startswith("python"):
+        return []
+    padded = f" {remedy} "
+    if any(token in padded for token in _HUMAN_ONLY):
+        return []
+    # `run` uploads to My Maps unless told not to, which is not something to
+    # start on an agent's own initiative.
+    if " run " in padded and "--no-upload" not in remedy:
+        return []
+    return [remedy]
 
 
 def log_to_stderr() -> None:

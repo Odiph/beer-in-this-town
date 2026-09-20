@@ -9,7 +9,7 @@ without parsing tracebacks.
   python -m beer_in_this_town doctor --json      # are the preconditions met
   python -m beer_in_this_town bootstrap          # one-time interactive login
   python -m beer_in_this_town selfcheck --json   # 1 request: are selectors alive
-  python -m beer_in_this_town run --json         # scrape -> CSV + KML + diff
+  python -m beer_in_this_town run --no-upload --json  # collect -> CSV + maps
   python -m beer_in_this_town pin  --json        # save into a Google Maps list
 """
 from __future__ import annotations
@@ -417,7 +417,7 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str,
         data={"url": ref.url, "total": venue.total, "unique": venue.unique,
               "monthly": venue.monthly, "coords_embedded": venue.has_coords,
               "search": search_shape},
-        next_actions=["python -m beer_in_this_town run --json"],
+        next_actions=["python -m beer_in_this_town run --no-upload --json"],
     )
 
 
@@ -716,7 +716,7 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
         return fail("pin", Problem(
             code="csv_missing",
             message=f"CSV not found: {path}",
-            remedy="python -m beer_in_this_town run --json",
+            remedy="python -m beer_in_this_town run --no-upload --json",
         ))
 
     places = places_from_csv(path)
@@ -782,8 +782,14 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
 
     actions = []
     if failed:
+        # Keep --limit on the retry. Dropping it turned "retry the three that
+        # failed in your trial run" into the bulk run AGENTS.md rule 3
+        # forbids, and a human reading a hint is the one who decides to widen
+        # it.
+        scope = f" --limit {limit}" if limit else ""
         actions.append(
-            f'python -m beer_in_this_town pin --csv "{path}" --list "{list_name}" --json'
+            f'A human can retry the {len(failed)} that failed: pin --csv '
+            f'"{path}" --list "{list_name}"{scope} --json'
         )
 
     return Envelope(
@@ -799,7 +805,8 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
             + ([f"{len(ambiguous)} place(s) resolved to a different venue "
                 "and were skipped -- check them by hand"] if ambiguous else [])
         ),
-        next_actions=actions,
+        next_actions=[],
+        hints=actions,
     )
 
 
@@ -812,7 +819,7 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
         return fail("notes", Problem(
             code="csv_missing",
             message=f"CSV not found: {path}",
-            remedy="python -m beer_in_this_town run --json",
+            remedy="python -m beer_in_this_town run --no-upload --json",
         ))
 
     places = notes_from_csv(path)
@@ -893,9 +900,10 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
         warnings=(region_warnings
                   + ([f"{len(unpinned)} place(s) are not in the list yet; "
                       "run pin first"] if unpinned else [])),
-        next_actions=([f'python -m beer_in_this_town notes --csv "{path}" '
-                       f'--list "{list_name}" --json']
-                      if tally["failed"] else []),
+        next_actions=[],
+        hints=([f'A human can retry the {tally["failed"]} that failed: notes '
+                f'--csv "{path}" --list "{list_name}" --json']
+               if tally["failed"] else []),
     )
 
 
