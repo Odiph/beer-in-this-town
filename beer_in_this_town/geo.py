@@ -133,3 +133,31 @@ def parse_radius(raw: str) -> float:
     if value <= 0:
         raise ValueError("A radius has to be greater than zero.")
     return value * factor
+
+
+def merge_unique(batches: list[list[Venue]]) -> tuple[list[Venue], int]:
+    """Flatten several searches into one corpus, keeping first sight of each.
+
+    Dedup is load-bearing here rather than tidying: the same bar turns up in
+    the city search and again in a search for its own name, and a corpus that
+    counts it twice reports a hundred venues while holding sixty. Keyed on
+    `venue_id`, which Untappd assigns -- not on the name, because two real
+    outlets of one chain share a name and are different places (the same
+    reason `journal_key` includes the address).
+
+    Returns the merged list and how many duplicates were absorbed, so the
+    caller can say what happened instead of quietly reporting a smaller
+    number than the searches added up to.
+    """
+    seen: set[str] = set()
+    out: list[Venue] = []
+    duplicates = 0
+    for batch in batches:
+        for v in batch:
+            key = v.ref.venue_id or f"{v.ref.name}|{v.ref.address or ''}"
+            if key in seen:
+                duplicates += 1
+                continue
+            seen.add(key)
+            out.append(v)
+    return out, duplicates

@@ -202,6 +202,116 @@ def _search(client, key: str, query: str) -> PlaceMatch | None:
     )
 
 
+SEARCH_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
+
+# Table A types only. `locality` and `neighborhood` are Table B -- Google
+# returns them but refuses them as a filter -- so "ask Places which
+# neighbourhoods are in this radius" is not a request that exists. Asking for
+# the bars themselves is the nearest thing that does, and is better for the
+# purpose anyway: it names the venues we want instead of hoping a
+# neighbourhood name surfaces them in a text search.
+NEARBY_TYPES = ("bar", "pub", "liquor_store", "night_club")
+
+# id, displayName and types are Essentials (IDs Only) fields. `location` is
+# Pro, and is deliberately not requested: Untappd supplies coordinates for
+# every venue it returns, so paying Google for them again buys nothing.
+NEARBY_FIELD_MASK = "places.id,places.displayName,places.types"
+
+# Google's own ceiling on a nearby search.
+MAX_NEARBY_RADIUS_M = 50_000
+MAX_PER_REQUEST = 20
+
+
+def _nearby_page(client, key: str, centre: tuple[float, float],
+                 radius_m: float, types: tuple[str, ...],
+                 limit: int) -> list[dict]:
+    """One searchNearby call. Raises `PlacesUnavailable` on a config problem."""
+    response = client.post(
+        SEARCH_NEARBY_URL,
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": key,
+            "X-Goog-FieldMask": NEARBY_FIELD_MASK,
+        },
+        json={
+            "includedTypes": list(types),
+            "maxResultCount": min(limit, MAX_PER_REQUEST),
+            "locationRestriction": {
+                "circle": {
+                    "center": {"latitude": centre[0], "longitude": centre[1]},
+                    "radius": radius_m,
+                }
+            },
+        },
+    )
+    if response.status_code in (401, 403, 429):
+        detail = ""
+        try:
+            detail = response.json().get("error", {}).get("message", "")
+        except Exception:
+            detail = response.text[:200]
+        raise PlacesUnavailable(
+            f"Places Nearby Search returned HTTP {response.status_code}: {detail}"
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Places Nearby Search HTTP {response.status_code}")
+    return response.json().get("places") or []
+
+
+def nearby_venue_names(centre: tuple[float, float], radius_km: float,
+                       s: Settings, limit: int = 60) -> list[str]:
+    """Names of drinking places Google knows about near a point.
+
+    These become Untappd search terms. A single city search matches venue
+    *names*, so it finds `Tel Aviv Grill` in California and misses a bar two
+    streets away that does not have the city in its name. Asking Google what
+    is actually there is the other half of the problem.
+
+    Returns names, deduplicated, in Google's order -- which is roughly
+    prominence, so truncating keeps the ones most likely to be on Untappd.
+    An empty list is a real answer: it means Google knows of no bars there.
+    """
+    if not s.google_places_key:
+        log.info("No GOOGLE_PLACES_KEY set -- no nearby venue names.")
+        return []
+
+    radius_m = min(radius_km * 1000.0, MAX_NEARBY_RADIUS_M)
+    if radius_km * 1000.0 > MAX_NEARBY_RADIUS_M:
+        log.warning(
+            "Nearby search is capped at %.0f km by Google; asked for %.1f km.",
+            MAX_NEARBY_RADIUS_M / 1000, radius_km,
+        )
+
+    names: list[str] = []
+    seen: set[str] = set()
+    with httpx.Client(timeout=s.request_timeout_s,
+                      headers={"User-Agent": s.user_agent}) as client:
+        # One call per type rather than all types at once: a combined request
+        # still returns only 20, and a single busy category would fill them.
+        for kind in NEARBY_TYPES:
+            if len(names) >= limit:
+                break
+            try:
+                found = _nearby_page(client, s.google_places_key, centre,
+                                     radius_m, (kind,), limit - len(names))
+            except PlacesUnavailable:
+                raise
+            except Exception as exc:
+                # One type failing is not the integration being broken.
+                log.error("nearby search for %r failed: %s", kind, exc)
+                continue
+            for place in found:
+                name = (place.get("displayName") or {}).get("text", "").strip()
+                key = name.casefold()
+                if name and key not in seen:
+                    seen.add(key)
+                    names.append(name)
+
+    log.info("Google knows %d drinking place(s) within %.1f km.",
+             len(names), radius_km)
+    return names[:limit]
+
+
 def resolve_closures(venues: list[Venue], s: Settings) -> list[Venue]:
     """Return a NEW list with `business_status` filled in where Places answered.
 
