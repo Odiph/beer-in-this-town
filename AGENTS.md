@@ -52,6 +52,7 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `error.code` | Meaning | What to do |
 |---|---|---|
 | `not_signed_in` | An account is signed out — from `verify`, `pin` or `notes` | **Stop and ask the human.** Requires their password; you cannot do this. `data.accounts` says which one and how it was established. |
+| `port_unavailable` | `ui --detach` could not start the dashboard | Another process holds the port, or the interpreter could not be spawned. Retry with `--port` set to something else. |
 | `verify_unavailable` | The account check itself could not run | Not a signed-out account — usually a missing browser. Fix what the message names. Do **not** report this as "signed out". |
 | `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off. `status` reports the lock's age and whether it is stale under `data.write_guardrails.lock`. Do not delete the lock file; an abandoned one is broken automatically after 2h. |
 | `list_missing` | Target saved list does not exist | Ask the human to create it, or pick another `--list`. |
@@ -143,13 +144,32 @@ This used to loop. `next_actions` handed back `selfcheck`, nothing selfcheck
 does changes the session, and the loop above ran it forever. An empty list is
 the end of the loop; being blocked on a password is the end.
 
+**`data.logged_in` is a file, not an account.** It means
+`storage_state.json` exists. It was true on a machine whose Google and
+Untappd sessions had both expired, and the first action offered there was
+`run`. So `run` is never offered until a `verify` has actually passed:
+
+| What `status` shows | First action | Why |
+|---|---|---|
+| no session | `ui --detach` (then nothing) | a person must sign in |
+| session, `verification: null` | `verify --json` | a cookie proves nothing |
+| `verification.ok: false` | *(none)* — `blocked_on: "sign_in"` | a person must sign in |
+| `verification.ok: true` | `run ... --no-upload` | now it is known to work |
+
+`verify` writes `state/verification.json`, which is what lets the loop
+terminate rather than re-verifying on every pass. It expires after 12 hours,
+because a session that worked this morning can be dead by lunchtime — a
+verdict with no age on it is the same "a cookie means a working account"
+mistake wearing a different hat.
+
 The sequence when `blocked_on` is `"sign_in"`:
 
 1. **Stop looping.** Report it. Do not substitute `run` -- signed out of
    Untappd, search stops at 5 results and a run builds a five-venue corpus
    that looks like a finished scrape.
-2. **Ask the human to run `beertown ui`.** It needs a password, so it is not
-   yours to do, and it blocks on a browser window.
+2. **Open the dashboard** with `ui --detach --json` and give the user
+   `data.url`. Then ask them to sign in: it needs a password, so it is not
+   yours to do.
 3. **Then run `verify --json`** to find out whether it actually took.
 
 ## The `verify` command

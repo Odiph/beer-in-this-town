@@ -7,6 +7,17 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`run` is no longer offered on an unverified session.** `status` used
+  `logged_in` — which only means `storage_state.json` exists — and on a
+  machine whose Google and Untappd sessions had both expired it reported
+  `blocked_on: null` and handed an agent `run`. Signed out of Untappd that
+  builds a five-venue corpus and reports a finished scrape. The first action
+  is now `verify`, and `run` waits for it to pass. `verify` records its
+  verdict in `state/verification.json` so the loop terminates; the record
+  expires after 12 hours, and a probe that could not run records nothing.
+- `status`'s hints are keyed off `blocked_on` rather than the session file,
+  so a tested-and-expired session tells the person what to do instead of
+  naming the right error code and then talking about ledger locks.
 - The dashboard opens as a three-step wizard: **Ready → Accounts → City**.
   The panel has six rows because six things can be wrong; a person setting
   this up for the first time has three questions, and the panel is now

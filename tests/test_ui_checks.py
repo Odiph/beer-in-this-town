@@ -462,3 +462,110 @@ def test_the_card_and_the_stepper_cannot_disagree(blank):
             .read_text(encoding="utf-8"))
     assert "ORDER" not in page, "the page kept a second numbering system"
     assert "stages.findIndex" in page
+
+
+# --- status must not call a dead session a working one -------------------
+
+@pytest.mark.unit
+def test_a_session_file_alone_never_earns_a_run(blank):
+    """The bug this whole distinction exists to prevent, in the one place it
+    had survived: the agent contract.
+
+    `logged_in` means `storage_state.json` exists. On a machine whose Google
+    and Untappd sessions had both expired it was still true, `blocked_on` was
+    None, and the first action was `run` — which signed out of Untappd builds
+    a five-venue corpus and reports a finished scrape.
+    """
+    from beer_in_this_town.state import blocked_on, inspect_state, next_actions
+
+    blank.storage_state.write_text("{}", encoding="utf-8")
+    state = inspect_state(blank)
+
+    assert state["logged_in"] is True
+    assert state["verification"] is None
+    assert next_actions(state, blank) == [
+        "python -m beer_in_this_town verify --json"
+    ], "an unverified session was handed a run"
+    assert blocked_on(state) is None, "verifying is work an agent can do itself"
+
+
+@pytest.mark.unit
+def test_a_failed_verification_stops_the_loop_and_names_the_human(blank):
+    from beer_in_this_town.state import (
+        blocked_on,
+        inspect_state,
+        next_actions,
+        record_verification,
+    )
+
+    blank.storage_state.write_text("{}", encoding="utf-8")
+    record_verification({"google": {"ok": True}, "untappd": {"ok": False}},
+                        ok=False)
+    state = inspect_state(blank)
+
+    assert next_actions(state, blank) == []
+    assert blocked_on(state) == "sign_in"
+
+
+@pytest.mark.unit
+def test_a_stale_verification_is_no_verification(blank, monkeypatch):
+    """A session that worked this morning can be dead by lunchtime.
+
+    Without a TTL this file becomes the same "a cookie means a working
+    account" claim it was added to replace.
+    """
+    import time
+
+    from beer_in_this_town import state as st
+
+    blank.storage_state.write_text("{}", encoding="utf-8")
+    st.record_verification({"google": {"ok": True}}, ok=True)
+    assert st.last_verification() is not None
+
+    later = time.time() + st.VERIFICATION_TTL_S + 60
+    monkeypatch.setattr(st.time, "time", lambda: later)
+    assert st.last_verification() is None, "a stale verdict was still trusted"
+    assert next(iter(st.next_actions(st.inspect_state(blank), blank)), "") \
+        == "python -m beer_in_this_town verify --json"
+
+
+@pytest.mark.unit
+def test_a_probe_that_could_not_run_records_nothing(blank, monkeypatch):
+    """Otherwise "the browser is broken" masquerades as "signed out" for 12h."""
+    from beer_in_this_town import cli
+    from beer_in_this_town.state import last_verification
+
+    blank.storage_state.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cli, "cmd_verify", cli.cmd_verify)
+    monkeypatch.setattr("beer_in_this_town.ui.checks.verify_google",
+                        lambda s: VerifyResult(False, "Could not run.",
+                                               "no browser", ran=False))
+    monkeypatch.setattr("beer_in_this_town.ui.checks.verify_untappd",
+                        lambda s: VerifyResult(True, "ok"))
+
+    env = cli.cmd_verify(blank)
+    assert env.error.code == "verify_unavailable"
+    assert last_verification() is None, "a failed probe was recorded as a verdict"
+
+
+@pytest.mark.unit
+def test_an_expired_session_tells_the_person_too_not_just_the_agent(blank):
+    """`blocked_on` is for the agent; `hints` is for whoever has to act.
+
+    Keyed off the session file, this branch stayed silent whenever the file
+    existed — so a tested-and-expired session produced the right error code
+    and talked to the human about ledger locks.
+    """
+    from beer_in_this_town.state import (
+        hints,
+        inspect_state,
+        record_verification,
+    )
+
+    blank.storage_state.write_text("{}", encoding="utf-8")
+    record_verification({"google": {"ok": False}, "untappd": {"ok": True}},
+                        ok=False)
+
+    said = hints(inspect_state(blank), blank)
+    assert "signed out" in said[0]
+    assert "beertown ui" in said[0]
