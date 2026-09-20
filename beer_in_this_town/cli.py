@@ -40,6 +40,7 @@ from .http_client import (
     BudgetExceeded,
     PoliteClient,
     RateLimitTripped,
+    TransportUnavailable,
 )
 from .measure import (
     DEFAULT_QUOTA,
@@ -1000,6 +1001,14 @@ def main(argv: list[str] | None = None) -> int:
             message=str(exc),
             remedy="Another run holds the write budget. Wait for it to finish, "
                    "then re-run; progress is journalled.",
+        ))
+    except TransportUnavailable as exc:
+        env = fail(args.cmd, Problem(
+            code="network_unavailable",
+            message=str(exc),
+            remedy="Check connectivity and re-run. Nothing was written; the "
+                   "run stopped rather than sleeping through the backoff "
+                   "ladder once per remaining venue.",
         ))
     except Tripped as exc:
         env = fail(args.cmd, Problem(

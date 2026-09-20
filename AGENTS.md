@@ -57,6 +57,7 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `selectors_stale` | `selfcheck` could not parse a known-good venue page or the search page, or neither search path parsed during `run` | Same as above. `selfcheck` is the cheap early warning and covers both surfaces; `data.search` says which shape the search page had. |
 | `search_login_required` | Untappd's sign-in wall cut the search short (anonymous search stops at 5) | Ask the human to sign in to Untappd in the browser profile. `bootstrap` only detects a Google session, so it cannot confirm this one. |
 | `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Not per-venue — check the key and billing, or unset it for Nominatim. Nothing was written. |
+| `network_unavailable` | Several URLs in a row failed at the transport | Check connectivity, then re-run. The run stopped instead of sleeping through the backoff ladder per venue. |
 | `csv_missing` | No input data | Run `run` first. |
 | `labels_incomplete` | A sampled bucket came back with no labels | Ask the human to label a few rows in every bucket. The rare ones are the point. |
 | `labels_unusable` | An answer is outside the accepted vocabulary, or the sheet lost its `_stratum`/`_stratum_size` columns | The message names the row and cell. Answers are `y` / `n` / `?`; a blank means unanswered. |
