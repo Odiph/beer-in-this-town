@@ -22,6 +22,7 @@ from .checks import VERIFIERS, VerifyResult
 log = logging.getLogger(__name__)
 
 Say = Callable[..., None]
+Mark = Callable[[str, object], None]
 
 # How long to wait for a person to finish signing in before giving up on the
 # window. Matches `bootstrap`. Chrome is never killed at the end of it: the
@@ -30,7 +31,7 @@ LOGIN_TIMEOUT_S = 900.0
 POLL_S = 3.0
 
 
-def connect(s: Settings, say: Say) -> dict:
+def connect(s: Settings, say: Say, mark: Mark) -> dict:
     """Open a real Chrome, wait for both logins, then capture the session.
 
     Both accounts in one window, on purpose. They are two logins with one
@@ -60,10 +61,24 @@ def connect(s: Settings, say: Say) -> dict:
     if proc is None:  # pragma: no cover -- guarded by find_chrome above
         raise RuntimeError("Chrome could not be started.")
 
-    say("Sign in to Google in that window.")
-    say("Then go to untappd.com and sign in there too — signed out, Untappd's "
-        "search stops at 5 results.")
-    say("Close the window when you're done. That's the finish signal.")
+    say("Two tabs have opened in that window: Google and Untappd. "
+        "Sign in to both, in that window.")
+    say("It has to be that window — it uses a separate profile, so signing in "
+        "to your everyday Chrome does nothing here. Untappd is the one that "
+        "gets missed, and signed out its search stops at 5 results.", aside=True)
+    say("Then close the window. That is the finish signal, and nothing here "
+        "can see your progress until you do: Chrome keeps the profile locked "
+        "while it runs.")
+
+    # Best-effort, and on Windows usually silent: Chrome holds an exclusive
+    # lock on the cookie store while it runs, so these probes return None --
+    # unknown -- for the whole time the window is open, which is exactly when
+    # a person wants reassurance. That is why the instruction above says
+    # nothing can be seen until the window closes, rather than promising a
+    # tick that will not arrive.
+    mark("waiting_for", ["google", "untappd"])
+    mark("google", False)
+    mark("untappd", False)
 
     deadline = time.time() + LOGIN_TIMEOUT_S
     seen = {"google": False, "untappd": False}
@@ -73,9 +88,11 @@ def connect(s: Settings, say: Say) -> dict:
             break
         if not seen["google"] and profile_has_google_session(s.profile_dir):
             seen["google"] = True
+            mark("google", True)
             say("Google sign-in detected.")
         if not seen["untappd"] and profile_has_untappd_session(s.profile_dir) is True:
             seen["untappd"] = True
+            mark("untappd", True)
             say("Untappd sign-in detected.")
         time.sleep(POLL_S)
     else:
@@ -91,6 +108,7 @@ def connect(s: Settings, say: Say) -> dict:
         say("No Untappd sign-in seen while the window was open — the check "
             "after this will settle it either way.", aside=True)
 
+    mark("waiting_for", [])
     say("Reading the session out of the profile.")
     say("Chrome holds an exclusive lock on the profile while it runs, which "
         "is why this waits for the window to close.", aside=True)
@@ -98,7 +116,7 @@ def connect(s: Settings, say: Say) -> dict:
     captured = _capture(s)
     say(f"Saved the session to {s.storage_state.name}.")
 
-    return {"captured": captured, **_verify_both(s, say)}
+    return {"captured": captured, **_verify_both(s, say, mark)}
 
 
 def _capture(s: Settings) -> bool:
@@ -116,10 +134,12 @@ def _capture(s: Settings) -> bool:
     return s.storage_state.exists()
 
 
-def _verify_both(s: Settings, say: Say) -> dict:
+def _verify_both(s: Settings, say: Say, mark: Mark) -> dict:
     out = {}
     for key in ("google", "untappd"):
-        out[key] = verify_one(s, say, key).__dict__
+        result = verify_one(s, say, key)
+        mark(key, result.ok)
+        out[key] = result.__dict__
     return out
 
 
@@ -150,18 +170,22 @@ def verify_one(s: Settings, say: Say, which: str) -> VerifyResult:
     return result
 
 
-def verify_accounts(s: Settings, say: Say) -> dict:
+def verify_accounts(s: Settings, say: Say, mark: Mark) -> dict:
     """Both accounts, end to end. What a new user runs before trusting any of it."""
     say("Checking both accounts end to end.")
+    mark("waiting_for", ["google", "untappd"])
     results = {}
     for key in ("google", "untappd"):
-        results[key] = verify_one(s, say, key).__dict__
+        result = verify_one(s, say, key)
+        mark(key, result.ok)
+        results[key] = result.__dict__
+    mark("waiting_for", [])
     passed = sum(1 for r in results.values() if r["ok"])
     say(f"{passed} of 2 accounts verified.")
     return results
 
 
-def check_selectors(s: Settings, say: Say) -> dict:
+def check_selectors(s: Settings, say: Say, mark: Mark) -> dict:
     """Two requests: is the tool still able to read Untappd's pages?
 
     Separate from the accounts, and worth its own button, because it fails for
@@ -187,7 +211,7 @@ def check_selectors(s: Settings, say: Say) -> dict:
             "error": env.error.code if env.error else ""}
 
 
-ACTIONS: dict[str, tuple[str, Callable[[Settings, Say], dict]]] = {
+ACTIONS: dict[str, tuple[str, Callable[..., dict]]] = {
     "connect": ("Connecting your accounts", connect),
     "verify": ("Testing both accounts", verify_accounts),
     "selectors": ("Checking Untappd's pages", check_selectors),

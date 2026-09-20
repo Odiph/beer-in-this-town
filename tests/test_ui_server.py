@@ -194,7 +194,8 @@ def test_only_one_job_runs_at_a_time(board, monkeypatch):
     """Two sign-ins sharing one Chrome profile can corrupt it."""
     gate = threading.Event()
     monkeypatch.setitem(srv.ACTIONS, "slow",
-                        ("Slow thing", lambda s, say: gate.wait(10) or {}))
+                        ("Slow thing",
+                         lambda s, say, mark: gate.wait(10) or {}))
     base, token = board
     try:
         first, _ = _req(base, "/api/run", token=token, method="POST",
@@ -215,7 +216,7 @@ def test_a_failing_action_reports_why_instead_of_vanishing(board, monkeypatch):
     An action that raises and leaves the page showing nothing is the same
     swallowed-exception shape this repo keeps finding, wearing a thread.
     """
-    def boom(s, say):
+    def boom(s, say, mark):
         say("starting")
         raise RuntimeError("Could not find Google Chrome.")
 
