@@ -127,6 +127,32 @@
   ol.steps li.aside .txt::before{content:"— "}
   .err{color:var(--warn); font-size:13.5px; margin-top:10px}
 
+  /* stepper: where you are, in three dots */
+  .stepper{display:flex; align-items:center; gap:0; margin-top:22px}
+  .stg{display:flex; align-items:center; gap:8px}
+  .stg .bead{
+    width:26px; height:26px; border-radius:50%; flex:none;
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--mono); font-size:12px; font-weight:600;
+    border:1.5px solid var(--line); background:var(--surface); color:var(--muted);
+  }
+  .stg .nm{font-size:13.5px; color:var(--muted)}
+  .stg[data-s="current"] .bead{border-color:var(--accent); background:var(--accent); color:var(--accent-ink)}
+  .stg[data-s="current"] .nm{color:var(--ink); font-weight:600}
+  .stg[data-s="done"] .bead{border-color:var(--ok); background:var(--ok-wash); color:var(--ok)}
+  .stg[data-s="done"] .nm{color:var(--ok)}
+  .rail{flex:1 1 16px; min-width:14px; height:1.5px; background:var(--line); margin:0 10px}
+  .rail.lit{background:var(--ok)}
+
+  /* the panel is reference now, not the interface */
+  .panel{margin-top:22px}
+  .panel > summary{
+    cursor:pointer; font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--muted); font-weight:600; width:fit-content;
+  }
+  .panel > summary:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
+  .panel ul.checks{margin-top:10px}
+
   /* The lead: one instruction, impossible to miss. */
   .lead{
     margin-top:18px; background:var(--surface); border:1px solid var(--line);
@@ -172,8 +198,10 @@
 <div class="wrap">
   <header>
     <h1>beer in this town</h1>
-    <p class="sub">Get connected once. Everything after this runs from the terminal.</p>
+    <p class="sub">Three steps, once. Everything after this runs from your terminal.</p>
   </header>
+
+  <div class="stepper" id="stepper"></div>
 
   <div class="lead" id="lead">
     <div class="step" id="leadstep">Checking…</div>
@@ -184,14 +212,15 @@
 
   <div class="banner" id="banner" hidden></div>
 
-  <h2>Setup</h2>
-  <ul class="checks" id="checks"></ul>
-
-  <div class="actions">
-    <button id="connect" type="button">Sign in again</button>
-    <button id="verify" type="button">Test both accounts</button>
-    <button id="selectors" type="button">Check Untappd's pages</button>
-  </div>
+  <details class="panel" id="panel">
+    <summary>All checks</summary>
+    <ul class="checks" id="checks"></ul>
+    <div class="actions">
+      <button id="connect" type="button">Sign in again</button>
+      <button id="verify" type="button">Test both accounts</button>
+      <button id="selectors" type="button">Check Untappd's pages</button>
+    </div>
+  </details>
 
   <div id="activity"></div>
 
@@ -317,7 +346,38 @@ const SIGNUP = {
   ],
 };
 
-const ORDER = ["chrome", "playwright", "connect", "verify", "run"];
+// The eyebrow counts the stepper's stages, not the underlying steps. It used
+// to count its own list of five, so the card said "Step 4 of 5" under a
+// stepper reading 2 of 3 -- two numbering systems on one screen, and the
+// reader has no way to know which is the real one.
+
+function renderStepper(stages) {
+  const host = $("stepper");
+  if (!stages) return;
+  const sig = stages.map(s => s.key + s.state).join("|");
+  if (host.dataset.sig === sig) return;
+  host.dataset.sig = sig;
+  host.textContent = "";
+
+  stages.forEach((s, i) => {
+    if (i > 0) {
+      const rail = document.createElement("div");
+      rail.className = "rail" + (s.state !== "todo" ? " lit" : "");
+      host.appendChild(rail);
+    }
+    const stg = document.createElement("div");
+    stg.className = "stg";
+    stg.dataset.s = s.state;
+    const bead = document.createElement("span");
+    bead.className = "bead";
+    bead.textContent = s.state === "done" ? "✓" : String(i + 1);
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = s.label;
+    stg.append(bead, nm);
+    host.appendChild(stg);
+  });
+}
 
 function renderLead(state) {
   const step = state.next_step;
@@ -325,10 +385,11 @@ function renderLead(state) {
   const lead = $("lead");
   lead.className = "lead" + (step.done ? " done" : "");
 
-  const n = ORDER.indexOf(step.key) + 1;
+  const stages = state.stages || [];
+  const at = stages.findIndex(s => s.state === "current");
   $("leadstep").textContent = step.done
-    ? "Ready — last step"
-    : "Step " + n + " of " + ORDER.length;
+    ? "Last step"
+    : at >= 0 ? "Step " + (at + 1) + " of " + stages.length : "Setup";
   $("leadtitle").textContent = step.title;
   $("leadbody").textContent = step.body;
 
@@ -517,6 +578,7 @@ async function tick() {
   try {
     const state = await api("/api/state");
     renderChecks(state.checks);
+    renderStepper(state.stages);
     renderLead(state);
     renderBanner(state);
     renderJob(state.job);

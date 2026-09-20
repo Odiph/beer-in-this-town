@@ -7,6 +7,14 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- The dashboard opens as a three-step wizard: **Ready → Accounts → City**.
+  The panel has six rows because six things can be wrong; a person setting
+  this up for the first time has three questions, and the panel is now
+  reference behind an "All checks" disclosure rather than the interface. The
+  stepper and the card are derived from the same step, because two functions
+  deciding where the user is, from the same data, is two chances to disagree
+  — and they did: the card counted its own list of five and read "Step 4 of
+  5" under a stepper showing 2 of 3.
 - `ui --detach`: start the dashboard in its own process and return at once.
   Without it, an agent-driven setup dead-ended — `ui` blocked, so AGENTS.md
   told agents never to start it, so the one thing built to tell a user what to

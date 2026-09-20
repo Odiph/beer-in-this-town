@@ -381,6 +381,52 @@ def next_step(rows: tuple[Check, ...]) -> NextStep:
         done=True,
     )
 
+
+# Three steps, and the grouping is the simplification. The panel has six rows
+# because six things can be wrong; a person setting this up for the first time
+# has three questions, in this order: can this machine do it, are my accounts
+# connected, and what city do I want. `next_step` already picks the one thing
+# to do -- this says which of the three it belongs to, so the page can show a
+# position instead of a list.
+WIZARD = (
+    ("ready", "Ready", ("chrome", "playwright")),
+    ("accounts", "Accounts", ("connect", "verify")),
+    ("city", "City", ("run",)),
+)
+
+
+@dataclass(frozen=True)
+class Stage:
+    """One dot in the stepper."""
+
+    key: str
+    label: str
+    state: str   # done | current | todo
+
+    def to_row(self) -> dict:
+        return {"key": self.key, "label": self.label, "state": self.state}
+
+
+def wizard(step: NextStep) -> tuple[Stage, ...]:
+    """The three stages, with the current one marked.
+
+    Derived from `next_step` rather than computed separately: two functions
+    deciding where the user is, from the same rows, is two chances to
+    disagree -- and the one that disagrees is always the one on screen.
+    """
+    current = next((i for i, (_, _, keys) in enumerate(WIZARD)
+                    if step.key in keys), len(WIZARD) - 1)
+    out = []
+    for i, (key, label, _) in enumerate(WIZARD):
+        if i < current:
+            state = "done"
+        elif i == current:
+            state = "done" if step.done else "current"
+        else:
+            state = "todo"
+        out.append(Stage(key, label, state))
+    return tuple(out)
+
 # --------------------------------------------------------------------------
 # Tier 2: verification. A real round-trip each.
 # --------------------------------------------------------------------------

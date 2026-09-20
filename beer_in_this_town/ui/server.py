@@ -233,6 +233,7 @@ def make_handler(board: Dashboard):
             step = checks.next_step(rows)
             return {
                 "ok": True,
+                "stages": [g.to_row() for g in checks.wizard(step)],
                 "next_step": {
                     "key": step.key, "title": step.title, "body": step.body,
                     "cta": step.cta, "action": step.action, "done": step.done,

@@ -392,3 +392,73 @@ def test_the_page_offers_a_way_to_make_an_account(blank):
             .read_text(encoding="utf-8"))
     assert "untappd.com/signup" in page
     assert "accounts.google.com/signup" in page
+
+
+# --- the three-stage wizard ----------------------------------------------
+
+def _wizard_for(s, proven=None):
+    from beer_in_this_town.ui.checks import wizard
+    return wizard(checks.next_step(checks.collect(s, proven)))
+
+
+@pytest.mark.unit
+def test_the_wizard_is_three_stages(blank):
+    stages = _wizard_for(blank)
+    assert [g.key for g in stages] == ["ready", "accounts", "city"]
+
+
+@pytest.mark.unit
+def test_every_step_belongs_to_exactly_one_stage():
+    """A step in no stage leaves the stepper pointing at the wrong dot.
+
+    `wizard` falls back to the last stage for an unknown key, which is the
+    kind of default that hides a missing entry until someone notices the
+    stepper is lying.
+    """
+    from beer_in_this_town.ui.checks import WIZARD
+
+    owned = [k for _, _, keys in WIZARD for k in keys]
+    assert sorted(owned) == sorted(set(owned)), "a step is claimed twice"
+    for step_key in ("chrome", "playwright", "connect", "verify", "run"):
+        assert step_key in owned, f"{step_key} belongs to no stage"
+
+
+@pytest.mark.unit
+def test_a_fresh_machine_sits_on_accounts_with_ready_behind_it(blank, monkeypatch):
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
+                        lambda: __import__("pathlib").Path("c"))
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
+                        lambda: "151")
+    by_key = {g.key: g.state for g in _wizard_for(blank)}
+    assert by_key == {"ready": "done", "accounts": "current", "city": "todo"}
+
+
+@pytest.mark.unit
+def test_a_machine_without_chrome_sits_on_ready(blank, monkeypatch):
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
+                        lambda: None)
+    by_key = {g.key: g.state for g in _wizard_for(blank)}
+    assert by_key["ready"] == "current"
+    assert by_key["accounts"] == "todo"
+
+
+@pytest.mark.unit
+def test_both_accounts_verified_finishes_every_stage(blank, monkeypatch):
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
+                        lambda: __import__("pathlib").Path("c"))
+    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
+                        lambda: "151")
+    proven = {"google": VerifyResult(True, "ok"),
+              "untappd": VerifyResult(True, "ok")}
+    assert all(g.state == "done" for g in _wizard_for(blank, proven))
+
+
+@pytest.mark.unit
+def test_the_card_and_the_stepper_cannot_disagree(blank):
+    """One screen, one position. They are derived from the same step for
+    exactly this reason -- the eyebrow used to count its own list of five
+    under a stepper reading 2 of 3."""
+    page = (__import__("pathlib").Path("beer_in_this_town/ui/index.html")
+            .read_text(encoding="utf-8"))
+    assert "ORDER" not in page, "the page kept a second numbering system"
+    assert "stages.findIndex" in page
