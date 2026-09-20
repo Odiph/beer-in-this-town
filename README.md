@@ -30,7 +30,7 @@ opt-in, never run on their own, and spelled out in
 ```bash
 beertown                    # opens the setup wizard, once
 beertown status --json      # where am I, what is next
-beertown run --query singapore --count 100 --json
+beertown run --query lisbon --count 100 --no-upload --json
 ```
 
 ![The setup wizard on a machine that has never run it](docs/setup-signin.jpg)

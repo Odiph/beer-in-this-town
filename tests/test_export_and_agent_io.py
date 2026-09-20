@@ -244,6 +244,9 @@ def test_next_actions_never_carries_a_write_or_a_comment(tmp_path, monkeypatch):
 
     state.record_verification({"google": {"ok": True}, "untappd": {"ok": True}},
                               ok=True)
+    # There is no default city any more, so one has to be chosen before a run
+    # is on offer at all.
+    state.record_intent("london")
 
     inspected = state.inspect_state(s)
     actions = state.next_actions(inspected, s)

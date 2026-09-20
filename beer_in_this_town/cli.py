@@ -1231,7 +1231,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", parents=[common],
                          help="scrape, export, diff, and optionally upload")
-    run.add_argument("--query", default="singapore")
+    run.add_argument("--query", default=None,
+                     help="the city to collect. No default: without one, and "
+                          "without a city named in the dashboard, `run` "
+                          "refuses rather than choosing for you.")
     run.add_argument("--count", type=int, default=100)
     run.add_argument("--title", default=None, help='My Maps title, e.g. "Singapore Bars"')
     run.add_argument("--format", default="kml",
@@ -1260,8 +1263,10 @@ def build_parser() -> argparse.ArgumentParser:
              "(pins on the everyday map, not a My Maps layer)",
     )
     pin.add_argument("--csv", required=True, help="any CSV this project writes")
-    pin.add_argument("--list", dest="list_name", default="Singapore Bars",
-                     help="exact name of the existing Google Maps list")
+    pin.add_argument("--list", dest="list_name", default=None,
+                     help="exact name of the existing Google Maps list. No "
+                          "default: this writes to your account, and a "
+                          "guessed list name is a guess about where.")
     pin.add_argument("--limit", type=int, default=None,
                      help="only do the first N (use for a small trial run)")
     pin.add_argument("--min-gap", type=at_least(PIN_MIN_GAP, "--min-gap"),
@@ -1278,7 +1283,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="write Untappd stats into the note on each saved place",
     )
     notes.add_argument("--csv", required=True)
-    notes.add_argument("--list", dest="list_name", default="Singapore Bars")
+    notes.add_argument("--list", dest="list_name", default=None)
     notes.add_argument("--limit", type=int, default=None)
     notes.add_argument("--min-gap", type=at_least(NOTES_MIN_GAP, "--min-gap"),
                        default=NOTES_MIN_GAP)
@@ -1415,13 +1420,40 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     if args.cmd in {"run", "pin", "notes"}:
+        # argv, then what the user named in the dashboard, then nothing.
+        # There is no built-in default to fall through to any more: a city
+        # nobody chose is a scrape of somewhere nobody asked for, and a list
+        # name nobody chose is a write to an account.
+        remembered = inspect_state(s)["last_run"]
+        query = getattr(args, "query", None) or remembered.get("query") or ""
+        list_name = (getattr(args, "title", None)
+                     or getattr(args, "list_name", None)
+                     or remembered.get("map_title") or "")
         s = replace(
             s,
-            query=getattr(args, "query", s.query),
+            query=query,
             target_count=getattr(args, "count", s.target_count),
-            map_title=getattr(args, "title", None) or getattr(
-                args, "list_name", s.map_title),
+            map_title=list_name,
         )
+        if args.cmd == "run" and not s.query:
+            emit(fail("run", Problem(
+                code="no_city",
+                message="No city given, and none has been chosen.",
+                remedy='Pass --query "<city>", or name one on the last step '
+                       "of `beertown ui`. There is deliberately no default: "
+                       "choosing a city for someone is choosing what they "
+                       "get.",
+            )), as_json)
+            return 1
+        if args.cmd in {"pin", "notes"} and not s.map_title:
+            emit(fail(args.cmd, Problem(
+                code="no_list",
+                message="No saved list named.",
+                remedy='Pass --list "<exact name>". There is no default, '
+                       "because this writes into a real Google Maps list and "
+                       "a guessed name is a guess about where.",
+            )), as_json)
+            return 1
         if getattr(args, "delay", None):
             s = replace(s, min_delay_s=args.delay, max_delay_s=args.delay * 2.0)
 

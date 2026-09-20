@@ -51,9 +51,14 @@ class Settings:
     """Immutable settings object. Use `replace(settings, field=value)` to derive."""
 
     # --- what to scrape -------------------------------------------------
-    query: str = "singapore"
+    # No default city, deliberately. A default here does not save anyone a
+    # keystroke -- it silently answers a question only the user can answer,
+    # and the answer it gives is a scrape of somewhere they have never been.
+    # Same reasoning as `logged_in`: a stand-in for a decision reads exactly
+    # like the decision having been made.
+    query: str = ""
     target_count: int = 100
-    map_title: str = "Singapore Bars"
+    map_title: str = ""
 
     # --- session --------------------------------------------------------
     profile_dir: Path = ROOT / "chrome-profile"

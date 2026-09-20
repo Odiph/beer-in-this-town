@@ -47,7 +47,7 @@ def ready(tmp_path):
 def test_the_city_reaches_the_agents_next_action(ready):
     """The whole point. Type London, and the agent is offered London."""
     before = next_actions(inspect_state(ready), ready)
-    assert any("singapore" in a for a in before), "expected the default first"
+    assert not any(" run " in f" {a} " for a in before),         "a run was offered before anyone had named a city"
 
     record_intent("london")
 
@@ -180,3 +180,69 @@ def test_an_empty_city_over_the_wire_is_a_clean_400(board):
     code, body = _post(base, "/api/city", token, {"city": "  "})
     assert code == 400
     assert body["error"] == "bad_city"
+
+
+# --- there is no default city --------------------------------------------
+
+@pytest.mark.unit
+def test_settings_carry_no_city():
+    """A default here does not save a keystroke. It answers, silently and
+    wrongly, a question only the user can answer."""
+    s = Settings()
+    assert s.query == ""
+    assert s.map_title == ""
+
+
+@pytest.mark.unit
+def test_run_refuses_without_a_city(monkeypatch, capsys):
+    from beer_in_this_town import cli
+
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False, raising=False)
+    code = cli.main(["run", "--no-upload", "--json"])
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert '"no_city"' in out
+    assert "scrape" not in out.lower() or "no_city" in out
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("command", ["pin", "notes"])
+def test_the_write_commands_refuse_without_a_list(command, tmp_path,
+                                                  monkeypatch, capsys):
+    """A guessed list name is a guess about where to write in someone's
+    account. `list_missing` would catch a name that does not exist -- it
+    would not catch a name that exists and is the wrong one."""
+    from beer_in_this_town import cli
+
+    csv = tmp_path / "v.csv"
+    csv.write_text("venue_id,name\n1,Bar\n", encoding="utf-8")
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False, raising=False)
+
+    code = cli.main([command, "--csv", str(csv), "--json"])
+    assert code == 1
+    assert '"no_list"' in capsys.readouterr().out
+
+
+@pytest.mark.unit
+def test_the_city_a_person_named_is_enough(ready, monkeypatch, capsys):
+    """Naming it in the dashboard counts; they should not have to say it
+    twice."""
+    from beer_in_this_town import cli
+
+    record_intent("porto")
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr(cli, "cmd_run",
+                        lambda s, **kw: cli.Envelope(command="run", ok=True,
+                                                     data={"query": s.query}))
+    assert cli.main(["run", "--no-upload", "--json"]) == 0
+    assert '"porto"' in capsys.readouterr().out
+
+
+@pytest.mark.unit
+def test_no_city_is_something_a_person_must_settle(ready):
+    from beer_in_this_town.state import blocked_on, inspect_state, next_actions
+
+    state = inspect_state(ready)
+    assert blocked_on(state) == "choose_city"
+    assert not any(" run " in f" {a} " for a in next_actions(state, ready))
