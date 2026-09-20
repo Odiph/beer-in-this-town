@@ -156,6 +156,13 @@ Untappd sessions had both expired, and the first action offered there was
 | `verification.ok: false` | *(none)* — `blocked_on: "sign_in"` | a person must sign in |
 | `verification.ok: true` | `run ... --no-upload` | now it is known to work |
 
+**The city comes from the user, not from the default.** `data.intent` is what
+they asked for in the dashboard; `data.last_run.query` already resolves
+through it, so the `run` in `next_actions` carries their city without you
+doing anything. When `intent` is null nobody has chosen one and the query is
+the built-in default -- say so rather than scraping Singapore on their behalf.
+A real run outranks an intention; the intention is not destroyed by one.
+
 `verify` writes `state/verification.json`, which is what lets the loop
 terminate rather than re-verifying on every pass. It expires after 12 hours,
 because a session that worked this morning can be dead by lunchtime — a

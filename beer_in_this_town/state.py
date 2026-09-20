@@ -81,8 +81,13 @@ def inspect_state(s: Settings) -> dict[str, Any]:
     kml_path = _latest("venues_*.kml")
 
     last_run = _read_json(LAST_RUN)
-    query = last_run.get("query") or s.query
-    list_name = last_run.get("map_title") or s.map_title
+    # A real run outranks an intention, which outranks the built-in default.
+    # The middle one is what the dashboard writes, and is the whole reason
+    # the city a person types reaches the agent at all.
+    intent = last_intent() or {}
+    query = last_run.get("query") or intent.get("query") or s.query
+    list_name = (last_run.get("map_title") or intent.get("map_title")
+                 or s.map_title)
 
     previous = _read_json(STATE_DIR / f"previous_run_{scope_slug(query)}.json")
     # Scoped per list, so this counts progress on the list actually in play
@@ -118,6 +123,10 @@ def inspect_state(s: Settings) -> dict[str, Any]:
         # What `verify` last proved, or None when nothing has been
         # proved recently. `logged_in` is a file; this is evidence.
         "verification": verification,
+        # What the user asked for, and where the query above came from. An
+        # agent that sees `intent` knows the city is a choice rather than a
+        # default it should ask about.
+        "intent": intent or None,
         "last_run": {"query": query, "map_title": list_name,
                      "recorded": bool(last_run)},
         "latest_csv": str(csv_path) if csv_path else None,
@@ -131,6 +140,59 @@ def inspect_state(s: Settings) -> dict[str, Any]:
         "stages": [{"name": st.name, "done": st.done, "detail": st.detail}
                    for st in stages],
     }
+
+
+# What the user said they wanted, before any run has happened. Deliberately
+# NOT `last_run.json`: `status` reports `recorded: bool(last_run)`, so writing
+# an intention there would claim a run had happened that had not.
+INTENT = STATE_DIR / "intent.json"
+
+# A city reaches the filesystem through `scope_slug`, which sanitises it, and
+# reaches Untappd as a search term. Neither needs it to be long.
+MAX_QUERY_LEN = 80
+
+
+class BadIntent(ValueError):
+    """The city was empty, or not something worth writing down."""
+
+
+def record_intent(query: str, map_title: str | None = None) -> dict:
+    """Remember the city the user asked for, before there is a run to record.
+
+    The dashboard asks for a city and the agent reads `status`; without this
+    the two never met. The wizard would hand a person a London command while
+    `next_actions` offered Singapore, and nothing anywhere knew they
+    disagreed.
+
+    The map title is derived rather than left alone, because leaving it is the
+    bug `record_run`'s docstring describes: a London CSV aimed at a Singapore
+    list, which is a write to a live account.
+    """
+    cleaned = " ".join((query or "").split())
+    if not cleaned:
+        raise BadIntent("A city is needed.")
+    if len(cleaned) > MAX_QUERY_LEN:
+        raise BadIntent(f"That city name is longer than {MAX_QUERY_LEN} "
+                        f"characters.")
+
+    title = map_title or f"{cleaned.title()} Bars"
+    payload = {"query": cleaned, "map_title": title, "at": time.time()}
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = INTENT.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    tmp.replace(INTENT)
+    return payload
+
+
+def last_intent() -> dict | None:
+    """What the user last asked for, if anything. Never raises."""
+    if not INTENT.exists():
+        return None
+    try:
+        rec = json.loads(INTENT.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return rec if isinstance(rec, dict) and rec.get("query") else None
 
 
 # Where `verify` records what it proved. Deliberately short-lived: a session

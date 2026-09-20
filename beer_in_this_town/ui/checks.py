@@ -375,9 +375,10 @@ def next_step(rows: tuple[Check, ...]) -> NextStep:
 
     return NextStep(
         "run", "Name your city",
-        "Both accounts are working. Type the city you want and copy the "
-        "command — the run itself happens in your terminal, where you can "
-        "watch it and stop it.",
+        "Both accounts are working. Type the city you want, then either press "
+        "Use this city — your agent will pick it up — or copy the command and "
+        "run it yourself. Either way the run happens in your terminal, where "
+        "you can watch it and stop it.",
         done=True,
     )
 

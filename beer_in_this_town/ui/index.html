@@ -426,6 +426,10 @@ function renderLead(state) {
   if (step.done) renderCityForm(go, state);
 }
 
+const UNSAVED = "Press “Use this city” so the agent picks it up, or "
+  + "copy the command and run it yourself. --no-upload writes the files "
+  + "without touching your Google Maps.";
+
 function renderCityForm(go, state) {
   const form = document.createElement("div");
   form.className = "cityform";
@@ -435,9 +439,13 @@ function renderCityForm(go, state) {
   input.type = "text";
   input.placeholder = "London";
   input.setAttribute("aria-label", "City to collect venues for");
+  // The server's record wins over this browser's: it is what the agent will
+  // actually use, and a stale localStorage value would show a city that is
+  // not the one in play.
   let saved = "";
   try { saved = localStorage.getItem("beertown.city") || ""; } catch (e) {}
-  input.value = saved || state.defaults.query || "";
+  input.value = (state.intent && state.intent.query) || saved
+    || state.defaults.query || "";
   form.appendChild(input);
   go.appendChild(form);
 
@@ -453,8 +461,10 @@ function renderCityForm(go, state) {
   copy.textContent = "Copy command";
   const note = document.createElement("span");
   note.className = "cmdnote";
-  note.textContent = "--no-upload writes the files without touching your "
-    + "Google Maps. Drop it once you've seen the results.";
+  note.textContent = state.intent
+    ? "Saved. The agent will use “" + state.intent.query
+      + "”, saving to “" + state.intent.map_title + "”."
+    : UNSAVED;
   row.append(copy, note);
   go.appendChild(row);
 
@@ -464,7 +474,33 @@ function renderCityForm(go, state) {
       + state.defaults.count + " --no-upload";
     try { localStorage.setItem("beertown.city", input.value.trim()); } catch (e) {}
   };
-  input.addEventListener("input", build);
+  input.addEventListener("input", () => { build(); note.textContent = UNSAVED; });
+
+  // Saving is what makes the city reach the agent. Without it this field
+  // only ever fed the command above, so a person could type London here and
+  // an agent reading `status` would still be offered Singapore.
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "go";
+  save.textContent = "Use this city";
+  save.addEventListener("click", async () => {
+    const city = (input.value || "").trim();
+    if (!city) { input.focus(); return; }
+    save.disabled = true;
+    try {
+      const body = await api("/api/city", {
+        method: "POST", body: JSON.stringify({ city }),
+      });
+      note.textContent = "Saved. The agent will use “"
+        + body.intent.query + "”, saving to “"
+        + body.intent.map_title + "”.";
+    } catch (e) {
+      note.textContent = e.message;
+    } finally {
+      save.disabled = false;
+    }
+  });
+  form.appendChild(save);
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(cmd.textContent);
