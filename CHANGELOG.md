@@ -7,6 +7,20 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `ui --detach`: start the dashboard in its own process and return at once.
+  Without it, an agent-driven setup dead-ended — `ui` blocked, so AGENTS.md
+  told agents never to start it, so the one thing built to tell a user what to
+  do next was the one thing nothing was allowed to open. The install finished,
+  the agent reported "ready", and the user was left needing to already know
+  the answer. It is now the first action when `blocked_on` is `sign_in`, and
+  the loop ends once a dashboard is serving. Idempotent per checkout.
+- The dashboard refuses to share a port. `http.server` sets
+  `allow_reuse_address`, which let a second dashboard bind a port another was
+  already LISTENING on — two servers, two different keys, requests going to
+  whichever. A collision now fails loudly.
+- Every setup row carries links and a "Why this matters" explanation: where to
+  sign in, where to create an account, what a key costs, and what actually
+  breaks when that row is red.
 - `verify`: test both accounts for real from the CLI — headless, read-only,
   always returns. The dashboard blocks on a person, which is right for a
   sign-in and wrong for everything else: an agent still needs to know whether
