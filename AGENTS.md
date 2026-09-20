@@ -82,10 +82,15 @@ as `not-in-list` and left alone. A note that already matches is never rewritten.
 ## Idempotency
 
 - `run` — safe to repeat. Cached for 12h; re-running costs almost no requests.
-- `pin` — resumable and idempotent. `state/pinned.json` records every place;
+- `pin` — resumable and idempotent. `state/pinned_<list>.json` records every place;
   re-running skips successes and retries failures. Places recorded `not-found`
   or `ambiguous` are retried too, since both can be transient.
-- `notes` — resumable via `state/noted.json`; a matching note is skipped.
+- `notes` — resumable via `state/noted_<list>.json`; a matching note is skipped.
+- Journals, baselines and `status` are scoped to the city or list they
+  describe. `status` reports the last `run`'s query and list under
+  `data.last_run`; its `next_actions` are built from those, not from
+  defaults. If `recorded` is false no run has happened yet and the
+  defaults are in play — check before running a write command.
 - `status`, `doctor`, `selfcheck` — read-only.
 
 ## What needs a human

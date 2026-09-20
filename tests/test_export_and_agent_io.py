@@ -69,8 +69,10 @@ def test_csv_roundtrip(tmp_path, venue):
 # --- diffing --------------------------------------------------------------
 @pytest.mark.unit
 def test_first_run_reports_everything_as_new(tmp_path, venue, monkeypatch):
-    monkeypatch.setattr("beer_in_this_town.export.PREVIOUS_RUN", tmp_path / "none.json")
-    diff = diff_against_previous([venue])
+    monkeypatch.setattr("beer_in_this_town.export.STATE_DIR", tmp_path)
+    monkeypatch.setattr("beer_in_this_town.export.LEGACY_PREVIOUS_RUN",
+                        tmp_path / "none.json")
+    diff = diff_against_previous([venue], query="singapore")
     assert len(diff["new"]) == 1
     assert diff["gone"] == []
 
@@ -79,11 +81,14 @@ def test_first_run_reports_everything_as_new(tmp_path, venue, monkeypatch):
 def test_changed_stats_are_detected(tmp_path, venue, monkeypatch):
     import dataclasses
 
-    baseline = tmp_path / "prev.json"
+    monkeypatch.setattr("beer_in_this_town.export.STATE_DIR", tmp_path)
+    monkeypatch.setattr("beer_in_this_town.export.LEGACY_PREVIOUS_RUN",
+                        tmp_path / "none.json")
+    baseline = tmp_path / "previous_run_singapore.json"
     baseline.write_text(json.dumps({venue.ref.venue_id: venue.to_row()}), "utf-8")
-    monkeypatch.setattr("beer_in_this_town.export.PREVIOUS_RUN", baseline)
 
-    diff = diff_against_previous([dataclasses.replace(venue, total=20300)])
+    diff = diff_against_previous(
+        [dataclasses.replace(venue, total=20300)], query="singapore")
     assert diff["new"] == []
     # Values keep their JSON types; only the comparison is stringified.
     assert diff["changed"][0]["deltas"]["total"] == (20259, 20300)
