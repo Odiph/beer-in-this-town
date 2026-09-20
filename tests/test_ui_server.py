@@ -236,3 +236,86 @@ def test_a_failing_action_reports_why_instead_of_vanishing(board, monkeypatch):
     assert "Could not find Google Chrome." in job["error"]
     assert [s["text"] for s in job["steps"]] == ["starting"]
     assert state["busy"] is False
+
+
+# --- starting it, and failing to ------------------------------------------
+
+@pytest.mark.unit
+def test_a_dashboard_that_will_not_start_says_so_usefully(monkeypatch):
+    """`unexpected_error` says "re-run with -v", which cannot help here."""
+    from beer_in_this_town import cli
+
+    def wont(s, port):
+        raise RuntimeError("Port 8765 is already in use.")
+
+    monkeypatch.setattr("beer_in_this_town.ui.serve_detached", wont)
+    env = cli.cmd_ui(Settings(), 8765, open_browser=False, detach=True)
+
+    assert env.ok is False
+    assert env.error.code == "port_unavailable"
+    assert "--port" in env.error.remedy
+
+
+@pytest.mark.unit
+def test_a_process_that_cannot_be_spawned_is_not_an_unexpected_error(monkeypatch):
+    """`Popen` raises OSError, and RuntimeError-only let it fall through.
+
+    Both mean "the dashboard did not start" and want the same remedy; only
+    one of them used to get it.
+    """
+    from beer_in_this_town import cli
+
+    def wont(s, port):
+        raise OSError("[WinError 2] The system cannot find the file specified")
+
+    monkeypatch.setattr("beer_in_this_town.ui.serve_detached", wont)
+    env = cli.cmd_ui(Settings(), 8765, open_browser=False, detach=True)
+
+    assert env.ok is False
+    assert env.error.code == "port_unavailable"
+
+
+@pytest.mark.unit
+def test_a_running_dashboard_is_reused_rather_than_duplicated(monkeypatch):
+    """A second --detach must not start a rival on the same profile."""
+    from beer_in_this_town import cli
+
+    monkeypatch.setattr(
+        "beer_in_this_town.ui.serve_detached",
+        lambda s, port: {"url": "http://127.0.0.1:8765/#k", "pid": 7,
+                         "port": 8765, "started": False})
+    env = cli.cmd_ui(Settings(), 8765, open_browser=False, detach=True)
+
+    assert env.ok is True
+    assert env.data["started"] is False
+    assert "already running" in " ".join(env.hints)
+    assert env.next_actions == [], "the loop was handed another launch"
+
+
+@pytest.mark.unit
+def test_the_record_survives_being_half_written(tmp_path, monkeypatch):
+    """The parent polls this file while the child writes it.
+
+    A torn read must cost one more poll, not an exception out of the wait
+    loop. The write is atomic now, so this is the belt to that braces.
+    """
+    from beer_in_this_town.ui import server
+
+    monkeypatch.setattr(server, "RUNNING", tmp_path / "ui.json")
+    server.RUNNING.write_text('{"url": "http://127.0.0', encoding="utf-8")
+    assert server._read_record() is None
+
+    server.RUNNING.write_text("[]", encoding="utf-8")
+    assert server._read_record() is None, "a JSON array was accepted as a record"
+
+
+@pytest.mark.unit
+def test_the_record_is_written_atomically(tmp_path, monkeypatch):
+    """No temp file left behind, and the record lands complete."""
+    from beer_in_this_town.ui import server
+
+    monkeypatch.setattr(server, "RUNNING", tmp_path / "ui.json")
+    server._record("http://127.0.0.1:8765/#tok", 8765)
+
+    assert json.loads(server.RUNNING.read_text())["port"] == 8765
+    assert list(tmp_path.glob("*.tmp")) == [], "a temp file was left behind"

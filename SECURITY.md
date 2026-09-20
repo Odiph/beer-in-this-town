@@ -47,6 +47,14 @@ Worth understanding before you run it:
   allow-list, which is what stops DNS rebinding; and a cross-site `Origin` is
   refused outright.
 
+  **`ui --detach` writes that key to `state/ui.json`**, because the parent
+  process has to learn the URL its child minted. The file is gitignored and
+  is deleted when the dashboard stops, but while it exists anyone who can
+  read your `state/` directory can drive the dashboard — the same trust
+  boundary as the Chrome profile sitting next to it, which holds the actual
+  session. A shared machine is the case where that matters; there, run the
+  foreground `beertown ui` instead, which never writes the key anywhere.
+
   The strongest protection is what is absent: there is no route on that server
   that can `pin` or write `notes`. Nothing it serves reaches off-machine, and
   its page is served with `default-src 'none'`.

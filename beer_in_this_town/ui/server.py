@@ -328,10 +328,18 @@ def _record(url: str, port: int) -> None:
     # child's record. Matching on pid looked equivalent and was not: a stale
     # record from an earlier server reads as "someone else's", and the parent
     # waits out its whole timeout beside a dashboard that started fine.
-    RUNNING.write_text(json.dumps({
+    payload = json.dumps({
         "url": url, "port": port, "pid": os.getpid(),
         "handshake": os.environ.get(HANDSHAKE_ENV, ""),
-    }), encoding="utf-8")
+    })
+    # Atomic: a detaching parent polls this file while the child writes it,
+    # so a plain write can hand back half a JSON object. The reader's corrupt
+    # -read guard means a torn read only costs another poll rather than
+    # anything worse -- but a rename is free and removes the race instead of
+    # surviving it.
+    tmp = RUNNING.with_suffix(".json.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(RUNNING)
 
 
 def _forget() -> None:

@@ -11,6 +11,7 @@ about its own state, and the agent owns the judgement about what to do with it.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,7 @@ def inspect_state(s: Settings) -> dict[str, Any]:
     # A file, not a working account. `verify` is what settles that, and the
     # name is kept only because it is part of the published envelope.
     logged_in = s.storage_state.exists()
+    verification = last_verification()
     csv_path = _latest("venues_*.csv") or _latest("seed_*.csv")
     kml_path = _latest("venues_*.kml")
 
@@ -113,6 +115,9 @@ def inspect_state(s: Settings) -> dict[str, Any]:
 
     return {
         "logged_in": logged_in,
+        # What `verify` last proved, or None when nothing has been
+        # proved recently. `logged_in` is a file; this is evidence.
+        "verification": verification,
         "last_run": {"query": query, "map_title": list_name,
                      "recorded": bool(last_run)},
         "latest_csv": str(csv_path) if csv_path else None,
@@ -126,6 +131,44 @@ def inspect_state(s: Settings) -> dict[str, Any]:
         "stages": [{"name": st.name, "done": st.done, "detail": st.detail}
                    for st in stages],
     }
+
+
+# Where `verify` records what it proved. Deliberately short-lived: a session
+# that worked this morning can be dead by lunchtime, and a file with no age on
+# it is exactly the "a cookie means a working account" mistake in a new place.
+VERIFICATION = STATE_DIR / "verification.json"
+VERIFICATION_TTL_S = 12 * 3600
+
+
+def record_verification(accounts: dict, ok: bool) -> None:
+    """Persist what a `verify` run established, so the loop can terminate.
+
+    The dashboard keeps its results in memory on purpose -- a restart should
+    re-prove rather than trust a file. The agent loop cannot: without a record
+    it re-verifies on every pass and never gets to `run`. The TTL is what
+    keeps the two positions honest with each other.
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"at": time.time(), "ok": ok, "accounts": accounts})
+    tmp = VERIFICATION.with_suffix(".json.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(VERIFICATION)
+
+
+def last_verification() -> dict | None:
+    """The most recent `verify`, if it is recent enough to still mean anything."""
+    if not VERIFICATION.exists():
+        return None
+    try:
+        rec = json.loads(VERIFICATION.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(rec, dict) or "at" not in rec:
+        return None
+    age = time.time() - float(rec["at"])
+    if age > VERIFICATION_TTL_S:
+        return None
+    return {**rec, "age_h": round(age / 3600, 1)}
 
 
 def _serving() -> dict | None:
@@ -146,8 +189,17 @@ def blocked_on(state: dict[str, Any]) -> str | None:
     list is the end of the loop and not an error, which is true in both
     cases, and useless to an agent that has to report why it stopped. This
     names it.
+
+    Note what does NOT count as blocked: an untested session. That is work an
+    agent can do -- `verify` needs no password -- so it belongs in
+    `next_actions`, not here.
     """
     if not state["logged_in"]:
+        return "sign_in"
+    verification = state.get("verification")
+    if verification and not verification.get("ok"):
+        # Tested, and one of the accounts is signed out. Only a person can
+        # fix that, whatever the file on disk says.
         return "sign_in"
     return None
 
@@ -200,6 +252,18 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
             return ["python -m beer_in_this_town ui --detach --json"]
         return []
 
+    # `logged_in` means the file exists, which is not the same as the accounts
+    # working -- on a machine whose sessions had both expired, this list
+    # handed an agent `run`, and signed out of Untappd that builds a
+    # five-venue corpus and reports a finished scrape. The dashboard has
+    # drawn this distinction since it was written; the agent contract had
+    # not. `verify` is cheap, offline of any account write, and terminates.
+    verification = state.get("verification")
+    if verification is None:
+        return ["python -m beer_in_this_town verify --json"]
+    if not verification.get("ok"):
+        return []          # signed out: blocked_on says a person is needed
+
     if state["latest_csv"] and state["latest_kml"]:
         # Nothing further an agent should start on its own. An empty list is
         # what AGENTS.md defines as the end of the loop, and now that the
@@ -215,9 +279,17 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
 
 def hints(state: dict[str, Any], s: Settings) -> list[str]:
     """What a person might want to do next. Never executed by anything."""
-    if not state["logged_in"]:
+    # Keyed off `blocked_on`, not off the session file. A tested-and-expired
+    # session sets `blocked_on` to sign_in while `logged_in` stays true, and
+    # this used to read only the file -- so the envelope named the right
+    # problem in `error.code` and said nothing about it to the person who had
+    # to fix it, talking about ledger locks instead.
+    if blocked_on(state) == "sign_in":
+        expired = bool(state.get("verification"))
         return [
-            "Blocked on a person: this needs a password, so no agent can do "
+            ("A saved session is present and was tested: one of the accounts "
+             "is signed out. " if expired else "")
+            + "Blocked on a person: this needs a password, so no agent can do "
             "it. Run `beertown ui` yourself -- it opens a "
             "dashboard that signs you in and then tests both accounts "
             "for real, rather than trusting a cookie means they work.",

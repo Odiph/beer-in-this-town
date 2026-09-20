@@ -81,6 +81,7 @@ from .state import (
     inspect_state,
     next_actions,
     record_run,
+    record_verification,
 )
 from .ui.server import DEFAULT_PORT as UI_DEFAULT_PORT
 
@@ -215,9 +216,15 @@ def cmd_verify(s: Settings) -> Envelope:
                          "evidence": r.evidence}
 
     failed = [k for k, v in results.items() if not v["ok"]]
+    unran_now = [k for k, v in results.items() if not v["ran"]]
+    # Record only a real verdict. A probe that could not run has established
+    # nothing, and writing it would let "the browser is broken" masquerade as
+    # "the accounts are signed out" for the next twelve hours.
+    if not unran_now:
+        record_verification(results, ok=not failed)
     # A probe that could not run is not a signed-out account, and the two
     # want opposite remedies. Never collapse them -- see VerifyResult.ran.
-    unran = [k for k, v in results.items() if not v["ran"]]
+    unran = unran_now
 
     if unran:
         return fail("verify", Problem(
@@ -621,7 +628,11 @@ def cmd_ui(s: Settings, port: int, open_browser: bool,
     if detach:
         try:
             rec = serve_detached(s, port=port)
-        except RuntimeError as exc:
+        except (RuntimeError, OSError) as exc:
+            # OSError as well: `Popen` raises it when the interpreter cannot
+            # be spawned at all, and RuntimeError-only sent that to
+            # `unexpected_error`, whose remedy is "re-run with -v" -- advice
+            # that cannot help a process that will not start.
             return fail("ui", Problem(
                 code="port_unavailable",
                 message=str(exc),

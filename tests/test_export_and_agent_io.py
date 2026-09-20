@@ -235,6 +235,16 @@ def test_next_actions_never_carries_a_write_or_a_comment(tmp_path, monkeypatch):
     session.write_text("{}", encoding="utf-8")
     s = Settings(storage_state=session)
 
+    # A session file alone is not a working account, so the first action is
+    # to prove it. `run` before that is what builds a five-venue corpus on a
+    # machine whose Untappd session has expired.
+    assert state.next_actions(state.inspect_state(s), s) == [
+        "python -m beer_in_this_town verify --json"
+    ]
+
+    state.record_verification({"google": {"ok": True}, "untappd": {"ok": True}},
+                              ok=True)
+
     inspected = state.inspect_state(s)
     actions = state.next_actions(inspected, s)
 
@@ -247,7 +257,9 @@ def test_next_actions_never_carries_a_write_or_a_comment(tmp_path, monkeypatch):
     assert pending, "a missing map file must still give the agent something to do"
     for command in pending:
         assert not command.lstrip().startswith("#")
-        assert "--no-upload" in command, "a suggested run must not touch the account"
+        if " run " in f" {command} ":
+            assert "--no-upload" in command, \
+                "a suggested run must not touch the account"
         for forbidden in (" pin ", " notes ", "bootstrap"):
             assert forbidden not in f" {command} "
 
