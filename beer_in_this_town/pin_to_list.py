@@ -622,6 +622,30 @@ def pin_places(
     return journal
 
 
+def region_from_csv(path: Path) -> str | None:
+    """The city these venues are in, read from the data rather than assumed.
+
+    `--region` is appended to every Maps lookup so a bare name cannot match a
+    venue in another country. Defaulting it to one city did the opposite: a
+    London CSV searched "..., London, Singapore", and what came back could be
+    saved against the wrong place entirely.
+
+    Returns None when the CSV carries no usable city, so the caller can say
+    the guard is off rather than quietly appending nothing.
+    """
+    import csv
+    from collections import Counter
+
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        cities = Counter(
+            (r.get("city") or "").strip() for r in csv.DictReader(fh)
+        )
+    cities.pop("", None)
+    if not cities:
+        return None
+    return cities.most_common(1)[0][0]
+
+
 def places_from_csv(path: Path) -> list[tuple[str, str | None]]:
     """Read (name, address) pairs from any CSV this project writes."""
     import csv

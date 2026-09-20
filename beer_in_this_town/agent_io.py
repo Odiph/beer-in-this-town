@@ -46,6 +46,12 @@ class Envelope:
     data: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     next_actions: list[str] = field(default_factory=list)
+    # Prose for a human: things to do by hand, and things an agent must be
+    # told to do rather than decide to do. `next_actions` promises literal
+    # runnable commands, so a "# do this yourself" line does not belong in it
+    # -- an agent passing argv as a list gets "#" as an argument, and one that
+    # shells out silently no-ops and loops on the same suggestion.
+    hints: list[str] = field(default_factory=list)
     error: Problem | None = None
 
     def to_json(self) -> str:
@@ -67,6 +73,8 @@ def emit(envelope: Envelope, as_json: bool) -> None:
         print(f"  {key}: {value}")
     for warning in envelope.warnings:
         print(f"  ! {warning}")
+    for hint in envelope.hints:
+        print(f"  - {hint}")
     if envelope.error:
         print(f"  error: {envelope.error.message}")
         print(f"  fix:   {envelope.error.remedy}")
