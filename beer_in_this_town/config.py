@@ -87,6 +87,13 @@ class Settings:
     nominatim_email: str | None = None
     nominatim_delay_s: float = 1.1  # OSM policy: max 1 req/sec
 
+    # --- geographic collection (Overpass / OSM) -------------------------
+    # No key, no billing, no quota -- which is why this is the preferred
+    # provider for "what is near this point" over Places. Overridable because
+    # the public endpoint is volunteer-run and sheds load; a mirror or a
+    # self-hosted instance is a legitimate answer to being throttled.
+    overpass_url: str = "https://overpass-api.de/api/interpreter"
+
     # --- closure check (#7) ---------------------------------------------
     # Deliberately a separate key from geocoding: different SKU, and somebody
     # may reasonably want coordinates without sending addresses to Places for
@@ -103,6 +110,7 @@ class Settings:
             google_geocoding_key=os.environ.get("GOOGLE_GEOCODING_KEY") or None,
             google_places_key=os.environ.get("GOOGLE_PLACES_KEY") or None,
             nominatim_email=os.environ.get("NOMINATIM_EMAIL") or None,
+            overpass_url=os.environ.get("OVERPASS_URL") or s.overpass_url,
         )
 
 
