@@ -128,13 +128,15 @@ tier, but billing must be enabled on the key.
 ## Start here
 
 ```bash
-beertown ui
+beertown
 ```
 
-Opens a dashboard on `localhost` that walks you through the one-time setup:
+That's it. With no arguments it opens a dashboard on `localhost` that walks you through the one-time setup:
 Chrome, your Google account, your Untappd account. It signs you in, then
 **tests both accounts with a real round-trip** — and only calls them connected
 once that passes.
+
+(`beertown ui` does the same thing explicitly. A bare `beertown` stays out of the way when it would be unhelpful: with `--json`, or when output is piped, you get the normal error envelope rather than a server that blocks forever.)
 
 That distinction is the point. A cookie on disk means a login happened once,
 not that the account works now. Before this, a stale Untappd session announced

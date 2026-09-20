@@ -7,6 +7,12 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- A bare `beertown` opens the dashboard. Typing the program's name is the
+  first thing a new user does, and it used to answer with an argparse error --
+  a poor first impression from a tool whose whole first-run story is a
+  dashboard that explains itself. Guarded three ways, because `ui` blocks
+  forever: never with `--json`, never when output is piped, and never in place
+  of a real command or a typo, which still gets the error it asked for.
 - `ui` leads rather than reports: one directive at a time — install Chrome,
   sign in, test, then name your city — chosen server-side in `next_step` so
   the ordering is testable. Sign-*up* links sit beside sign-in, because

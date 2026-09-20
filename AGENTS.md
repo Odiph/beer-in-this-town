@@ -138,6 +138,10 @@ Serves a setup dashboard on localhost and **blocks until interrupted**. It is
 for a human at a keyboard: it opens a browser, waits on a sign-in, and has no
 useful envelope until it exits.
 
+A bare `beertown` with no subcommand opens it too -- but only at a terminal,
+and never with `--json` or piped output, so an agent gets the usual
+`bad_arguments` envelope instead of a process that never returns.
+
 Do not run it. An agent that starts it will hang. When a user needs to connect
 or re-connect an account, tell them to run `beertown ui` themselves — the same
 way `bootstrap` is theirs to run.
