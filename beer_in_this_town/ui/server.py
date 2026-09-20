@@ -106,6 +106,16 @@ def origin_allowed(origin: str | None) -> bool:
     return parsed.hostname in ("127.0.0.1", "localhost", "::1")
 
 
+def _intent() -> dict | None:
+    """What the user has already asked for, if anything. Never raises."""
+    try:
+        from ..state import last_intent
+
+        return last_intent()
+    except Exception:
+        return None
+
+
 def make_handler(board: Dashboard):
     class Handler(BaseHTTPRequestHandler):
         server_version = "beertown-ui"
@@ -183,7 +193,7 @@ def make_handler(board: Dashboard):
             if not self._guarded() or not self._authed():
                 return
             route = urlparse(self.path).path
-            if route != "/api/run":
+            if route not in ("/api/run", "/api/city"):
                 return self._deny(404, "not_found", "No such action.")
 
             try:
@@ -196,6 +206,9 @@ def make_handler(board: Dashboard):
                 body = json.loads(raw or b"{}")
             except json.JSONDecodeError:
                 return self._deny(400, "bad_request", "Malformed request.")
+
+            if route == "/api/city":
+                return self._city(body)
 
             name = body.get("action", "")
             entry = ACTIONS.get(name)
@@ -214,6 +227,24 @@ def make_handler(board: Dashboard):
                                   "to finish — two sign-ins sharing one Chrome "
                                   "profile can corrupt it.")
             _json(self, 202, {"ok": True, "job": job.to_row()})
+
+        def _city(self, body: dict) -> None:
+            """Record the city, where `status` already looks for it.
+
+            This is the handoff the wizard was missing. Without it the page
+            asked for a city, kept it in the browser, and an agent reading
+            `status` carried on offering the built-in default -- the two
+            halves of the setup disagreeing with nobody able to see it.
+            """
+            from ..state import BadIntent, record_intent
+
+            try:
+                recorded = record_intent(body.get("city", ""))
+            except BadIntent as exc:
+                return self._deny(400, "bad_city", str(exc))
+            log.info("[ui] city set to %r (list %r)",
+                     recorded["query"], recorded["map_title"])
+            _json(self, 200, {"ok": True, "intent": recorded})
 
         # -- helpers ---------------------------------------------------
         def _record(self, name: str, result: dict) -> dict:
@@ -240,6 +271,7 @@ def make_handler(board: Dashboard):
                 },
                 "defaults": {"query": board.settings.query,
                              "count": board.settings.target_count},
+                "intent": _intent(),
                 "checks": [c.to_row() for c in rows],
                 "ready": checks.ready(rows),
                 "blocking": [c.key for c in checks.blocking(rows)],

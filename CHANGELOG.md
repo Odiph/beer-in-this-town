@@ -7,6 +7,14 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **The city typed in the dashboard reaches the agent.** It used to live in
+  `localStorage` and nowhere else, so the wizard would hand a person a London
+  command while `status` went on offering Singapore — both halves behaving
+  correctly and disagreeing, with nothing able to see it. "Use this city" now
+  records it in `state/intent.json`, which `status` resolves through, and the
+  map title follows the city rather than aiming a London CSV at a Singapore
+  list. Deliberately not `last_run.json`: `recorded` there means a run
+  happened, and an intention is not a run.
 - **`run` is no longer offered on an unverified session.** `status` used
   `logged_in` — which only means `storage_state.json` exists — and on a
   machine whose Google and Untappd sessions had both expired it reported
