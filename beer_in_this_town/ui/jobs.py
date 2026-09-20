@@ -56,6 +56,11 @@ class Job:
     ended: float | None = None
     result: dict = field(default_factory=dict)
     error: str = ""
+    # What the job has established so far, as data rather than prose. The log
+    # is for reading; this is for rendering. "Has the Untappd sign-in landed
+    # yet" is a question a person stares at the screen asking, and answering
+    # it in a sentence among five other sentences is not answering it.
+    facts: dict = field(default_factory=dict)
 
     @property
     def elapsed(self) -> float:
@@ -66,7 +71,7 @@ class Job:
             "id": self.id, "kind": self.kind, "title": self.title,
             "state": self.state, "steps": [s.to_row() for s in self.steps],
             "elapsed": round(self.elapsed, 1), "result": self.result,
-            "error": self.error,
+            "error": self.error, "facts": self.facts,
         }
 
 
@@ -94,8 +99,8 @@ class Runner:
             return self._job is not None and self._job.state == RUNNING
 
     def start(self, kind: str, title: str,
-              work: Callable[[Callable[[str], None]], dict]) -> Job | None:
-        """Run `work` on a thread, handing it a `say` callback for narration.
+              work: Callable[..., dict]) -> Job | None:
+        """Run `work` on a thread with `say` for narration and `mark` for facts.
 
         Returns None when something is already running. Not a queue: see the
         module docstring on why a second sign-in must not start.
@@ -110,9 +115,13 @@ class Runner:
         def say(text: str, aside: bool = False) -> None:
             self._append(job.id, Step(time.time(), text, aside))
 
+        def mark(key: str, value: object) -> None:
+            """Record a fact the page can render, rather than narrate it."""
+            self._mark(job.id, key, value)
+
         def run() -> None:
             try:
-                result = work(say)
+                result = work(say, mark)
             except Exception as exc:
                 log.error("job %s (%s) failed: %s", job.id, kind, exc)
                 self._finish(job.id, FAILED, {}, f"{type(exc).__name__}: {exc}")
@@ -125,6 +134,13 @@ class Runner:
             self._thread = thread
         thread.start()
         return job
+
+    def _mark(self, job_id: str, key: str, value: object) -> None:
+        with self._lock:
+            if self._job is None or self._job.id != job_id:
+                return
+            self._job = replace(self._job,
+                                facts={**self._job.facts, key: value})
 
     def _append(self, job_id: str, step: Step) -> None:
         with self._lock:

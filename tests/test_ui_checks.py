@@ -154,7 +154,8 @@ def test_a_new_user_goes_from_nothing_to_ready(blank, capable, monkeypatch):
                         lambda s: VerifyResult(True, "google ok", "stub"))
     monkeypatch.setitem(checks.VERIFIERS, "untappd",
                         lambda s: VerifyResult(True, "untappd ok", "stub"))
-    result = verify_accounts(blank, lambda t, aside=False: said.append(t))
+    result = verify_accounts(blank, lambda t, aside=False: said.append(t),
+                             lambda k, v: None)
 
     assert result["google"]["ok"] is True
     assert result["untappd"]["ok"] is True
@@ -552,3 +553,46 @@ def test_an_expired_session_tells_the_person_too_not_just_the_agent(blank):
     said = hints(inspect_state(blank), blank)
     assert "signed out" in said[0]
     assert "beertown ui" in said[0]
+
+
+# --- both sign-ins are opened, not one and an instruction ----------------
+
+@pytest.mark.unit
+def test_chrome_opens_a_tab_for_each_sign_in(monkeypatch, tmp_path):
+    """The first person through this flow signed in to Untappd in their
+    everyday Chrome, leaving the profile with a Google session and none for
+    Untappd. The window opened on Google, so Google worked; Untappd was the
+    half left to the person navigating there.
+    """
+    from beer_in_this_town import chrome_launch
+
+    launched = {}
+    monkeypatch.setattr(chrome_launch, "find_chrome",
+                        lambda: __import__("pathlib").Path("chrome.exe"))
+    monkeypatch.setattr(chrome_launch.subprocess, "Popen",
+                        lambda args, **kw: launched.setdefault("args", args))
+
+    chrome_launch.launch_for_login(tmp_path / "profile")
+    args = launched["args"]
+
+    assert any("accounts.google.com" in a for a in args), "no Google tab"
+    assert any("untappd.com" in a for a in args), "no Untappd tab"
+
+
+@pytest.mark.unit
+def test_one_url_can_still_be_asked_for(monkeypatch, tmp_path):
+    """Re-running for a single account should not reopen both."""
+    from beer_in_this_town import chrome_launch
+
+    launched = {}
+    monkeypatch.setattr(chrome_launch, "find_chrome",
+                        lambda: __import__("pathlib").Path("chrome.exe"))
+    monkeypatch.setattr(chrome_launch.subprocess, "Popen",
+                        lambda args, **kw: launched.setdefault("args", args))
+
+    chrome_launch.launch_for_login(tmp_path / "profile",
+                                   "https://untappd.com/login")
+    args = launched["args"]
+
+    assert any("untappd.com" in a for a in args)
+    assert not any("accounts.google.com" in a for a in args)

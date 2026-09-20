@@ -219,7 +219,8 @@ def make_handler(board: Dashboard):
             title, work = entry
             job = board.runner.start(
                 name, title,
-                lambda say: self._record(name, work(board.settings, say)),
+                lambda say, mark: self._record(
+                    name, work(board.settings, say, mark)),
             )
             if job is None:
                 return self._deny(409, "already_running",
@@ -332,6 +333,11 @@ def build(s: Settings, port: int = DEFAULT_PORT) -> tuple[_Server, str]:
 # Where a detached dashboard records itself, so a second `--detach` finds the
 # first one instead of starting a rival on another port.
 RUNNING = STATE_DIR / "ui.json"
+
+# A detached dashboard's output used to go to DEVNULL, so when one died while
+# a person sat watching it there was nothing at all to say why -- no log, no
+# exit code, no trace beyond a stale record. Somewhere to look costs one file.
+UI_LOG = STATE_DIR / "ui.log"
 
 
 HANDSHAKE_ENV = "BEERTOWN_UI_HANDSHAKE"
@@ -448,15 +454,23 @@ def serve_detached(s: Settings, port: int = DEFAULT_PORT) -> dict:
         return {**already, "started": False}
 
     handshake = secrets.token_urlsafe(12)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    # Append, not truncate: the interesting case is the previous one that
+    # died, and opening this would otherwise erase exactly what you came for.
+    log_file = UI_LOG.open("a", encoding="utf-8", errors="replace")
+    log_file.write(f"\n--- dashboard starting on port {port} ---\n")
+    log_file.flush()
     child = subprocess.Popen(
-        [sys.executable, "-m", "beer_in_this_town", "ui", "--port", str(port)],
+        [sys.executable, "-m", "beer_in_this_town", "-v", "ui",
+         "--port", str(port)],
         cwd=str(ROOT),
         env={**os.environ, HANDSHAKE_ENV: handshake},
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=log_file, stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
         close_fds=True,
         **_detach_flags(),
     )
+    log_file.close()   # the child holds its own handle now
 
     # Wait for the child to publish its URL. The token is minted in there, so
     # there is nothing useful to return until it has.
@@ -472,13 +486,13 @@ def serve_detached(s: Settings, port: int = DEFAULT_PORT) -> dict:
         if child.poll() is not None:
             raise RuntimeError(
                 f"The dashboard exited immediately (code {child.returncode}). "
-                f"Port {port} may already be in use by something else."
+                f"Port {port} may already be in use. {UI_LOG} has its output."
             )
         time.sleep(0.25)
 
     raise RuntimeError(
         f"The dashboard did not report a URL within 30s. Check whether "
-        f"port {port} is free."
+        f"port {port} is free, and see {UI_LOG} for what it said."
     )
 
 

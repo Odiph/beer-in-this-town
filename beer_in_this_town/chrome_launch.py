@@ -194,13 +194,25 @@ def profile_has_untappd_session(profile_dir: Path) -> bool | None:
     return False if any_cookie == 0 else None
 
 
+# Both sign-ins, as tabs, so neither depends on the person navigating there.
+# Asking someone to "then go to untappd.com and sign in there too" reads as an
+# instruction about the internet rather than about *this window* -- and the
+# first person through this flow signed in to Untappd in their normal Chrome,
+# leaving the profile with a Google session and no Untappd one. The window
+# opened on Google, so Google worked; Untappd was the half left to chance.
+LOGIN_URLS = ("https://accounts.google.com/", "https://untappd.com/login")
+
+
 def launch_for_login(
-    profile_dir: Path, url: str = "https://accounts.google.com/"
+    profile_dir: Path, url: str | None = None
 ) -> subprocess.Popen | None:
     """Start a clean Chrome on `profile_dir` for the human to log in with.
 
     No automation flags, no CDP port, no Playwright. The only unusual argument
     is the profile directory, which is what lets us pick the session up later.
+
+    Opens a tab per sign-in by default. Passing `url` opens just that one,
+    which is what a re-run for a single account wants.
     """
     chrome = find_chrome()
     if chrome is None:
@@ -212,7 +224,7 @@ def launch_for_login(
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
-        url,
+        *((url,) if url else LOGIN_URLS),
     ]
     log.info("Launching Chrome for login: %s", chrome)
     return subprocess.Popen(args)
