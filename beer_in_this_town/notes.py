@@ -217,6 +217,7 @@ def add_notes(
         _saved_in,
         journal_key,
         place_matches,
+        saved_in_target,
     )
 
     limits = limits or Limits()
@@ -291,7 +292,7 @@ def add_notes(
                 # Only annotate places that are actually in the target list;
                 # otherwise the note field may not even be present.
                 saved_in = _saved_in(page)
-                if saved_in is None or list_name.lower() not in saved_in.lower():
+                if saved_in is None or not saved_in_target(saved_in, list_name):
                     journal[key] = "not-in-list"
                     log.warning("  not in %s -- pin it first", list_name)
                     _save_journal(journal, list_name)

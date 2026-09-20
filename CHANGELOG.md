@@ -29,6 +29,17 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   at the boundary with `bad_format` rather than writing no map quietly.
 
 ### Fixed
+- `pin` identified the target saved list by substring, in all three places it
+  checks one: picking the row in the list picker, verifying what Maps said
+  afterwards, and confirming the list exists at all. An account holding both
+  "Bars" and "London Bars" could therefore have a place saved into the wrong
+  one **and have that verified as correct** — `"bars" in "london bars"` is
+  True — after which the run journalled `ok` and never retried it. That is the
+  wrong-list failure `pin_to_list.py`'s own docstring says the module exists to
+  prevent. All three now compare whole names, ignoring only case, padding and a
+  trailing place count. A name that matches no list, or several, raises
+  `list_ambiguous` and saves nothing rather than clicking the nearest label.
+  `notes` used the same substring test and is fixed with it.
 - `score` reported numbers that did not mean what they said. A dropped venue
   was judged by "was this a real venue", which every café in the `non_beer`
   bucket is — so with every label correct the harness reported that 100% of
