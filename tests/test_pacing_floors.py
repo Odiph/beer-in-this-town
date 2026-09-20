@@ -1,0 +1,140 @@
+"""Pacing is a guardrail, so it cannot be a suggestion.
+
+AGENTS.md rule 4 says "do not lower the pacing -- raise them if throttled, do
+not lower them", and nothing enforced it: `--min-gap 0 --max-gap 0` was
+accepted, `--delay 0.05` was accepted, and `--delay 0` was ignored only
+because 0 is falsy. Every other guardrail in this project fails closed; these
+were prose.
+"""
+from __future__ import annotations
+
+import pytest
+
+from beer_in_this_town.cli import build_parser, check_pacing
+from beer_in_this_town.notes import MIN_GAP_S as NOTES_MIN
+from beer_in_this_town.pin_to_list import MIN_GAP_S as PIN_MIN
+
+
+def _parse(argv):
+    return build_parser().parse_args(argv)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("cmd,floor", [("pin", PIN_MIN), ("notes", NOTES_MIN)])
+def test_write_pacing_cannot_be_lowered_below_the_default(cmd, floor):
+    with pytest.raises(SystemExit):
+        _parse([cmd, "--csv", "x.csv", "--min-gap", "0"])
+    with pytest.raises(SystemExit):
+        _parse([cmd, "--csv", "x.csv", "--min-gap", str(floor / 2)])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("cmd", ["pin", "notes"])
+def test_write_pacing_can_still_be_raised(cmd):
+    """Throttled users are told to raise these; that must keep working."""
+    args = _parse([cmd, "--csv", "x.csv", "--min-gap", "60", "--max-gap", "120"])
+    assert args.min_gap == 60 and args.max_gap == 120
+
+
+@pytest.mark.unit
+def test_read_pacing_cannot_be_lowered_below_the_default():
+    with pytest.raises(SystemExit):
+        _parse(["run", "--delay", "0.05"])
+
+
+@pytest.mark.unit
+def test_a_zero_delay_is_rejected_rather_than_quietly_ignored():
+    """`--delay 0` was ignored because 0 is falsy -- it looked accepted."""
+    with pytest.raises(SystemExit):
+        _parse(["run", "--delay", "0"])
+
+
+@pytest.mark.unit
+def test_an_inverted_gap_range_is_refused():
+    """--min-gap 30 --max-gap 1 was accepted and paced on nonsense."""
+    with pytest.raises(ValueError, match="max-gap"):
+        check_pacing(min_gap=30.0, max_gap=1.0)
+
+
+@pytest.mark.unit
+def test_a_sane_range_passes():
+    assert check_pacing(min_gap=8.0, max_gap=16.0) is None
+
+
+# --- protections that survive a restart -----------------------------------
+@pytest.mark.unit
+def test_the_hourly_read_ceiling_survives_a_restart(tmp_path, monkeypatch):
+    """The README calls 600/hour a cap; it lived in memory.
+
+    Restarting the process handed back a fresh allowance, so the one number
+    the docs describe as a hard ceiling was the one an ordinary retry loop
+    could reset -- unlike the write ledger, whose whole point is persistence.
+    """
+    from beer_in_this_town import http_client
+    from beer_in_this_town.config import Settings
+
+    path = tmp_path / "read_budget.json"
+    monkeypatch.setattr(http_client, "READ_BUDGET", path)
+    s = Settings(hourly_budget=3)
+
+    first = http_client.ReadBudget(s, path=path)
+    for _ in range(3):
+        first.record()
+    assert first.remaining() == 0
+
+    restarted = http_client.ReadBudget(s, path=path)
+    assert restarted.remaining() == 0, "a restart must not refill the ceiling"
+
+
+@pytest.mark.unit
+def test_the_read_ceiling_rolls_forward_after_an_hour(tmp_path, monkeypatch):
+    import time as _time
+
+    from beer_in_this_town import http_client
+    from beer_in_this_town.config import Settings
+
+    path = tmp_path / "read_budget.json"
+    s = Settings(hourly_budget=2)
+    budget = http_client.ReadBudget(s, path=path)
+    budget.record()
+    budget.record()
+    assert budget.remaining() == 0
+
+    # Capture the real clock first: `_time` is the same module object the
+    # patch lands on, so a lambda calling _time.time() would call itself.
+    real_now = _time.time()
+    monkeypatch.setattr(http_client.time, "time", lambda: real_now + 3700)
+    assert http_client.ReadBudget(s, path=path).remaining() == 2
+
+
+@pytest.mark.unit
+def test_the_circuit_breaker_survives_a_restart(tmp_path):
+    """Three failures on the last three places tripped nothing.
+
+    is_tripped was only read at the top of the next iteration, and the count
+    started at zero every run -- so a run that failed its way to the end set
+    no cool-off and the next one began with a clean slate.
+    """
+    from beer_in_this_town.guardrails import CircuitBreaker
+
+    path = tmp_path / "breaker.json"
+    breaker = CircuitBreaker(limit=3, path=path)
+    for _ in range(2):
+        breaker.record_failure()
+    assert not breaker.is_tripped
+
+    resumed = CircuitBreaker(limit=3, path=path)
+    assert resumed.consecutive == 2, "a restart must not clear the run of failures"
+    resumed.record_failure()
+    assert resumed.is_tripped
+
+
+@pytest.mark.unit
+def test_a_success_clears_the_persisted_breaker(tmp_path):
+    from beer_in_this_town.guardrails import CircuitBreaker
+
+    path = tmp_path / "breaker.json"
+    breaker = CircuitBreaker(limit=3, path=path)
+    breaker.record_failure()
+    breaker.record_success()
+    assert CircuitBreaker(limit=3, path=path).consecutive == 0
