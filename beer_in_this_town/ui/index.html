@@ -468,11 +468,11 @@ function renderCityForm(go, state) {
   input.setAttribute("aria-label", "City to collect venues for");
   // The server's record wins over this browser's: it is what the agent will
   // actually use, and a stale localStorage value would show a city that is
-  // not the one in play.
+  // not the one in play. Nothing is prefilled beyond that -- there is no
+  // default city, so an empty box is the honest starting state.
   let saved = "";
   try { saved = localStorage.getItem("beertown.city") || ""; } catch (e) {}
-  input.value = (state.intent && state.intent.query) || saved
-    || state.defaults.query || "";
+  input.value = (state.intent && state.intent.query) || saved || "";
   form.appendChild(input);
   go.appendChild(form);
 
@@ -495,21 +495,28 @@ function renderCityForm(go, state) {
   row.append(copy, note);
   go.appendChild(row);
 
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "go";
+  save.textContent = "Use this city";
+
   const build = () => {
-    const city = (input.value || "").trim() || state.defaults.query;
-    cmd.textContent = 'beertown run --query "' + city + '" --count '
-      + state.defaults.count + " --no-upload";
-    try { localStorage.setItem("beertown.city", input.value.trim()); } catch (e) {}
+    const city = (input.value || "").trim();
+    // No city, no command. Showing one built from a placeholder is how
+    // somebody copies a run for a place they never named.
+    cmd.hidden = !city;
+    cmd.textContent = city
+      ? 'beertown run --query "' + city + '" --count '
+        + state.defaults.count + " --no-upload"
+      : "";
+    save.disabled = !city;
+    try { localStorage.setItem("beertown.city", city); } catch (e) {}
   };
   input.addEventListener("input", () => { build(); note.textContent = UNSAVED; });
 
   // Saving is what makes the city reach the agent. Without it this field
   // only ever fed the command above, so a person could type London here and
-  // an agent reading `status` would still be offered Singapore.
-  const save = document.createElement("button");
-  save.type = "button";
-  save.className = "go";
-  save.textContent = "Use this city";
+  // an agent reading `status` would go on offering something else.
   save.addEventListener("click", async () => {
     const city = (input.value || "").trim();
     if (!city) { input.focus(); return; }

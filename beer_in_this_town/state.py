@@ -85,9 +85,9 @@ def inspect_state(s: Settings) -> dict[str, Any]:
     # The middle one is what the dashboard writes, and is the whole reason
     # the city a person types reaches the agent at all.
     intent = last_intent() or {}
-    query = last_run.get("query") or intent.get("query") or s.query
+    query = last_run.get("query") or intent.get("query") or s.query or ""
     list_name = (last_run.get("map_title") or intent.get("map_title")
-                 or s.map_title)
+                 or s.map_title or "")
 
     previous = _read_json(STATE_DIR / f"previous_run_{scope_slug(query)}.json")
     # Scoped per list, so this counts progress on the list actually in play
@@ -263,6 +263,11 @@ def blocked_on(state: dict[str, Any]) -> str | None:
         # Tested, and one of the accounts is signed out. Only a person can
         # fix that, whatever the file on disk says.
         return "sign_in"
+    if not state["last_run"].get("query"):
+        # Nobody has said where. There is no default to fall back on and
+        # there should not be: picking a city for someone is picking what
+        # they get, and doing it silently is worse than asking.
+        return "choose_city"
     return None
 
 
@@ -326,6 +331,15 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
     if not verification.get("ok"):
         return []          # signed out: blocked_on says a person is needed
 
+    if not query:
+        # Nothing to offer: `run` without a city has nowhere to go, and the
+        # dashboard is where a person names one.
+        from .ui import existing
+
+        if existing() is None:
+            return ["python -m beer_in_this_town ui --detach --json"]
+        return []
+
     if state["latest_csv"] and state["latest_kml"]:
         # Nothing further an agent should start on its own. An empty list is
         # what AGENTS.md defines as the end of the loop, and now that the
@@ -346,6 +360,14 @@ def hints(state: dict[str, Any], s: Settings) -> list[str]:
     # this used to read only the file -- so the envelope named the right
     # problem in `error.code` and said nothing about it to the person who had
     # to fix it, talking about ledger locks instead.
+    if blocked_on(state) == "choose_city":
+        return [
+            "No city chosen, and there is no default -- picking one for "
+            "someone is picking what they get. Open `beertown ui` and name a "
+            "city on the last step, or pass `run --query \"<city>\"`.",
+        ] + ([f"The dashboard is already open at {running['url']}."]
+             if (running := _serving()) else [])
+
     if blocked_on(state) == "sign_in":
         expired = bool(state.get("verification"))
         return [

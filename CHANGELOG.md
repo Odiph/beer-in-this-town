@@ -7,6 +7,15 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Removed the default city, and the default list name.** `run` used to
+  default to `singapore` and `pin`/`notes` to `"Singapore Bars"`. A default
+  there saves nobody a keystroke; it silently answers a question only the user
+  can answer, and answers it with a scrape of somewhere they have never been —
+  or, for `pin`, a write into a list they did not name. `run` now refuses with
+  `no_city`, `pin`/`notes` with `no_list`, and `status` reports
+  `blocked_on: "choose_city"` until somebody says where. Same reasoning as
+  `logged_in`: a stand-in for a decision reads exactly like the decision
+  having been made.
 - **The browser search path did not encode the query.** It built the URL with
   an f-string, so `&` in a city started a new parameter and `#` turned the
   rest into a fragment — "rock & roll" searched for "rock ", returned results,

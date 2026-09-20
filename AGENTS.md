@@ -52,6 +52,8 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `error.code` | Meaning | What to do |
 |---|---|---|
 | `not_signed_in` | An account is signed out — from `verify`, `pin` or `notes` | **Stop and ask the human.** Requires their password; you cannot do this. `data.accounts` says which one and how it was established. |
+| `no_city` | `run` with no city, and none chosen | **Ask the human.** There is no default — choosing a city for someone chooses what they get. They name one on the last step of `beertown ui`, or you pass `--query`. |
+| `no_list` | `pin`/`notes` with no `--list` | **Ask the human.** No default, because this writes into a real Maps list and a guessed name is a guess about where. |
 | `port_unavailable` | `ui --detach` could not start the dashboard | Another process holds the port, or the interpreter could not be spawned. Retry with `--port` set to something else. |
 | `verify_unavailable` | The account check itself could not run | Not a signed-out account — usually a missing browser. Fix what the message names. Do **not** report this as "signed out". |
 | `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off. `status` reports the lock's age and whether it is stale under `data.write_guardrails.lock`. Do not delete the lock file; an abandoned one is broken automatically after 2h. |
@@ -156,11 +158,15 @@ Untappd sessions had both expired, and the first action offered there was
 | `verification.ok: false` | *(none)* — `blocked_on: "sign_in"` | a person must sign in |
 | `verification.ok: true` | `run ... --no-upload` | now it is known to work |
 
-**The city comes from the user, not from the default.** `data.intent` is what
+**There is no default city.** `data.blocked_on` is `"choose_city"` until
+somebody names one, and `run` refuses with `no_city` rather than picking. Do
+not pass a city you inferred from a previous corpus or from the repo — ask.
+
+**The city comes from the user, not from a default.** `data.intent` is what
 they asked for in the dashboard; `data.last_run.query` already resolves
 through it, so the `run` in `next_actions` carries their city without you
-doing anything. When `intent` is null nobody has chosen one and the query is
-the built-in default -- say so rather than scraping Singapore on their behalf.
+doing anything. When `intent` is null and no run has happened, nobody has chosen one and
+there is nothing to fall back on.
 A real run outranks an intention; the intention is not destroyed by one.
 
 `verify` writes `state/verification.json`, which is what lets the loop

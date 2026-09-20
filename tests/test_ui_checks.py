@@ -460,9 +460,16 @@ def test_a_session_file_alone_never_earns_a_run(blank):
     None, and the first action was `run` — which signed out of Untappd builds
     a five-venue corpus and reports a finished scrape.
     """
-    from beer_in_this_town.state import blocked_on, inspect_state, next_actions
+    from beer_in_this_town.state import (
+        blocked_on,
+        inspect_state,
+        next_actions,
+        record_intent,
+    )
 
     blank.storage_state.write_text("{}", encoding="utf-8")
+    # A city, so the only open question is whether the session works.
+    record_intent("london")
     state = inspect_state(blank)
 
     assert state["logged_in"] is True
