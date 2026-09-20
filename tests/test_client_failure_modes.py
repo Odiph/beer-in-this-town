@@ -106,3 +106,46 @@ def test_one_success_clears_the_transport_counter(nosleep, monkeypatch):
                 client.get("https://untappd.com/v/x/1", use_cache=False)
         assert client.get("https://untappd.com/v/x/2", use_cache=False)
         assert client._consecutive_transport_errors == 0
+
+
+@pytest.mark.unit
+def test_the_transport_trip_actually_reaches_the_caller(nosleep, monkeypatch):
+    """The trip existed and never escaped.
+
+    fetch_venues re-raises RateLimitTripped and BudgetExceeded and swallows
+    everything else per venue. TransportUnavailable is a plain RuntimeError,
+    so it landed in the broad handler and the run still slept its way through
+    every remaining venue -- the exact behaviour the trip was added to stop.
+    Testing the client alone could never have caught this.
+    """
+    import httpx
+
+    from beer_in_this_town.models import VenueRef
+    from beer_in_this_town.scrape import fetch_venues
+
+    s = Settings(max_retries=1, backoff_ladder_s=(0,))
+    refs = [VenueRef(venue_id=str(i), slug=f"v{i}", name=f"V{i}",
+                     category=None, address=None, city=None) for i in range(10)]
+    with PoliteClient(s) as client:
+        monkeypatch.setattr(
+            client._client, "get",
+            lambda *a, **kw: (_ for _ in ()).throw(httpx.ConnectError("down")))
+        with pytest.raises(TransportUnavailable):
+            fetch_venues(client, refs)
+
+
+@pytest.mark.unit
+def test_an_unreachable_robots_file_stops_the_run(nosleep, monkeypatch):
+    """TransportUnavailable cannot fire on the first URL of a run.
+
+    It needs three prior failed URLs, so the re-raise added for this case
+    never applied and a dead network still read as "robots does not forbid
+    this".
+    """
+    with PoliteClient(Settings()) as client:
+        def dead(*a, **kw):
+            raise RuntimeError("GET failed after 3 attempts")
+
+        monkeypatch.setattr(client, "get", dead)
+        with pytest.raises(TransportUnavailable):
+            client.robots_disallows_scraping()

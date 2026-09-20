@@ -271,6 +271,11 @@ def add_notes(
 
                 _abort_if_blocked(page, ledger)
                 if breaker.is_tripped:
+                    # Clear it as the cool-off begins: the cool-off is the
+                    # punishment, and a count that outlives it trips the next
+                    # run before it can earn a success to clear it -- a
+                    # permanent lockout rather than a pause.
+                    breaker.reset()
                     ledger.start_cooloff(
                         f"{breaker.consecutive} consecutive failures"
                     )

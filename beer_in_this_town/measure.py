@@ -170,7 +170,7 @@ def _kind(row: dict[str, Any], *, where: str) -> str | None:
     raw = str(row.get("true_kind", "")).strip().lower().replace(" ", "_")
     if not raw:
         return None
-    allowed = {k.value for k in Kind}
+    allowed = {k.value for k in Kind} - {Kind.UNSETTLED.value}
     if raw not in allowed:
         raise LabelsUnusable(
             f"{where}: true_kind={row.get('true_kind')!r} is not one of "
@@ -201,10 +201,17 @@ def _verdict(row: dict[str, Any]) -> dict[str, Any]:
     if verdict == "drop":
         if reason == "non_beer":
             wrong_drop = kind in BEER_KINDS
+        elif reason in DROP_IS_WRONG_WHEN:
+            field, _ = DROP_IS_WRONG_WHEN[reason]
+            wrong_drop = {"is_public": public, "is_open": open_}[field] == "y"
         else:
-            field, truthy = DROP_IS_WRONG_WHEN.get(reason, (None, None))
-            if field:
-                wrong_drop = {"is_public": public, "is_open": open_}[field] == "y"
+            # A bucket this scorer does not know how to judge. Scoring every
+            # row in it as correct is the confident-wrong-number failure the
+            # whole harness exists to refuse.
+            raise LabelsUnusable(
+                f"{where}: bucket {stratum!r} has a drop reason this version "
+                f"cannot judge. Re-generate the sheet with `label`."
+            )
 
     return {
         "row": row, "stratum": stratum, "verdict": verdict, "reason": reason,
@@ -223,6 +230,18 @@ def _verdict(row: dict[str, Any]) -> dict[str, Any]:
         # skipped as one nobody opened.
         "answered": any(x is not None for x in (public, open_, kind)),
     }
+
+
+# Which answer decides a drop, per the claim the classifier made about it.
+DROP_QUESTION = {
+    "private": "decided_public",
+    "closed": "decided_open",
+    "non_beer": "decided_kind",
+}
+
+
+def _answered_the_buckets_question(v: dict[str, Any]) -> bool:
+    return bool(v.get(DROP_QUESTION.get(v["reason"], ""), False))
 
 
 def score_labels(
@@ -300,8 +319,13 @@ def score_labels(
          lambda v: v["wrong_keep_private"], Verdict.KEEP.value),
         ("closed_venue_kept", lambda v: v["decided_open"],
          lambda v: v["wrong_keep_closed"], Verdict.KEEP.value),
-        ("real_venue_dropped",
-         lambda v: v["decided_public"] or v["decided_open"] or v["decided_kind"],
+        # Per-question means THIS bucket's question. `any of the three` looked
+        # per-question and was not: a drop:private row that answered only
+        # is_open counted in the denominator while contributing nothing to the
+        # numerator, so a blank is_public scored as "dropped correctly" -- the
+        # same blank-reads-as-no-error bug this rewrite was meant to close,
+        # one column across.
+        ("real_venue_dropped", _answered_the_buckets_question,
          lambda v: v["wrong_drop"], Verdict.DROP.value),
     ):
         errors, covered, thin = measure(answered, is_error, group, collect=name)
@@ -361,6 +385,12 @@ def score_labels(
     }
 
 # --- CSV round-trip --------------------------------------------------------
+def _slug_from_url(url: str | None) -> str:
+    """The slug out of https://untappd.com/v/<slug>/<id>."""
+    parts = [p for p in (url or "").rstrip("/").split("/") if p]
+    return parts[-2] if len(parts) >= 2 and parts[-1].isdigit() else ""
+
+
 def venues_from_csv(path: Path) -> list[Venue]:
     """Rebuild Venues from any CSV this project writes.
 
@@ -383,7 +413,11 @@ def venues_from_csv(path: Path) -> list[Venue]:
         out.append(Venue(
             ref=VenueRef(
                 venue_id=(r.get("venue_id") or "").strip() or name,
-                slug=(r.get("url") or "").rstrip("/").rpartition("/")[2],
+                # .../v/<slug>/<id> -- the slug is the second-to-last
+                # segment. Taking the last one made every url in the labelling
+                # sheet .../v/<id>/<id>: a dead link, on the button a human
+                # clicks to judge the venue.
+                slug=_slug_from_url(r.get("url")),
                 name=name,
                 category=(r.get("category") or "").strip() or None,
                 address=(r.get("address") or "").strip() or None,

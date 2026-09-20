@@ -298,7 +298,10 @@ class PoliteClient:
             except httpx.HTTPError as exc:
                 last_error = exc
                 log.warning("transport error (%s), attempt %d", exc, attempt + 1)
-                time.sleep(self.s.backoff_ladder_s[min(attempt, 2)])
+                # Not after the last attempt: sleeping there buys nothing and
+                # delayed the trip by the full ladder on every dead URL.
+                if attempt < self.s.max_retries - 1:
+                    time.sleep(self.s.backoff_ladder_s[min(attempt, 2)])
                 continue
 
             self._last_request_at = time.time()
@@ -365,11 +368,20 @@ class PoliteClient:
         try:
             txt = self.get("https://untappd.com/robots.txt", use_cache=False)
         except (RateLimitTripped, TransportUnavailable):
-            # A 403 here is a block already in progress, and a dead transport
-            # is a dead transport. Swallowing either read as "robots does not
-            # forbid this" and carried on requesting into it -- the one move
-            # this module's 403 rule says never to make.
+            # A 403 here is a block already in progress. Swallowing it read as
+            # "robots does not forbid this" and carried on requesting into the
+            # block -- the one move this module's 403 rule says never to make.
             raise
+        except RuntimeError as exc:
+            # Every attempt failed at the transport. TransportUnavailable
+            # cannot fire here -- it needs three prior failed URLs and this is
+            # the first request of a run -- so this branch is what a dead
+            # network actually looks like at this point. Treating it as "no
+            # prohibition" let the run proceed on a connection that is gone.
+            raise TransportUnavailable(
+                f"Could not reach robots.txt ({exc}). Refusing to start: a run "
+                f"that cannot read the rules should not assume there are none."
+            ) from exc
         except Exception:  # absence of robots.txt is not a prohibition
             return False
 
