@@ -7,6 +7,31 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `closures`, and `run --check-closed`: ask the Google Places API whether a
+  venue still trades, and record it in a new `business_status` CSV column.
+  Untappd's venue database is append-only in practice, so a bar that shut in
+  2019 keeps its stats and outranks a good one that opened last year — the
+  authoritative second tier `classify.looks_closed` was written waiting for.
+  Opt-in behind `GOOGLE_PLACES_KEY`, deliberately separate from
+  `GOOGLE_GEOCODING_KEY`: sending an address to place a pin and sending it to
+  ask what business is there are different disclosures.
+
+  The load-bearing rule is that **a missing match is not a closure**. Only an
+  explicit `CLOSED_PERMANENTLY` or `CLOSED_TEMPORARILY` closes a venue;
+  no match, a timeout, or a status Google adds later all leave it visible and
+  recorded as `unmatched`. A failed lookup collapses four cases that want
+  opposite outcomes, and a false closure silently deletes a real bar from the
+  map — the failure the quality gate and the fail-closed guardrails exist to
+  prevent. Closed venues are flagged, never dropped: `run` uploads to My Maps,
+  so a silent deletion would be invisible.
+
+  Internals are shaped for #20 rather than for #7 alone — one lookup, one
+  cache, one set of failure semantics. `types` and the place id are fetched
+  and cached alongside the status at no extra cost (they are Essentials
+  fields; `businessStatus` is what makes the request Pro), so #6 and #8 need
+  no second call and no second cache. Cached in `state/places_cache.json`,
+  written even when a run aborts, because those lookups were already billed.
+  Closes #7.
 - `label` and `score`: a measurement harness for the venue heuristics, so
   thresholds stop being guesses with numbers attached. `classify.py` holds
   candidate rules for venue kind, closed venues and private spaces, and is

@@ -72,6 +72,8 @@ from .pin_to_list import (
     places_from_csv,
     region_from_csv,
 )
+from .places import PlacesUnavailable, resolve_closures
+from .places import counts as closure_counts
 from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
 from .state import hints, inspect_state, next_actions, record_run
 
@@ -421,6 +423,115 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str,
     )
 
 
+# Asked for, and not possible. Shared by `closures` and `run --check-closed`
+# so the two cannot answer differently about the same missing key.
+#
+# The stage no-ops when nobody asked for it -- that is #20's rule. But a
+# command invoked explicitly, or a flag passed deliberately, is somebody
+# asking, and quietly doing nothing in reply is how a user concludes that
+# every venue is open.
+_NO_KEY = Problem(
+    code="places_key_missing",
+    message="GOOGLE_PLACES_KEY is not set, so no closure check can run.",
+    remedy="Set GOOGLE_PLACES_KEY to a key with the Places API enabled and "
+           "billing on, then re-run. It is deliberately separate from "
+           "GOOGLE_GEOCODING_KEY: different SKU, and sending addresses to "
+           "Places is a choice worth making on its own.",
+)
+
+_PLACES_REMEDY = (
+    "Check GOOGLE_PLACES_KEY, that the Places API (New) is enabled on that "
+    "project, and that billing is on. This is not per-venue -- nothing was "
+    "written."
+)
+
+
+def cmd_closures(s: Settings, csv_path: str, out: str | None,
+                 limit: int | None) -> Envelope:
+    """Ask Google Places whether the venues in a CSV still trade.
+
+    Read-only as far as the user's account goes: this touches Places, never
+    Maps. It writes a new CSV rather than editing the one it was given, so a
+    corpus that took a hundred requests to build is never overwritten by a
+    stage that costs money and can fail halfway.
+    """
+    source = Path(csv_path)
+    if not source.exists():
+        return fail("closures", Problem(
+            code="csv_missing",
+            message=f"No such CSV: {source}",
+            remedy="Run `run` first, or pass --csv with a path that exists.",
+        ))
+
+    if not s.google_places_key:
+        return fail("closures", _NO_KEY)
+
+    venues = venues_from_csv(source)
+    if not venues:
+        return fail("closures", Problem(
+            code="csv_missing",
+            message=f"{source.name} carried no venue rows.",
+            remedy="Check the file is one this project wrote, then re-run.",
+        ))
+
+    # A trial before the bulk, for the same reason `pin` has one: this is the
+    # billed path, and finding out the query shape is wrong on venue 3 costs
+    # less than finding out on venue 300.
+    checked = venues[:limit] if limit else venues
+    try:
+        resolved = resolve_closures(checked, s)
+    except PlacesUnavailable as exc:
+        return fail("closures", Problem(
+            code="places_unavailable",
+            message=str(exc),
+            remedy=_PLACES_REMEDY,
+        ), venues_read=len(venues))
+
+    # The rows not checked keep whatever status they already carried, so a
+    # --limit run produces a complete CSV rather than a truncated one.
+    merged = resolved + venues[len(checked):]
+    target = Path(out) if out else DATA_DIR / f"checked_{source.stem}.csv"
+    write_csv(merged, target)
+
+    closed = [v for v in merged if v.is_closed]
+    warnings = []
+    if limit and limit < len(venues):
+        warnings.append(
+            f"Trial run: {len(checked)} of {len(venues)} venues were checked. "
+            f"The rest were copied through unchanged."
+        )
+    unmatched = [v for v in resolved if v.business_status == "unmatched"]
+    if unmatched:
+        warnings.append(
+            f"{len(unmatched)} venue(s) had no Places match and are recorded "
+            f"as unmatched, NOT as closed. A failed lookup means the place "
+            f"closed, was renamed, is too new, or Places simply lacks it -- "
+            f"and those want opposite outcomes, so none is chosen."
+        )
+
+    return Envelope(
+        command="closures",
+        ok=True,
+        data={
+            "csv": str(target),
+            "venues": len(merged),
+            "checked": len(checked),
+            "closed": len(closed),
+            "by_status": closure_counts(merged),
+        },
+        warnings=warnings,
+        next_actions=[],
+        hints=[
+            f'Closed venues are flagged in "{target}", not removed. Nothing '
+            f'downstream drops them on its own: deciding what to do with a '
+            f'venue Google calls shut is yours.',
+            *([f"Flagged closed: {', '.join(v.ref.name for v in closed[:5])}"
+               + (f" (+{len(closed) - 5} more)" if len(closed) > 5 else "")]
+              if closed else []),
+        ],
+    )
+
+
 def cmd_label(s: Settings, csv_path: str, out: str | None,
               quota: int, seed: int) -> Envelope:
     """Emit a labelling sheet: a stratified sample for a human to judge.
@@ -555,9 +666,17 @@ def cmd_score(s: Settings, labels_path: str) -> Envelope:
 
 
 def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
-            skip_robots: bool, formats: tuple[str, ...] = ("kml",)) -> Envelope:
+            skip_robots: bool, formats: tuple[str, ...] = ("kml",),
+            check_closed: bool = False) -> Envelope:
     ensure_dirs()
     stamp = today_stamp()
+
+    # Before a single request. A run that scrapes a hundred venues and only
+    # then discovers it cannot do the thing it was asked to do has wasted the
+    # expensive part -- and the expensive part is the one with an account
+    # attached.
+    if check_closed and not s.google_places_key:
+        return fail("run", _NO_KEY)
 
     with PoliteClient(s) as client:
         if s.respect_robots and not skip_robots and client.robots_disallows_scraping():
@@ -622,6 +741,19 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
                    "blocking this client. Nothing was written.",
         ), venues_scraped=len(venues))
 
+    if check_closed:
+        try:
+            venues = resolve_closures(venues, s)
+        except PlacesUnavailable as exc:
+            # Same posture as the corpus gate and the geocoder above: nothing
+            # has been written, and a corpus half-annotated by a key that died
+            # partway looks finished while being partly unasked.
+            return fail("run", Problem(
+                code="places_unavailable",
+                message=str(exc),
+                remedy=_PLACES_REMEDY,
+            ), venues_scraped=len(venues))
+
     csv_path = write_csv(venues, DATA_DIR / f"venues_{s.query}_{stamp}.csv")
 
     base = DATA_DIR / f"venues_{s.query}_{stamp}"
@@ -647,6 +779,14 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
             f"Asked for {s.target_count} venues and got {len(venues)}. Either "
             f"the query has no more, or search paging stopped early -- check "
             f"the log for where it stopped before trusting the totals."
+        )
+    closed = [v for v in venues if v.is_closed]
+    if closed:
+        warnings.append(
+            f"{len(closed)} venue(s) are flagged closed by Google Places and "
+            f"are still exported and still in the KML: "
+            f"{', '.join(v.ref.name for v in closed[:5])}. Nothing drops them "
+            f"automatically -- read the business_status column and decide."
         )
     without_coords = [v.ref.name for v in venues if not v.has_coords]
     if without_coords:
@@ -674,6 +814,8 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
             "csv": str(csv_path),
             "kml": written.get("kml"),
             "maps": written,
+            "closed": len(closed),
+            "by_status": closure_counts(venues) if check_closed else None,
             "new_since_last_run": len(diff["new"]),
             "changed": len(diff["changed"]),
             "my_maps_url": map_url,
@@ -961,6 +1103,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-upload", action="store_true", help="write files only")
     run.add_argument("--browser-search", action="store_true",
                      help="force the Show More click path instead of HTTP pagination")
+    run.add_argument("--check-closed", action="store_true",
+                     help="ask Google Places whether each venue still trades "
+                          "and record it in a business_status column. Needs "
+                          "GOOGLE_PLACES_KEY. Flags; never drops.")
     run.add_argument("--i-read-robots", action="store_true",
                      help="proceed even if robots.txt disallows these paths")
     run.add_argument("--delay", type=at_least(Settings().min_delay_s, "--delay"),
@@ -1019,6 +1165,21 @@ def build_parser() -> argparse.ArgumentParser:
                        help="sampling seed; the same seed regenerates the same "
                             "sheet")
 
+    closures = sub.add_parser(
+        "closures",
+        parents=[common],
+        help="ask Google Places whether the venues in a CSV still trade "
+             "(flags them; never drops them)",
+    )
+    closures.add_argument("--csv", required=True, help="any CSV this project wrote")
+    closures.add_argument("--out", default=None,
+                          help="where to write the annotated CSV. Defaults to "
+                               "data/checked_<name>.csv -- the input is never "
+                               "overwritten.")
+    closures.add_argument("--limit", type=int, default=None,
+                          help="only check the first N. This is the billed "
+                               "path; trial it before the bulk.")
+
     score = sub.add_parser(
         "score",
         parents=[common],
@@ -1074,6 +1235,8 @@ def main(argv: list[str] | None = None) -> int:
             env = cmd_bootstrap(s, args.timeout, args.capture)
         elif args.cmd == "label":
             env = cmd_label(s, args.csv, args.out, args.quota, args.seed)
+        elif args.cmd == "closures":
+            env = cmd_closures(s, args.csv, args.out, args.limit)
         elif args.cmd == "score":
             env = cmd_score(s, args.labels)
         elif args.cmd == "selfcheck":
@@ -1094,7 +1257,8 @@ def main(argv: list[str] | None = None) -> int:
             env = cmd_run(s, upload=not args.no_upload,
                           force_browser=args.browser_search,
                           skip_robots=args.i_read_robots,
-                          formats=formats)
+                          formats=formats,
+                          check_closed=args.check_closed)
         elif args.cmd == "notes":
             env = cmd_notes(s, args.csv, args.list_name, args.limit,
                             # NOT `or None`: "" is the caller switching the
@@ -1140,6 +1304,16 @@ def main(argv: list[str] | None = None) -> int:
             code="guardrail_tripped",
             message=str(exc),
             remedy="Wait for the cool-off to expire. Do not retry.",
+        ))
+    except PlacesUnavailable as exc:
+        # Both call sites catch this already. The net is here because
+        # `PlacesUnavailable` subclasses RuntimeError and the fall-through
+        # below answers "re-run with -v", which is the one thing that cannot
+        # help a rejected key -- and #20 adds callers to this module.
+        env = fail(args.cmd, Problem(
+            code="places_unavailable",
+            message=str(exc),
+            remedy=_PLACES_REMEDY,
         ))
     except Exception as exc:
         log.error("Run aborted: %s", exc, exc_info=verbose)
