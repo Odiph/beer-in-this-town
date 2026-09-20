@@ -72,6 +72,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def inspect_state(s: Settings) -> dict[str, Any]:
     """A complete, machine-readable picture of progress. No side effects."""
+    # A file, not a working account. `verify` is what settles that, and the
+    # name is kept only because it is part of the published envelope.
     logged_in = s.storage_state.exists()
     csv_path = _latest("venues_*.csv") or _latest("seed_*.csv")
     kml_path = _latest("venues_*.kml")
@@ -126,6 +128,20 @@ def inspect_state(s: Settings) -> dict[str, Any]:
     }
 
 
+def blocked_on(state: dict[str, Any]) -> str | None:
+    """What a person -- not an agent -- has to do before the loop can go on.
+
+    `next_actions` empties for two completely different reasons: the work is
+    finished, or it cannot proceed without a human. AGENTS.md says an empty
+    list is the end of the loop and not an error, which is true in both
+    cases, and useless to an agent that has to report why it stopped. This
+    names it.
+    """
+    if not state["logged_in"]:
+        return "sign_in"
+    return None
+
+
 def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
     """Literal commands to run next. Ordered; the first one is the recommendation.
 
@@ -146,12 +162,19 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
     # building a five-venue corpus that looks like a completed scrape --
     # and the diff, the baseline and the KML are then all wrong together.
     #
-    # `selfcheck` is the honest first action instead: two requests, no
-    # account needed, and it proves the tool can still read the site. What
-    # actually unblocks the user is `ui`, which opens a browser and waits
-    # for a person, so it belongs in hints where nothing will execute it.
+    # Handing back `selfcheck` here was worse: nothing selfcheck does changes
+    # `logged_in`, so an agent following the loop in AGENTS.md -- run the
+    # first action, re-read status, repeat -- ran it forever. The previous
+    # `run` at least terminated, badly. A non-terminating loop is the worse
+    # of the two.
+    #
+    # AGENTS.md already defines the right answer: an empty list is the end of
+    # the loop, not an error. Being blocked on a human IS the end of the
+    # loop, and `data.blocked_on` says so in a field an agent can branch on.
+    # `verify` is what an agent runs afterwards to find out whether the human
+    # actually finished.
     if not state["logged_in"]:
-        return ["python -m beer_in_this_town selfcheck --json"]
+        return []
 
     if state["latest_csv"] and state["latest_kml"]:
         # Nothing further an agent should start on its own. An empty list is
@@ -170,12 +193,16 @@ def hints(state: dict[str, Any], s: Settings) -> list[str]:
     """What a person might want to do next. Never executed by anything."""
     if not state["logged_in"]:
         return [
-            "No saved session. Run `beertown ui` yourself -- it opens a "
+            "Blocked on a person: this needs a password, so no agent can do "
+            "it. Run `beertown ui` yourself -- it opens a "
             "dashboard that signs you in and then tests both accounts "
             "for real, rather than trusting a cookie means they work.",
             "Both accounts matter, not just Google. Signed out of Untappd, "
             "search stops at 5 results, so a run would build a five-venue "
             "corpus and report it as a finished scrape.",
+            "Once that is done, `python -m beer_in_this_town verify --json` "
+            "checks both accounts for real and needs no browser -- an agent "
+            "can run it to find out whether the sign-in actually took.",
         ]
 
     out: list[str] = []

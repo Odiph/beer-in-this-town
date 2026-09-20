@@ -7,6 +7,17 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `verify`: test both accounts for real from the CLI — headless, read-only,
+  always returns. The dashboard blocks on a person, which is right for a
+  sign-in and wrong for everything else: an agent still needs to know whether
+  the sign-in took, and had no way to ask. `ran` is reported beside `ok`, so
+  "the check could not run" is never read as "signed out".
+- **Fixed a non-terminating agent loop.** `status` handed a signed-out user
+  `selfcheck`, and nothing selfcheck does changes the session — so the loop in
+  AGENTS.md ran it forever. It now returns an empty `next_actions`, which that
+  document already defines as the end of the loop, plus a new
+  `data.blocked_on` naming *why* it ended: `null` for finished, `"sign_in"`
+  for waiting on a human. Additive field, no schema bump.
 - A bare `beertown` opens the dashboard. Typing the program's name is the
   first thing a new user does, and it used to answer with an argparse error --
   a poor first impression from a tool whose whole first-run story is a

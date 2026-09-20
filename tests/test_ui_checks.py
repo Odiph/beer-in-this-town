@@ -240,7 +240,36 @@ def test_a_user_with_no_session_is_not_sent_to_run(blank):
     assert state["logged_in"] is False
     assert not any("run " in a for a in actions), \
         "a signed-out user was pointed at run"
-    assert actions == ["python -m beer_in_this_town selfcheck --json"]
+
+
+@pytest.mark.unit
+def test_the_agent_loop_terminates_when_it_needs_a_human(blank):
+    """The loop in AGENTS.md is: run the first action, re-read, repeat.
+
+    Handing back `selfcheck` looked helpful and was worse than the `run` it
+    replaced: nothing selfcheck does changes `logged_in`, so the loop never
+    ended. An empty list is what AGENTS.md defines as the end, and being
+    blocked on a password is the end.
+    """
+    from beer_in_this_town.state import blocked_on, inspect_state, next_actions
+
+    state = inspect_state(blank)
+    for _ in range(3):                      # the loop, three times round
+        assert next_actions(state, blank) == [], \
+            "the agent loop does not terminate"
+
+    assert blocked_on(state) == "sign_in", \
+        "an empty list with no reason is indistinguishable from finished"
+
+
+@pytest.mark.unit
+def test_an_agent_is_told_how_to_check_the_sign_in_took(blank):
+    """`ui` blocks on a person; `verify` is the part an agent can run."""
+    from beer_in_this_town.state import hints, inspect_state
+
+    said = " ".join(hints(inspect_state(blank), blank))
+    assert "verify --json" in said
+    assert "no agent can do it" in said
 
 
 @pytest.mark.unit
