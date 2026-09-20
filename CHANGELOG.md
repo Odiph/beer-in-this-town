@@ -7,6 +7,18 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `label` and `score`: a measurement harness for the venue heuristics, so
+  thresholds stop being guesses with numbers attached. `classify.py` holds
+  candidate rules for venue kind, closed venues and private spaces, and is
+  deliberately **not** wired into `run` — a classifier merged without
+  measurement produces plausible output, is wrong at an unknown rate, and
+  nothing raises, which is the failure `corpus_quality_gate` and the raising
+  selectors exist to prevent. Sampling takes a fixed quota per bucket, rare
+  ones included, and scoring reweights by inverse sampling probability so the
+  numbers describe the whole scrape. Error rates are reported by direction —
+  a private space kept is someone's front door on a shared map; a real venue
+  dropped costs one bar to re-add — and never averaged into one accuracy
+  figure.
 - `--format kml,geojson,gpx` on `run`. The everyday-map use case — the thing
   the project is actually for — had only two routes: a My Maps layer that gives
   up the everyday-map pins, or `pin`, which gets them back by automating a UI

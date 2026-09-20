@@ -51,6 +51,8 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `search_login_required` | Untappd's sign-in wall cut the search short (anonymous search stops at 5) | Ask the human to sign in to Untappd in the browser profile. `bootstrap` only detects a Google session, so it cannot confirm this one. |
 | `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Not per-venue — check the key and billing, or unset it for Nominatim. Nothing was written. |
 | `csv_missing` | No input data | Run `run` first. |
+| `labels_incomplete` | A sampled bucket came back with no labels | Ask the human to label a few rows in every bucket. The rare ones are the point. |
+| `labels_unusable` | The sheet lost its bucket-size header | Re-generate with `label` and copy the answers across. |
 | `notes_failed` | The notes pass failed | Re-run; progress resumes. |
 | `interrupted` | Ctrl-C | Re-run the same command; progress is journalled. |
 | `unexpected_error` | Unhandled | Re-run with `-v` for a traceback. |
@@ -79,6 +81,26 @@ trial it with `--limit` first.
 
 It only annotates places already in the target list; anything else is recorded
 as `not-in-list` and left alone. A note that already matches is never rewritten.
+
+## The `label` and `score` commands
+
+`classify.py` holds candidate heuristics for venue kind, closed venues and
+private spaces. **None of them are wired into `run`**, and none should be until
+they have been measured. `label` emits a stratified sample for a human to
+judge; `score` reports the error rates by direction.
+
+Both are read-only, offline and touch no account, so an agent may run them
+freely. What an agent must **not** do is fill in the labels: the whole point is
+a human judgement the classifier can be checked against, and a model labelling
+its own classifier's output measures nothing.
+
+Sampling takes a fixed quota per bucket, rare ones included, and `score`
+divides that back out. Two consequences worth knowing:
+
+- Labelling only the easy rows breaks the weighting. `score` refuses a bucket
+  with no labels and warns about thin ones, but cannot detect cherry-picking.
+- A CSV with no `category` column makes every kind prediction `unsettled`, so
+  the kind measurement says nothing. `label` warns when it sees this.
 
 ## Idempotency
 
