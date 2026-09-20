@@ -118,7 +118,7 @@ machine.
 
 # The setup and closure branch
 
-Nine more commits, on `feat/places-closure-check` (PR #23). Same rule as
+11 more commits, on `feat/places-closure-check` (PR #23). Same rule as
 above: ordered by what it costs if it is wrong, not by when it was written.
 
 One idea runs through all of them, and it is worth having before the diff:
