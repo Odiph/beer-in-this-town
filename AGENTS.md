@@ -40,7 +40,10 @@ stderr. Parse stdout; ignore stderr unless debugging.
 - `hints` — prose for a human: what only a person can decide to do next.
   Nothing executes this, and an agent must not treat it as a next action.
 - `error` — present only on failure. Always carries `code` and `remedy`.
-- `schema_version` — treat a change as breaking.
+- `schema_version` — treat a change as breaking. **New fields are not a
+  change**: `data`, `warnings`, `hints` and `next_actions` gain keys without a
+  bump, so read them defensively and ignore what you do not recognise. A field
+  being *removed* or *renamed*, or an existing one changing meaning, bumps it.
 
 `--json` works before or after the subcommand.
 
