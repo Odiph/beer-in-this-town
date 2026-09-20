@@ -7,6 +7,28 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `ui`: a localhost setup dashboard for a first-time user. Connects Google and
+  Untappd in one Chrome window, then **verifies both with a real round-trip**
+  before calling either connected — a headless Maps load for Google, one
+  authenticated request for Untappd. Detection and verification are separate
+  tiers and the panel says which one a row rests on, because a cookie on disk
+  is evidence a login once happened, not that the account works now. Until
+  this, a stale Untappd session first announced itself as
+  `search_login_required` a hundred requests into a run.
+
+  Every slow action narrates itself as it runs — including the pacing waits,
+  so a deliberate delay does not read as a hang. One job at a time: two
+  sign-ins sharing one Chrome profile can corrupt it.
+
+  `profile_has_untappd_session` is new, and answers yes/no/**unknown**: the
+  cookie-name list behind it is a guess rather than something verified against
+  a live login, so a miss reports as unknown instead of as "signed out".
+
+  The server can capture a Google session, so it is locked down accordingly:
+  `127.0.0.1` only, a per-start key required on every API call and delivered
+  in the URL fragment, a `Host` allow-list against DNS rebinding, and
+  cross-site `Origin` refused. No route on it can `pin` or write `notes` —
+  that absence is the guardrail the other four back up. Stdlib only.
 - `closures`, and `run --check-closed`: ask the Google Places API whether a
   venue still trades, and record it in a new `business_status` CSV column.
   Untappd's venue database is append-only in practice, so a bar that shut in

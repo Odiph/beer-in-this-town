@@ -132,6 +132,20 @@ divides that back out. Two consequences worth knowing:
 - A CSV with no `category` column makes every kind prediction `unsettled`, so
   the kind measurement says nothing. `label` warns when it sees this.
 
+## The `ui` command
+
+Serves a setup dashboard on localhost and **blocks until interrupted**. It is
+for a human at a keyboard: it opens a browser, waits on a sign-in, and has no
+useful envelope until it exits.
+
+Do not run it. An agent that starts it will hang. When a user needs to connect
+or re-connect an account, tell them to run `beertown ui` themselves — the same
+way `bootstrap` is theirs to run.
+
+What it is useful for knowing: it can tell a signed-out Untappd session from a
+working one *before* a run, which is the condition behind
+`search_login_required`. If a run fails that way, that is the thing to suggest.
+
 ## The `closures` command
 
 Asks the Google Places API whether each venue in a CSV still trades, and writes

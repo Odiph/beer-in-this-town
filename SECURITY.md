@@ -37,6 +37,20 @@ Worth understanding before you run it:
   holds the place id, display name, types and status for each venue queried --
   Google's description of a public business, not anything about you.
 
+- **The setup dashboard (`ui`).** It opens a local HTTP server that can launch
+  Chrome on your profile and write `storage_state.json`, so it is the most
+  sensitive surface here. "Localhost" is not a boundary — any page in your
+  browser can send requests to `127.0.0.1` — so it carries four independent
+  protections: it binds `127.0.0.1` only; every API request needs a random
+  key minted at startup and handed over in the URL fragment, which browsers
+  never send in a `Referer`; the `Host` header is checked against an
+  allow-list, which is what stops DNS rebinding; and a cross-site `Origin` is
+  refused outright.
+
+  The strongest protection is what is absent: there is no route on that server
+  that can `pin` or write `notes`. Nothing it serves reaches off-machine, and
+  its page is served with `default-src 'none'`.
+
 ## What it does not do
 
 - No credentials are handled in code. The login happens in a real browser window

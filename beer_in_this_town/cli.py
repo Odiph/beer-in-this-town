@@ -76,6 +76,7 @@ from .places import PlacesUnavailable, resolve_closures
 from .places import counts as closure_counts
 from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
 from .state import hints, inspect_state, next_actions, record_run
+from .ui.server import DEFAULT_PORT as UI_DEFAULT_PORT
 
 log = logging.getLogger("beer_in_this_town")
 
@@ -529,6 +530,30 @@ def cmd_closures(s: Settings, csv_path: str, out: str | None,
                + (f" (+{len(closed) - 5} more)" if len(closed) > 5 else "")]
               if closed else []),
         ],
+    )
+
+
+def cmd_ui(s: Settings, port: int, open_browser: bool) -> Envelope:
+    """Serve the setup dashboard on localhost until interrupted.
+
+    Blocks. The envelope is printed on the way out, so `--json` describes the
+    session that just ended rather than one about to start.
+    """
+    from .ui import serve
+
+    try:
+        url = serve(s, port=port, open_browser=open_browser)
+    except OSError as exc:
+        return fail("ui", Problem(
+            code="port_unavailable",
+            message=f"Could not bind port {port}: {exc}",
+            remedy="Something is already using it. Pass --port with another "
+                   "number, or stop the other dashboard.",
+        ))
+    return Envelope(
+        command="ui", ok=True, data={"url": url},
+        hints=["The dashboard connects and tests accounts. It cannot pin or "
+               "write notes -- those have no route on that server."],
     )
 
 
@@ -1165,6 +1190,18 @@ def build_parser() -> argparse.ArgumentParser:
                        help="sampling seed; the same seed regenerates the same "
                             "sheet")
 
+    ui = sub.add_parser(
+        "ui",
+        parents=[common],
+        help="open the setup dashboard: connect and test your Google and "
+             "Untappd accounts, and watch what the tool is doing",
+    )
+    ui.add_argument("--port", type=int, default=UI_DEFAULT_PORT,
+                    help=f"localhost port (default {UI_DEFAULT_PORT}). Bound "
+                         f"to 127.0.0.1 only.")
+    ui.add_argument("--no-open", action="store_true",
+                    help="do not open a browser; just print the URL")
+
     closures = sub.add_parser(
         "closures",
         parents=[common],
@@ -1235,6 +1272,8 @@ def main(argv: list[str] | None = None) -> int:
             env = cmd_bootstrap(s, args.timeout, args.capture)
         elif args.cmd == "label":
             env = cmd_label(s, args.csv, args.out, args.quota, args.seed)
+        elif args.cmd == "ui":
+            env = cmd_ui(s, args.port, open_browser=not args.no_open)
         elif args.cmd == "closures":
             env = cmd_closures(s, args.csv, args.out, args.limit)
         elif args.cmd == "score":

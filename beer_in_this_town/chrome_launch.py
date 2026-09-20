@@ -104,17 +104,26 @@ GOOGLE_SESSION_COOKIES = (
     "SID", "SSID", "HSID", "APISID", "SAPISID", "__Secure-1PSID",
 )
 
+# Unverified against a real login, unlike the Google list above, which was.
+# So `profile_has_untappd_session` answers "unknown" rather than "no" when it
+# finds untappd.com cookies but none of these -- a wrong "no" sends the user
+# round a login loop they have already completed, which is the same mistake
+# the None-means-unknown rule above exists to prevent.
+UNTAPPD_SESSION_COOKIES = (
+    "untappd_user_v3_e", "untappd_user_v3", "untappd_session",
+    "_untappd_session", "untappd_sess",
+)
 
-def profile_has_google_session(profile_dir: Path) -> bool | None:
-    """Is there a Google session in this profile's cookie store?
 
-    Returns None when the answer cannot be determined — typically because
-    Chrome is running and holds the database. Callers must treat None as
-    "unknown", never as "no": reporting a missing login when we simply could
-    not read the file would send the user round the login loop for nothing.
+def _count_cookies(profile_dir: Path, host_like: str,
+                   names: tuple[str, ...] | None) -> int | None:
+    """How many cookies match, or None when the store cannot be read.
 
     Only cookie NAMES are inspected. Values are encrypted and we neither need
-    nor want them.
+    nor want them. `names=None` counts every cookie on the host.
+
+    None means Chrome is running and holds the database, or the profile has
+    no store yet. Callers must treat it as "unknown", never as "no".
     """
     import shutil
     import sqlite3
@@ -134,18 +143,55 @@ def profile_has_google_session(profile_dir: Path) -> bool | None:
             shutil.copy2(store, copy)
             con = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
             try:
-                placeholders = ",".join("?" * len(GOOGLE_SESSION_COOKIES))
-                row = con.execute(
-                    "SELECT count(*) FROM cookies "
-                    "WHERE host_key LIKE '%google.com' "
-                    f"AND name IN ({placeholders})",
-                    GOOGLE_SESSION_COOKIES,
-                ).fetchone()
+                sql = "SELECT count(*) FROM cookies WHERE host_key LIKE ?"
+                params: list[object] = [host_like]
+                if names is not None:
+                    sql += f" AND name IN ({','.join('?' * len(names))})"
+                    params.extend(names)
+                row = con.execute(sql, params).fetchone()
             finally:
                 con.close()
         except (OSError, sqlite3.Error):
             return None  # locked or mid-write: unknown, not absent
-    return bool(row and row[0])
+    return int(row[0]) if row else 0
+
+
+def profile_has_google_session(profile_dir: Path) -> bool | None:
+    """Is there a Google session in this profile's cookie store?
+
+    Returns None when the answer cannot be determined — typically because
+    Chrome is running and holds the database. Callers must treat None as
+    "unknown", never as "no": reporting a missing login when we simply could
+    not read the file would send the user round the login loop for nothing.
+    """
+    hits = _count_cookies(profile_dir, "%google.com", GOOGLE_SESSION_COOKIES)
+    return None if hits is None else bool(hits)
+
+
+def profile_has_untappd_session(profile_dir: Path) -> bool | None:
+    """Is there an Untappd session in this profile?
+
+    Three outcomes, and the third is the point. `True` means a known session
+    cookie is present. `False` means the profile has never been to untappd.com
+    at all, which is a real answer. `None` means either the store could not be
+    read, **or** there are untappd.com cookies but none whose name is in the
+    candidate list — and since that list is a guess rather than something
+    verified against a live login, saying "not signed in" on its strength
+    would be exactly the confidently-wrong answer this project keeps refusing
+    to give. Unknown is reported as unknown.
+
+    This is the check `bootstrap` never had, which is why an anonymous search
+    could only fail later with `search_login_required`.
+    """
+    known = _count_cookies(profile_dir, "%untappd.com", UNTAPPD_SESSION_COOKIES)
+    if known is None:
+        return None
+    if known:
+        return True
+    any_cookie = _count_cookies(profile_dir, "%untappd.com", None)
+    if any_cookie is None:
+        return None
+    return False if any_cookie == 0 else None
 
 
 def launch_for_login(

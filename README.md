@@ -125,6 +125,30 @@ Places API Text Search Pro SKU — 5,000 lookups a month free, then $25.60 per
 already resolved. At a hundred venues a week you will not leave the free
 tier, but billing must be enabled on the key.
 
+## Start here
+
+```bash
+beertown ui
+```
+
+Opens a dashboard on `localhost` that walks you through the one-time setup:
+Chrome, your Google account, your Untappd account. It signs you in, then
+**tests both accounts with a real round-trip** — and only calls them connected
+once that passes.
+
+That distinction is the point. A cookie on disk means a login happened once,
+not that the account works now. Before this, a stale Untappd session announced
+itself as `search_login_required` a hundred requests into a run; the dashboard
+finds it in one.
+
+While anything is running, the page narrates what it's doing and why it's
+taking as long as it is — including the pacing waits, which are deliberate.
+
+The dashboard **cannot write to your Google account**. `pin` and `notes` have
+no button there and no route on that server. It binds to `127.0.0.1` only and
+needs the key from the URL the terminal prints; [SECURITY.md](SECURITY.md)
+explains why a local server that can capture a session needs that much care.
+
 ## Install
 
 ```bash
@@ -332,6 +356,7 @@ legal advice. You are responsible for your own use of it.
 | `doctor` | Dependencies, session, geocoder | no |
 | `bootstrap` | One-time login (opens a real Chrome) | reads |
 | `selfcheck` | Two requests: are the venue *and search* selectors alive | no |
+| `ui` | Setup dashboard: connect and test your accounts | reads |
 | `run` | Collect → CSV + map files + diff | no |
 | `closures` | Ask Google Places whether each venue still trades | no |
 | `pin` | Save into a Google Maps list | **writes** |
