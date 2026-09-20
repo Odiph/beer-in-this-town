@@ -107,9 +107,8 @@ class EnvelopeParser(argparse.ArgumentParser):
 
 def _requested_command() -> str:
     """The subcommand from argv, for an envelope built before parsing finished."""
-    known = {"status", "doctor", "bootstrap", "selfcheck", "run", "pin",
-             "notes", "label", "score"}
-    return next((a for a in sys.argv[1:] if a in known), "beer-in-this-town")
+    return next((a for a in sys.argv[1:] if a in _SUBCOMMANDS),
+                "beer-in-this-town")
 
 
 def at_least(floor: float, what: str):
@@ -1247,8 +1246,49 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# Every subcommand name, so a bare invocation can be told from a mistyped one.
+_SUBCOMMANDS = frozenset({
+    "status", "doctor", "bootstrap", "selfcheck", "run", "pin", "notes",
+    "label", "score", "closures", "ui",
+})
+
+
+def wants_dashboard(raw: list[str], isatty: bool) -> bool:
+    """Should `beertown` with no subcommand open the dashboard?
+
+    A first-time user types the program's name. Answering that with an
+    argparse error is the worst possible first impression from a tool whose
+    whole first-run story is a dashboard that explains itself -- so a bare
+    invocation opens it.
+
+    Three guards, because `ui` blocks forever and AGENTS.md tells an agent not
+    to run it. Any of them failing falls back to the ordinary envelope error:
+
+      * `--json` asks for the machine contract, and a blocking server is not
+        an envelope. An agent calling `beertown --json` must get its error,
+        not a hung process.
+      * A non-tty means output is piped or captured -- automation, a CI step,
+        a subprocess -- none of which can close a browser window.
+      * Anything that looks like an actual request (a subcommand, a typo, or
+        --help) is still answered as asked. Silently swallowing a mistyped
+        subcommand into the dashboard would hide the typo.
+    """
+    if not isatty:
+        return False
+    for token in raw:
+        if token in ("--json", "-h", "--help"):
+            return False
+        if not token.startswith("-"):
+            return False  # a subcommand, or a typo that deserves its error
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if wants_dashboard(raw, sys.stdout.isatty()):
+        log.info("No command given -- opening the setup dashboard.")
+        raw = [*raw, "ui"]
+    args = build_parser().parse_args(raw)
     # SUPPRESS means the attribute is absent unless the flag was passed.
     as_json = getattr(args, "json", False)
     verbose = getattr(args, "verbose", False)
