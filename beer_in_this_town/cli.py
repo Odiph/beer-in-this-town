@@ -31,7 +31,7 @@ from .export import (
     write_diff_outputs,
     write_kml,
 )
-from .geocode import geocode_missing
+from .geocode import GeocoderUnavailable, geocode_missing
 from .guardrails import AlreadyRunning, Tripped
 from .http_client import (
     BudgetExceeded,
@@ -341,7 +341,20 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
                    "Nothing was written -- this is the gate working.",
         ), venues_scraped=len(venues))
 
-    venues = geocode_missing(venues, s)
+    try:
+        venues = geocode_missing(venues, s)
+    except GeocoderUnavailable as exc:
+        # Nothing has been written yet, same as the corpus gate above. A KML
+        # missing most of its pins because a key was rejected is worse than no
+        # KML at all, because it looks like a finished run.
+        return fail("run", Problem(
+            code="geocoder_unavailable",
+            message=str(exc),
+            remedy="Check GOOGLE_GEOCODING_KEY and that billing is enabled on "
+                   "it, or unset it to fall back to Nominatim. If no key is "
+                   "set, check connectivity -- Nominatim may be throttling or "
+                   "blocking this client. Nothing was written.",
+        ), venues_scraped=len(venues))
 
     csv_path = write_csv(venues, DATA_DIR / f"venues_{s.query}_{stamp}.csv")
     kml_path = write_kml(venues, DATA_DIR / f"venues_{s.query}_{stamp}.kml", s.map_title)

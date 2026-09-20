@@ -24,6 +24,16 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   exactly one list, by rename, with a warning naming the assumption.
 - `status` reads an unscoped journal for reporting rather than showing zero
   saved places to someone who has dozens, and labels it as pre-upgrade.
+- A rejected or unbilled geocoding key degraded quietly. `_google` raised on
+  REQUEST_DENIED and OVER_QUERY_LIMIT with a comment saying to surface them
+  rather than quietly degrade, and its only caller wrapped every call in
+  `except Exception: continue`. The result was a KML with a handful of pins
+  instead of a hundred, reported as a successful run. Geocoder failures are now
+  their own exception, abort before anything is written, and report
+  `geocoder_unavailable`. Per-venue misses stay swallowed, as they should be.
+- Every lookup failing is now treated as systemic rather than as a hundred
+  unlucky addresses, so a blocked or unreachable Nominatim — the default path,
+  with no key involved — fails loudly too.
 - Search-result cards were read positionally, so a venue with no category line
   had its address filed as its category and its city filed as its address — a
   CSV that looked entirely reasonable and was entirely wrong. Lines are now
