@@ -47,7 +47,8 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `list_missing` | Target saved list does not exist | Ask the human to create it, or pick another `--list`. |
 | `robots_disallow` | robots.txt forbids the paths | **Stop and ask.** Do not pass `--i-read-robots` on your own initiative. |
 | `corpus_quality_gate` | <90% of venues parsed cleanly | Read `debug/*.html`, fix selectors in `parsers.py`, re-run. Nothing was written. |
-| `selectors_stale` | `selfcheck` could not parse a known-good page | Same as above. This is the cheap early warning. |
+| `selectors_stale` | `selfcheck` could not parse a known-good page, or neither search path parsed during `run` | Same as above. From `selfcheck` this is the cheap early warning; note it only covers venue detail pages, not search. |
+| `search_login_required` | Untappd's sign-in wall cut the search short (anonymous search stops at 5) | Ask the human to sign in to Untappd in the browser profile. `bootstrap` only detects a Google session, so it cannot confirm this one. |
 | `csv_missing` | No input data | Run `run` first. |
 | `notes_failed` | The notes pass failed | Re-run; progress resumes. |
 | `interrupted` | Ctrl-C | Re-run the same command; progress is journalled. |

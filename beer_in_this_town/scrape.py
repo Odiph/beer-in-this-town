@@ -8,12 +8,18 @@ genuinely new venue IDs, and falls back to driving a real browser if none work.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 
 from .config import SEARCH_URL, Settings
 from .http_client import BudgetExceeded, PoliteClient, RateLimitTripped
 from .models import Venue, VenueRef
-from .parsers import ParseError, parse_search_page, parse_venue_stats
+from .parsers import (
+    ClientRenderedSearch,
+    ParseError,
+    parse_search_page,
+    parse_venue_stats,
+)
 
 log = logging.getLogger(__name__)
 
@@ -22,8 +28,38 @@ PAGINATION_PARAMS = ("offset", "start", "page")
 PAGE_SIZE_GUESS = 25
 
 
+# Anonymous Algolia search returns five results and then swaps Show More for a
+# sign-in wall. Match the container id and the copy: either alone is enough.
+LOGIN_GATE_RE = re.compile(
+    r"algolia-login-gate|please sign in to view more", re.IGNORECASE
+)
+
+
 class PaginationUnsupported(RuntimeError):
     """None of the HTTP pagination schemes produced new results."""
+
+
+class SearchLoginRequired(RuntimeError):
+    """Search stopped early at Untappd's sign-in wall, not at the last result."""
+
+
+def assert_not_login_gated(
+    refs: list[VenueRef], html: str, target_count: int
+) -> None:
+    """Refuse a result set that a sign-in wall cut short.
+
+    Five venues out of a requested hundred is a stopped run, and returning it
+    quietly writes a five-row CSV, reports ok, and lets every downstream number
+    be wrong by a factor of twenty. A short set is only trustworthy when
+    nothing was blocking the way.
+    """
+    if len(refs) >= target_count or not LOGIN_GATE_RE.search(html):
+        return
+    raise SearchLoginRequired(
+        f"Search stopped at {len(refs)} of {target_count} requested venues "
+        f"because Untappd replaced Show More with a sign-in wall. Anonymous "
+        f"search is capped at five results."
+    )
 
 
 def _dedupe_extend(acc: dict[str, VenueRef], refs: list[VenueRef]) -> int:
@@ -127,6 +163,7 @@ def search_via_browser(s: Settings) -> list[VenueRef]:
 
     refs = parse_search_page(html)
     log.info("Browser search collected %d venues", len(refs))
+    assert_not_login_gated(refs, html, s.target_count)
     return refs[: s.target_count]
 
 
@@ -140,13 +177,20 @@ def collect_venue_refs(
     except PaginationUnsupported as exc:
         log.warning("%s", exc)
         return search_via_browser(s)
+    except ClientRenderedSearch as exc:
+        # The routine case since Untappd moved search to Algolia: the HTTP
+        # response is the container and nothing else. Expected, so it is not a
+        # warning -- it is what the browser path exists for.
+        log.info("%s Falling back to the browser path.", exc)
+        return search_via_browser(s)
     except ParseError as exc:
-        # Untappd now renders search results client-side (Algolia), so the
-        # HTTP response carries an empty #algolia-hits container and nothing
-        # to parse. That is not a fatal condition -- it is exactly what the
-        # browser path exists for, so fall back instead of aborting the run.
-        log.warning("Search page had no parseable results (%s); "
-                    "falling back to the browser path.", exc)
+        # Something else about the search page stopped parsing. The browser
+        # re-parses with the same strict selectors, so this is an attempt, not
+        # a workaround; if the markup really changed it fails there too.
+        log.warning(
+            "Search page did not parse (%s). Trying the browser path, which "
+            "applies the same strict selectors.", exc,
+        )
         return search_via_browser(s)
 
 

@@ -41,6 +41,17 @@ class ParseError(RuntimeError):
     """The page did not look the way we require it to look."""
 
 
+class ClientRenderedSearch(ParseError):
+    """The search page arrived as an empty Algolia shell.
+
+    Untappd renders search results client-side, so an HTTP fetch gets the
+    container and none of the rows. That is the page working as designed, not a
+    selector that broke -- it is precisely what the browser path exists for.
+    Filing it as a parse failure would dump a debug/ artifact on every
+    successful run and bury the dumps that mean something.
+    """
+
+
 def dump_debug(name: str, html: str) -> None:
     DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     path = DEBUG_DIR / f"{name}.html"
@@ -163,14 +174,24 @@ def parse_search_page(html: str, *, strict: bool = True) -> list[VenueRef]:
     soup = BeautifulSoup(html, "lxml")
     items = soup.select(".beer-item")
     if not items:
-        if strict:
-            dump_debug("search_page_no_items", html)
-            raise ParseError(
-                "No .beer-item nodes on the search page. Either the query "
-                "returned nothing, you are logged out and hit an interstitial, "
-                "or the markup changed. See debug/search_page_no_items.html."
+        if not strict:
+            return []
+        # Distinguish "this page needs JavaScript" from "this page changed
+        # shape". Both used to raise the same error and dump the same file, so
+        # the routine case drowned out the one worth reading.
+        if soup.select_one("#algolia-hits") is not None:
+            raise ClientRenderedSearch(
+                "The search page carries an empty #algolia-hits container: "
+                "results are rendered client-side and cannot be read over "
+                "plain HTTP."
             )
-        return []
+        dump_debug("search_page_no_items", html)
+        raise ParseError(
+            "No .beer-item nodes and no #algolia-hits container on the search "
+            "page. Either the query returned nothing, you are logged out and "
+            "hit an interstitial, or the markup changed. See "
+            "debug/search_page_no_items.html."
+        )
 
     refs: list[VenueRef] = []
     for item in items:
