@@ -22,11 +22,25 @@ Worth understanding before you run it:
 - **Geocoding.** If `GOOGLE_GEOCODING_KEY` is set, venue addresses are sent to
   Google. Otherwise Nominatim (OpenStreetMap) is used. No key is ever written to
   disk by this tool; it is read from the environment.
+- **The closure check.** If `GOOGLE_PLACES_KEY` is set *and* you ask for the
+  check -- `closures`, or `run --check-closed` -- each venue's name, address
+  and city are sent to the Google Places API to read its `businessStatus`.
+  Nothing is sent without that flag or that command, and a key alone does not
+  start it.
+
+  This is a deliberately separate key from `GOOGLE_GEOCODING_KEY`, and the
+  separation is a privacy control rather than a billing convenience: sending an
+  address to place a pin and sending it to ask Google what the business there
+  is are different disclosures, and you can do the first without the second.
+
+  The reply is cached in `state/places_cache.json`, which is gitignored. It
+  holds the place id, display name, types and status for each venue queried --
+  Google's description of a public business, not anything about you.
 
 ## What it does not do
 
 - No credentials are handled in code. The login happens in a real browser window
   that you drive; the tool only reads cookie *names* to detect whether a session
   exists (see `chrome_launch.py`).
-- No telemetry, no network calls other than to Untappd, Google Maps, and your
-  chosen geocoder.
+- No telemetry, no network calls other than to Untappd, Google Maps, your
+  chosen geocoder, and -- only when you ask for it -- the Places API.

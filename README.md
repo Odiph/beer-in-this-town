@@ -87,6 +87,43 @@ change that:
 |---|---|
 | `GOOGLE_GEOCODING_KEY` | Use Google's geocoder instead of Nominatim — faster, and no 1 req/s ceiling. Addresses are then sent to Google; see [SECURITY.md](SECURITY.md). |
 | `NOMINATIM_EMAIL` | Sent as the contact address OSM's usage policy asks for. Unset, requests identify as `no-contact-set`. |
+| `GOOGLE_PLACES_KEY` | Enables the closure check (`closures`, `run --check-closed`). Separate from the geocoding key on purpose — see [SECURITY.md](SECURITY.md). |
+
+### Is this place still open?
+
+Untappd's venue database is append-only in practice, so a bar that shut in
+2019 keeps its page, its check-in history and its stats — and since `run`
+ranks on those stats, a long-dead venue outranks a good one that opened last
+year. For trip planning that is the failure you find out about on the
+pavement.
+
+```bash
+beertown closures --csv data/venues_london_2026-09-20.csv --limit 3 --json
+beertown closures --csv data/venues_london_2026-09-20.csv --json
+```
+
+That asks the Google Places API for each venue's `businessStatus` and writes
+a `business_status` column into a **new** CSV (`data/checked_<name>.csv`) —
+the input is never overwritten. `run --check-closed` does the same thing
+inline, and is off by default.
+
+Two things worth knowing before you rely on it:
+
+- **Closed venues are flagged, not removed.** Nothing downstream drops them.
+  What to do about a venue Google calls shut is your call, and `run` uploads
+  to My Maps, so a silent deletion would be invisible.
+- **A venue Places cannot find is recorded as `unmatched`, never as closed.**
+  A failed lookup means the place closed, was renamed, is too new, or Places
+  simply lacks it — four cases wanting opposite outcomes, so none is picked.
+  The cost is that a venue which quietly shut and was delisted survives as
+  unknown. That is the better trade: a false closure deletes a real bar from
+  your map.
+
+Cost: `businessStatus` is a Pro field on Text Search, so this bills the
+Places API Text Search Pro SKU — 5,000 lookups a month free, then $25.60 per
+1,000. Results are cached in `state/`, so re-running costs nothing for venues
+already resolved. At a hundred venues a week you will not leave the free
+tier, but billing must be enabled on the key.
 
 ## Install
 
@@ -296,6 +333,7 @@ legal advice. You are responsible for your own use of it.
 | `bootstrap` | One-time login (opens a real Chrome) | reads |
 | `selfcheck` | Two requests: are the venue *and search* selectors alive | no |
 | `run` | Collect → CSV + map files + diff | no |
+| `closures` | Ask Google Places whether each venue still trades | no |
 | `pin` | Save into a Google Maps list | **writes** |
 | `notes` | Write stats into each place's note | **writes** |
 | `label` | Emit a sample to check the venue filters by hand | no |

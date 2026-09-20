@@ -82,6 +82,13 @@ class Settings:
     nominatim_email: str | None = None
     nominatim_delay_s: float = 1.1  # OSM policy: max 1 req/sec
 
+    # --- closure check (#7) ---------------------------------------------
+    # Deliberately a separate key from geocoding: different SKU, and somebody
+    # may reasonably want coordinates without sending addresses to Places for
+    # classification. Absent means the stage does not run -- never that it
+    # runs and guesses.
+    google_places_key: str | None = None
+
     @staticmethod
     def from_env() -> Settings:
         s = Settings()
@@ -89,6 +96,7 @@ class Settings:
             s,
             user_agent=user_agent_for_installed_chrome(),
             google_geocoding_key=os.environ.get("GOOGLE_GEOCODING_KEY") or None,
+            google_places_key=os.environ.get("GOOGLE_PLACES_KEY") or None,
             nominatim_email=os.environ.get("NOMINATIM_EMAIL") or None,
         )
 

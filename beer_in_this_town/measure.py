@@ -394,13 +394,24 @@ def _slug_from_url(url: str | None) -> str:
 def venues_from_csv(path: Path) -> list[Venue]:
     """Rebuild Venues from any CSV this project writes.
 
-    Only the fields the classifier reads are reconstructed; coordinates and
-    geo_source are irrelevant to a labelling pass and are left at their
-    defaults rather than being half-restored.
+    Every column is restored, coordinates included. That was not always true:
+    this used to drop lat/lng on the stated grounds that a labelling pass does
+    not read them. It was correct while `label` was the only caller and became
+    a data-loss bug the moment `closures` wrote a full CSV back out -- the
+    round trip silently blanked the geocoding, and a KML built from the result
+    would have had no pins at all. `label` never read them, so restoring them
+    costs it nothing.
     """
     def number(value: str | None) -> int | None:
         text = (value or "").strip().replace(",", "")
         return int(text) if text.isdigit() else None
+
+    def coord(value: str | None) -> float | None:
+        text = (value or "").strip()
+        try:
+            return float(text)
+        except ValueError:
+            return None
 
     with path.open(encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.DictReader(fh))
@@ -427,6 +438,16 @@ def venues_from_csv(path: Path) -> list[Venue]:
             unique=number(r.get("unique")),
             monthly=number(r.get("monthly")),
             you=number(r.get("you")),
+            # Absent in every CSV written before #7. Absent means unchecked,
+            # which is the truth about those rows rather than a default.
+            business_status=(r.get("business_status") or "").strip(),
+            lat=coord(r.get("lat")),
+            lng=coord(r.get("lng")),
+            # A row with coordinates but no geo_source column predates that
+            # column; "none" would claim it has no coordinates, which the
+            # exporters read as "do not pin this".
+            geo_source=(r.get("geo_source") or "").strip()
+                       or ("csv" if coord(r.get("lat")) is not None else "none"),
         ))
     return out
 

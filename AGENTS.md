@@ -60,6 +60,8 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `selectors_stale` | `selfcheck` could not parse a known-good venue page or the search page, or neither search path parsed during `run` | Same as above. `selfcheck` is the cheap early warning and covers both surfaces; `data.search` says which shape the search page had. |
 | `search_login_required` | Untappd's sign-in wall cut the search short (anonymous search stops at 5) | Ask the human to sign in to Untappd in the browser profile. `bootstrap` only detects a Google session, so it cannot confirm this one. |
 | `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Not per-venue — check the key and billing, or unset it for Nominatim. Nothing was written. |
+| `places_unavailable` | The Places API is rejected, out of quota, or unreachable | Not per-venue — check `GOOGLE_PLACES_KEY`, that the Places API (New) is enabled, and that billing is on. Nothing was written. |
+| `places_key_missing` | The closure check was asked for with no `GOOGLE_PLACES_KEY` | Ask the human to set one. Do not silently carry on without the check — the venues are unchecked, not open. |
 | `network_unavailable` | Several URLs in a row failed at the transport | Check connectivity, then re-run. The run stopped instead of sleeping through the backoff ladder per venue. |
 | `bad_arguments` | An argument was rejected — most often a pacing value below its floor | **Do not retry with a different number.** The floors are account-safety limits; the message says which one. |
 | `bad_pacing` | `--max-gap` is below `--min-gap` | Pass a real range, or omit both and take the defaults. |
@@ -129,6 +131,31 @@ divides that back out. Two consequences worth knowing:
   reported as a clean result.
 - A CSV with no `category` column makes every kind prediction `unsettled`, so
   the kind measurement says nothing. `label` warns when it sees this.
+
+## The `closures` command
+
+Asks the Google Places API whether each venue in a CSV still trades, and writes
+a `business_status` column into a **new** CSV. `run --check-closed` runs the
+same stage inline and is off by default.
+
+It touches no account and opens no browser, so it is not in the `pin`/`notes`
+category. But it **spends the user's money** — Places Text Search Pro, 5,000
+lookups a month free, then $25.60/1000 — so it is not in the `label`/`score`
+category either, and it is deliberately absent from `next_actions`.
+
+Rules for agents:
+
+1. **Do not run it unasked.** Billing is the user's, and so is the decision to
+   send venue addresses to Google. It is in `hints`, where nothing executes it.
+2. **Trial with `--limit 3` first**, as with `pin`. Report before the bulk.
+3. **`unmatched` is not `closed`.** A venue Places could not find is recorded
+   as `unmatched` and stays visible. Do not report it as closed, do not filter
+   on "not OPERATIONAL", and do not treat a run full of `unmatched` as a
+   finding — that shape usually means the query is wrong, not that a city shut.
+4. **Closed venues are flagged, never dropped.** Removing them is a decision
+   the user makes; `run` uploads to My Maps, so a silent drop is invisible.
+5. `places_key_missing` means stop and ask. It never means carry on unchecked
+   and call the venues open.
 
 ## Idempotency
 
