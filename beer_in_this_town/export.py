@@ -9,12 +9,38 @@ from datetime import date
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from .config import DATA_DIR, STATE_DIR
+from .config import DATA_DIR, STATE_DIR, scope_slug
 from .models import CSV_FIELDS, Venue
 
 log = logging.getLogger(__name__)
 
-PREVIOUS_RUN = STATE_DIR / "previous_run.json"
+# Pre-scoping layout: one baseline for the whole machine. Read once so an
+# upgrade does not look like a brand-new city, then superseded.
+LEGACY_PREVIOUS_RUN = STATE_DIR / "previous_run.json"
+
+
+def baseline_path(query: str) -> Path:
+    """The diff baseline belongs to a city, not to the install.
+
+    A single previous_run.json meant a London run diffed itself against
+    Singapore -- every venue "new", every Singapore venue "gone" -- and then
+    overwrote the Singapore history, which was the only copy.
+    """
+    return STATE_DIR / f"previous_run_{scope_slug(query)}.json"
+
+
+def _read_baseline(query: str) -> dict[str, dict]:
+    path = baseline_path(query)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    if LEGACY_PREVIOUS_RUN.exists():
+        log.info(
+            "No baseline for %r yet; adopting the pre-scoping %s. It will be "
+            "replaced by a per-city one after this run.",
+            query, LEGACY_PREVIOUS_RUN.name,
+        )
+        return json.loads(LEGACY_PREVIOUS_RUN.read_text(encoding="utf-8"))
+    return {}
 
 
 def write_csv(venues: list[Venue], path: Path) -> Path:
@@ -80,12 +106,15 @@ def write_kml(venues: list[Venue], path: Path, title: str) -> Path:
     return path
 
 
-def diff_against_previous(venues: list[Venue]) -> dict[str, list[dict]]:
-    """Compare this run to the last one. Returns new / gone / changed buckets."""
+def diff_against_previous(
+    venues: list[Venue], query: str
+) -> dict[str, list[dict]]:
+    """Compare this run to the last one *for the same city*.
+
+    Returns new / gone / changed buckets.
+    """
     current = {v.ref.venue_id: v.to_row() for v in venues}
-    previous: dict[str, dict] = {}
-    if PREVIOUS_RUN.exists():
-        previous = json.loads(PREVIOUS_RUN.read_text(encoding="utf-8"))
+    previous = _read_baseline(query)
 
     new_ids = current.keys() - previous.keys()
     gone_ids = previous.keys() - current.keys()
@@ -108,13 +137,20 @@ def diff_against_previous(venues: list[Venue]) -> dict[str, list[dict]]:
     }
 
 
-def commit_run(venues: list[Venue]) -> None:
-    """Persist this run as the baseline for the next diff."""
+def commit_run(venues: list[Venue], query: str) -> None:
+    """Persist this run as the baseline for the next diff of this city."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    PREVIOUS_RUN.write_text(
+    baseline_path(query).write_text(
         json.dumps({v.ref.venue_id: v.to_row() for v in venues}, indent=1),
         encoding="utf-8",
     )
+    # The unscoped file has now been superseded. Rename rather than delete:
+    # it is the user's only copy of whatever ran before the upgrade.
+    if LEGACY_PREVIOUS_RUN.exists():
+        superseded = LEGACY_PREVIOUS_RUN.with_suffix(".superseded.json")
+        LEGACY_PREVIOUS_RUN.replace(superseded)
+        log.info("Baselines are now per-city; kept the old one as %s.",
+                 superseded.name)
 
 
 def write_diff_outputs(diff: dict[str, list[dict]], stamp: str) -> None:

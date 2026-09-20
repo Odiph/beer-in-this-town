@@ -26,7 +26,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from .config import STATE_DIR, Settings
+from .config import STATE_DIR, Settings, scope_slug
 from .guardrails import (
     CircuitBreaker,
     Limits,
@@ -37,7 +37,14 @@ from .guardrails import (
 
 log = logging.getLogger(__name__)
 
-NOTE_JOURNAL = STATE_DIR / "noted.json"
+# Pre-scoping layout: one journal for every list on the machine, so a
+# place saved into one list counted as done for all of them.
+LEGACY_NOTE_JOURNAL = STATE_DIR / "noted.json"
+
+
+def journal_path(list_name: str) -> Path:
+    """A journal records what was written to *one* saved list."""
+    return STATE_DIR / f"noted_{scope_slug(list_name)}.json"
 
 # Pacing between notes. Editing a note is a lighter write than creating a
 # save, so this sits between the scraper and `pin`. As in pin_to_list,
@@ -132,15 +139,28 @@ def notes_from_csv(path: Path) -> list[tuple[str, str | None, str]]:
     return out
 
 
-def _load_journal() -> dict[str, str]:
-    if NOTE_JOURNAL.exists():
-        return json.loads(NOTE_JOURNAL.read_text(encoding="utf-8"))
+def _load_journal(list_name: str) -> dict[str, str]:
+    path = journal_path(list_name)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    if LEGACY_NOTE_JOURNAL.exists():
+        # The pre-scoping journal does not record which list it was built for,
+        # so adopting it is a guess. Make it exactly once, by renaming: a
+        # second list inheriting "already saved" entries it never earned would
+        # skip real work and under-deliver in silence.
+        log.warning(
+            "Adopting the pre-scoping noted.json as the journal for %r, on the "
+            "assumption it was built for that list. Any other list starts "
+            "empty. Rename it back if that assumption is wrong.", list_name,
+        )
+        LEGACY_NOTE_JOURNAL.replace(path)
+        return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
-def _save_journal(journal: dict[str, str]) -> None:
+def _save_journal(journal: dict[str, str], list_name: str) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    NOTE_JOURNAL.write_text(
+    journal_path(list_name).write_text(
         json.dumps(journal, indent=1, ensure_ascii=False), encoding="utf-8"
     )
 
@@ -204,7 +224,7 @@ def add_notes(
     breaker = CircuitBreaker(limits.max_consecutive_failures)
     ledger.assert_can_start()
 
-    journal = _load_journal()
+    journal = _load_journal(list_name)
     todo = [
         (n, a, note) for (n, a, note) in places
         if journal.get(journal_key(n, a)) != "ok"
@@ -255,7 +275,7 @@ def add_notes(
                 if not _open_place(page, name, address, region):
                     journal[key] = "not-found"
                     log.warning("  no Google Maps result -- skipped")
-                    _save_journal(journal)
+                    _save_journal(journal, list_name)
                     breaker.record_failure()
                     time.sleep(random.uniform(min_gap_s, max_gap_s))
                     continue
@@ -264,7 +284,7 @@ def add_notes(
                 if heading and not place_matches(name, heading):
                     journal[key] = "ambiguous"
                     log.warning("  Maps opened %r -- skipped", heading)
-                    _save_journal(journal)
+                    _save_journal(journal, list_name)
                     time.sleep(random.uniform(min_gap_s, max_gap_s))
                     continue
 
@@ -274,7 +294,7 @@ def add_notes(
                 if saved_in is None or list_name.lower() not in saved_in.lower():
                     journal[key] = "not-in-list"
                     log.warning("  not in %s -- pin it first", list_name)
-                    _save_journal(journal)
+                    _save_journal(journal, list_name)
                     time.sleep(random.uniform(min_gap_s, max_gap_s))
                     continue
 
@@ -282,7 +302,7 @@ def add_notes(
                 if existing == note:
                     journal[key] = "ok"
                     log.info("  note already correct")
-                    _save_journal(journal)
+                    _save_journal(journal, list_name)
                     continue
 
                 ledger.record_write()
@@ -302,7 +322,7 @@ def add_notes(
                     breaker.record_failure()
                     log.error("  note did not stick (reads %r)", written)
 
-                _save_journal(journal)
+                _save_journal(journal, list_name)
                 time.sleep(random.uniform(min_gap_s, max_gap_s))
         finally:
             try:

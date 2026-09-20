@@ -48,7 +48,7 @@ from .pin_to_list import MAX_GAP_S as PIN_MAX_GAP
 from .pin_to_list import MIN_GAP_S as PIN_MIN_GAP
 from .pin_to_list import pin_places, places_from_csv
 from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
-from .state import inspect_state, next_actions
+from .state import inspect_state, next_actions, record_run
 
 log = logging.getLogger("beer_in_this_town")
 
@@ -346,9 +346,11 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
     csv_path = write_csv(venues, DATA_DIR / f"venues_{s.query}_{stamp}.csv")
     kml_path = write_kml(venues, DATA_DIR / f"venues_{s.query}_{stamp}.kml", s.map_title)
 
-    diff = diff_against_previous(venues)
+    diff = diff_against_previous(venues, s.query)
     write_diff_outputs(diff, stamp)
-    commit_run(venues)
+    commit_run(venues, s.query)
+    # So `status` answers about this city, not about Settings() defaults.
+    record_run(query=s.query, map_title=s.map_title, csv_path=csv_path)
 
     warnings = []
     if len(venues) < s.target_count:

@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from .config import STATE_DIR, Settings
+from .config import STATE_DIR, Settings, scope_slug
 from .guardrails import (
     CircuitBreaker,
     Limits,
@@ -52,7 +52,14 @@ from .guardrails import (
 
 log = logging.getLogger(__name__)
 
-JOURNAL = STATE_DIR / "pinned.json"
+# Pre-scoping layout: one journal for every list on the machine, so a
+# place saved into one list counted as done for all of them.
+LEGACY_JOURNAL = STATE_DIR / "pinned.json"
+
+
+def journal_path(list_name: str) -> Path:
+    """A journal records what was written to *one* saved list."""
+    return STATE_DIR / f"pinned_{scope_slug(list_name)}.json"
 
 # Pacing between places. Saving is a write, so this is deliberately slower than
 # the read-only scraper's 2.0-4.5s.
@@ -81,9 +88,22 @@ def journal_key(name: str, address: str | None) -> str:
     return f"{name} | {address}" if address else name
 
 
-def _load_journal() -> dict[str, str]:
-    if JOURNAL.exists():
-        return json.loads(JOURNAL.read_text(encoding="utf-8"))
+def _load_journal(list_name: str) -> dict[str, str]:
+    path = journal_path(list_name)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    if LEGACY_JOURNAL.exists():
+        # The pre-scoping journal does not record which list it was built for,
+        # so adopting it is a guess. Make it exactly once, by renaming: a
+        # second list inheriting "already saved" entries it never earned would
+        # skip real work and under-deliver in silence.
+        log.warning(
+            "Adopting the pre-scoping pinned.json as the journal for %r, on the "
+            "assumption it was built for that list. Any other list starts "
+            "empty. Rename it back if that assumption is wrong.", list_name,
+        )
+        LEGACY_JOURNAL.replace(path)
+        return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
@@ -92,9 +112,9 @@ def _lookup(journal: dict[str, str], name: str, address: str | None) -> str | No
     return journal.get(journal_key(name, address)) or journal.get(name)
 
 
-def _save_journal(journal: dict[str, str]) -> None:
+def _save_journal(journal: dict[str, str], list_name: str) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    JOURNAL.write_text(
+    journal_path(list_name).write_text(
         json.dumps(journal, indent=1, ensure_ascii=False), encoding="utf-8"
     )
 
@@ -353,7 +373,7 @@ def pin_places(
     # Fail closed BEFORE opening a browser: cool-off and daily budget first.
     ledger.assert_can_start()
 
-    journal = _load_journal()
+    journal = _load_journal(list_name)
     todo = [(n, a) for (n, a) in places if _lookup(journal, n, a) != "ok"]
 
     allowed = ledger.budget_for_this_run(limit)
@@ -415,7 +435,7 @@ def pin_places(
                 if not _open_place(page, name, address, region):
                     journal[journal_key(name, address)] = "not-found"
                     log.warning("  no Google Maps result -- skipped")
-                    _save_journal(journal)
+                    _save_journal(journal, list_name)
                     # A miss still counts toward the breaker and still waits.
                     # Without this, a block page whose wording we do not
                     # recognise makes every lookup "fail" and the run
@@ -443,7 +463,7 @@ def pin_places(
                     journal[journal_key(name, address)] = "ambiguous"
                     log.warning("  Maps opened %r, which does not match -- "
                                 "skipped", heading)
-                    _save_journal(journal)
+                    _save_journal(journal, list_name)
                     time.sleep(random.uniform(min_gap_s, max_gap_s))
                     continue
 
@@ -459,7 +479,7 @@ def pin_places(
                 if list_name.lower() in already.lower():
                     journal[journal_key(name, address)] = "ok"
                     log.info("  already in %s", list_name)
-                    _save_journal(journal)
+                    _save_journal(journal, list_name)
                     continue
 
                 outcome = "failed"
@@ -501,7 +521,7 @@ def pin_places(
                     page.wait_for_timeout(2000)
 
                 journal[journal_key(name, address)] = outcome
-                _save_journal(journal)
+                _save_journal(journal, list_name)
 
                 if outcome == "ok":
                     breaker.record_success()
