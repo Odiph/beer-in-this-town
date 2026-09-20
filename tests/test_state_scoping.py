@@ -141,7 +141,14 @@ def test_status_reports_the_city_that_actually_ran(state_dir, tmp_path, monkeypa
     monkeypatch.setattr(state, "DATA_DIR", data)
     state.record_run(query="london", map_title="London Bars", csv_path=csv)
 
-    s = Settings()  # defaults are singapore / "Singapore Bars"
+    # next_actions short-circuits to bootstrap when there is no session, so the
+    # session has to be part of the fixture rather than whatever this machine
+    # happens to have. Locally storage_state.json exists and this passed; in CI
+    # it does not, and the test never reached the assertion it was written for.
+    session = tmp_path / "storage_state.json"
+    session.write_text("{}", encoding="utf-8")
+    # defaults are singapore / "Singapore Bars"
+    s = Settings(storage_state=session)
     inspected = state.inspect_state(s)
     assert inspected["last_run"]["query"] == "london"
 
@@ -162,7 +169,9 @@ def test_status_still_sees_a_pre_upgrade_pin_journal(state_dir, tmp_path, monkey
         encoding="utf-8")
     monkeypatch.setattr(state, "DATA_DIR", tmp_path)
 
-    inspected = state.inspect_state(Settings())
+    session = tmp_path / "storage_state.json"
+    session.write_text("{}", encoding="utf-8")
+    inspected = state.inspect_state(Settings(storage_state=session))
     assert inspected["pin_progress"]["ok"] == 1
     assert inspected["pin_progress"]["failed"] == 1
     assert inspected["pin_progress_scope"] == "unscoped (pre-upgrade)"
