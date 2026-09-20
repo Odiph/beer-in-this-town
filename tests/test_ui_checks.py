@@ -25,6 +25,23 @@ def blank(tmp_path):
                     storage_state=tmp_path / "storage_state.json")
 
 
+@pytest.fixture
+def capable(monkeypatch):
+    """A machine whose Chrome and Playwright are both fine.
+
+    Tests about the *accounts* were silently inheriting this from whatever the
+    developer happened to have installed. CI installs the package without the
+    browser extra, so `next_step` correctly answered "install Playwright"
+    there and six tests that meant to be about sign-in failed on a machine
+    that was behaving perfectly. The environment a test depends on belongs in
+    the test.
+    """
+    monkeypatch.setattr(
+        checks, "_playwright_check",
+        lambda: checks.Check("playwright", "Browser automation", OK,
+                             "Playwright ready", verified=True))
+
+
 def _row(rows, key):
     return next(c for c in rows if c.key == key)
 
@@ -85,12 +102,7 @@ def test_an_unreadable_profile_is_unknown_not_missing(blank, monkeypatch):
 # --- ready is strict ------------------------------------------------------
 
 @pytest.mark.unit
-def test_ready_needs_both_accounts_proven(blank, monkeypatch):
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
-                        lambda: __import__("pathlib").Path("chrome"))
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
-                        lambda: "151")
-
+def test_ready_needs_both_accounts_proven(blank, capable):
     one = {"google": VerifyResult(True, "ok")}
     assert checks.ready(checks.collect(blank, one)) is False
 
@@ -110,18 +122,13 @@ def test_a_missing_places_key_is_off_not_broken(blank):
 # --- the new user, end to end --------------------------------------------
 
 @pytest.mark.unit
-def test_a_new_user_goes_from_nothing_to_ready(blank, monkeypatch):
+def test_a_new_user_goes_from_nothing_to_ready(blank, capable, monkeypatch):
     """The whole first-run arc, with the two round-trips stubbed.
 
     Written as one test on purpose: the individual states above can each be
     right while the sequence still strands someone — which is what it means
     for this to be an end-to-end check rather than four unit assertions.
     """
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
-                        lambda: __import__("pathlib").Path("chrome"))
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
-                        lambda: "151")
-
     # 1. Fresh machine: both accounts need the user, and nothing claims to work.
     rows = checks.collect(blank)
     assert {c.key for c in checks.blocking(rows)} == {"google", "untappd"}
@@ -161,13 +168,8 @@ def test_a_new_user_goes_from_nothing_to_ready(blank, monkeypatch):
 
 
 @pytest.mark.unit
-def test_a_failing_untappd_login_blocks_ready_and_says_why(blank, monkeypatch):
+def test_a_failing_untappd_login_blocks_ready_and_says_why(blank, capable):
     """The half that used to be discovered a hundred requests into a run."""
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
-                        lambda: __import__("pathlib").Path("chrome"))
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
-                        lambda: "151")
-
     proven = {"google": VerifyResult(True, "Signed in — checked just now."),
               "untappd": VerifyResult(False, "Reached Untappd, but signed out.")}
     rows = checks.collect(blank, proven)
@@ -323,11 +325,7 @@ def _steps_for(s, proven=None):
 
 
 @pytest.mark.unit
-def test_a_new_user_is_told_to_sign_in_not_shown_a_checklist(blank, monkeypatch):
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
-                        lambda: __import__("pathlib").Path("chrome"))
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
-                        lambda: "151")
+def test_a_new_user_is_told_to_sign_in_not_shown_a_checklist(blank, capable):
     step = _steps_for(blank)
     assert step.key == "connect"
     assert step.action == "connect"
@@ -347,10 +345,8 @@ def test_a_missing_chrome_outranks_the_sign_in(blank, monkeypatch):
 
 
 @pytest.mark.unit
-def test_signed_in_but_untested_leads_to_the_test(blank, monkeypatch):
-    for name, value in (("find_chrome", lambda: __import__("pathlib").Path("c")),
-                        ("chrome_major_version", lambda: "151"),
-                        ("profile_has_google_session", lambda d: True),
+def test_signed_in_but_untested_leads_to_the_test(blank, capable, monkeypatch):
+    for name, value in (("profile_has_google_session", lambda d: True),
                         ("profile_has_untappd_session", lambda d: True)):
         monkeypatch.setattr(f"beer_in_this_town.chrome_launch.{name}", value)
     blank.profile_dir.mkdir(parents=True)
@@ -363,17 +359,12 @@ def test_signed_in_but_untested_leads_to_the_test(blank, monkeypatch):
 
 
 @pytest.mark.unit
-def test_only_a_verified_setup_asks_for_the_city(blank, monkeypatch):
+def test_only_a_verified_setup_asks_for_the_city(blank, capable):
     """The city question is the last step, and it is gated on both accounts.
 
     Asking for a city while Untappd is signed out would hand someone a
     command that builds a five-venue corpus.
     """
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
-                        lambda: __import__("pathlib").Path("c"))
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
-                        lambda: "151")
-
     half = {"google": VerifyResult(True, "ok")}
     assert _steps_for(blank, half).key != "run"
 
@@ -424,11 +415,7 @@ def test_every_step_belongs_to_exactly_one_stage():
 
 
 @pytest.mark.unit
-def test_a_fresh_machine_sits_on_accounts_with_ready_behind_it(blank, monkeypatch):
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
-                        lambda: __import__("pathlib").Path("c"))
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
-                        lambda: "151")
+def test_a_fresh_machine_sits_on_accounts_with_ready_behind_it(blank, capable):
     by_key = {g.key: g.state for g in _wizard_for(blank)}
     assert by_key == {"ready": "done", "accounts": "current", "city": "todo"}
 
@@ -443,11 +430,7 @@ def test_a_machine_without_chrome_sits_on_ready(blank, monkeypatch):
 
 
 @pytest.mark.unit
-def test_both_accounts_verified_finishes_every_stage(blank, monkeypatch):
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.find_chrome",
-                        lambda: __import__("pathlib").Path("c"))
-    monkeypatch.setattr("beer_in_this_town.chrome_launch.chrome_major_version",
-                        lambda: "151")
+def test_both_accounts_verified_finishes_every_stage(blank, capable):
     proven = {"google": VerifyResult(True, "ok"),
               "untappd": VerifyResult(True, "ok")}
     assert all(g.state == "done" for g in _wizard_for(blank, proven))
