@@ -15,11 +15,17 @@ map file you can import into Google My Maps, Organic Maps or OsmAnd.
 Designed to be **driven by a coding agent**: every command speaks JSON, reports
 its own state, and tells you what to run next. It works fine as a plain CLI too.
 
-The default path is read-only. `run` reads public pages, writes files to `data/`
-and touches no account of yours — and with `--format gpx` you get pins on your
-everyday map without a Google account being involved at all. The two commands
-that do write to an account are opt-in, never run on their own, and are spelled
-out in [Where the lines are](#where-the-lines-are).
+`run --no-upload` reads public pages, writes files to `data/` and touches no
+account of yours — and with `--format gpx` you get pins on your everyday map
+without a Google account being involved at all.
+
+Note the flag: **`run` uploads to Google My Maps by default**, which drives a
+real Chrome session on your Google profile and creates a new map each time.
+That is a supported bulk import rather than anything Google's terms object to,
+but it is not nothing, so pass `--no-upload` if you only want the files. The
+two commands that write into a saved *list* — `pin` and `notes` — are separate,
+opt-in, never run on their own, and spelled out in
+[Where the lines are](#where-the-lines-are).
 
 ```bash
 beertown status --json      # where am I, what is next
