@@ -27,6 +27,11 @@ from .parsers import (
     parse_venue_stats,
 )
 
+# Shared with the account verifier rather than written twice: two lists
+# of markers for one question is two things to keep in step, and the
+# one that drifts is whichever nobody is looking at.
+from .ui.checks import _UNTAPPD_SIGNED_IN
+
 log = logging.getLogger(__name__)
 
 # Candidate pagination params, most likely first.
@@ -39,6 +44,16 @@ PAGE_SIZE_GUESS = 25
 LOGIN_GATE_RE = re.compile(
     r"algolia-login-gate|please sign in to view more", re.IGNORECASE
 )
+
+
+def signed_in(html: str) -> bool:
+    """Does this page show a signed-in session?
+
+    The difference between "Untappd stopped us" and "there were only 14
+    venues". Both produce a short result set; only one is a problem, and only
+    one has a remedy the user can act on.
+    """
+    return any(marker in html for marker in _UNTAPPD_SIGNED_IN)
 
 
 class PaginationUnsupported(RuntimeError):
@@ -60,6 +75,19 @@ def assert_not_login_gated(
     nothing was blocking the way.
     """
     if len(refs) >= target_count or not LOGIN_GATE_RE.search(html):
+        return
+    if signed_in(html):
+        # The gate markup is on the page and we are demonstrably signed in,
+        # so it is not a wall -- Untappd renders it when the results simply
+        # run out. Raising here told a signed-in user to sign in, which is
+        # the worst kind of error: confident, actionable, and impossible to
+        # act on. A narrow query legitimately returns few venues.
+        log.info(
+            "Search returned %d of %d requested. The page carries login-gate "
+            "markup, but this session is signed in -- treating it as the "
+            "query running out of venues rather than a wall.",
+            len(refs), target_count,
+        )
         return
     raise SearchLoginRequired(
         f"Search stopped at {len(refs)} of {target_count} requested venues "

@@ -128,3 +128,49 @@ def test_an_unreadable_radius_is_refused(raw):
     """Guessing a unit is how somebody asks for 9 miles and gets 9 km."""
     with pytest.raises(ValueError):
         parse_radius(raw)
+
+
+# --- merging several searches --------------------------------------------
+
+@pytest.mark.unit
+def test_the_same_venue_from_two_searches_counts_once():
+    """It will happen constantly: the city search finds a bar, and so does a
+    search for that bar's own name."""
+    from beer_in_this_town.geo import merge_unique
+
+    a = _venue("Lauter", 32.07, 34.77)
+    b = _venue("Schnitt", 32.08, 34.78)
+    merged, dupes = merge_unique([[a, b], [a]])
+
+    assert [v.ref.name for v in merged] == ["Lauter", "Schnitt"]
+    assert dupes == 1
+
+
+@pytest.mark.unit
+def test_two_outlets_sharing_a_name_are_two_venues():
+    """Same reason `journal_key` includes the address: a chain's branches are
+    different places, and collapsing them loses one."""
+    from beer_in_this_town.geo import merge_unique
+
+    a = Venue(ref=VenueRef(venue_id="1", slug="h", name="Harry's",
+                           category=None, address="1 Boat Quay", city=None),
+              total=1, unique=1, monthly=1, you=None)
+    b = Venue(ref=VenueRef(venue_id="2", slug="h", name="Harry's",
+                           category=None, address="9 Orchard Rd", city=None),
+              total=1, unique=1, monthly=1, you=None)
+    merged, dupes = merge_unique([[a], [b]])
+
+    assert len(merged) == 2
+    assert dupes == 0
+
+
+@pytest.mark.unit
+def test_the_count_is_accounted_for():
+    """kept + duplicates must equal what the searches actually returned, or
+    the corpus is smaller than the numbers claim and nobody can tell why."""
+    from beer_in_this_town.geo import merge_unique
+
+    a, b = _venue("A", 32.07, 34.77), _venue("B", 32.08, 34.78)
+    batches = [[a, b], [a, b], [a]]
+    merged, dupes = merge_unique(batches)
+    assert len(merged) + dupes == sum(len(x) for x in batches)
