@@ -243,20 +243,34 @@ def test_a_user_with_no_session_is_not_sent_to_run(blank):
 
 
 @pytest.mark.unit
-def test_the_agent_loop_terminates_when_it_needs_a_human(blank):
-    """The loop in AGENTS.md is: run the first action, re-read, repeat.
+def test_the_agent_opens_the_dashboard_then_stops(blank, monkeypatch):
+    """Walk the loop. Both ends of this have bitten.
 
-    Handing back `selfcheck` looked helpful and was worse than the `run` it
-    replaced: nothing selfcheck does changes `logged_in`, so the loop never
-    ended. An empty list is what AGENTS.md defines as the end, and being
-    blocked on a password is the end.
+    Handing back `selfcheck` never terminated, because nothing selfcheck does
+    changes the session. Handing back nothing at all stranded the user: the
+    agent finished the install, reported "ready", and the one thing that
+    would have told them what to do next was the thing it had been told not
+    to run.
+
+    So the first pass opens the dashboard, and the second -- with one already
+    serving -- ends the loop.
     """
+    import beer_in_this_town.ui as ui
     from beer_in_this_town.state import blocked_on, inspect_state, next_actions
 
     state = inspect_state(blank)
+
+    monkeypatch.setattr(ui, "existing", lambda: None)
+    first = next_actions(state, blank)
+    assert first == ["python -m beer_in_this_town ui --detach --json"]
+    assert "--detach" in first[0], "an agent was handed the blocking form"
+
+    monkeypatch.setattr(ui, "existing",
+                        lambda: {"url": "http://127.0.0.1:8765/#k", "pid": 1,
+                                 "port": 8765})
     for _ in range(3):                      # the loop, three times round
         assert next_actions(state, blank) == [], \
-            "the agent loop does not terminate"
+            "the agent relaunches a dashboard that is already running"
 
     assert blocked_on(state) == "sign_in", \
         "an empty list with no reason is indistinguishable from finished"
@@ -283,13 +297,23 @@ def test_the_first_hint_names_the_dashboard_and_both_accounts(blank):
 
 
 @pytest.mark.unit
-def test_selfcheck_is_safe_to_hand_an_agent(blank):
-    """Whatever is in next_actions is, in effect, authorised. AGENTS.md rule 2."""
+def test_nothing_in_next_actions_can_touch_an_account(blank):
+    """Whatever is in next_actions is, in effect, authorised. AGENTS.md rule 2.
+
+    `ui` is allowed here now, and only in its `--detach` form: it returns
+    instead of blocking, serves a read-only page bound to localhost, and has
+    no route that can write to a saved list. The blocking form would hang the
+    agent, which is the whole reason it used to be excluded.
+    """
     from beer_in_this_town.state import inspect_state, next_actions
 
-    joined = " ".join(next_actions(inspect_state(blank), blank))
-    for forbidden in (" pin ", " notes ", "bootstrap", " ui "):
-        assert forbidden not in f" {joined} "
+    actions = next_actions(inspect_state(blank), blank)
+    joined = f" {' '.join(actions)} "
+    for forbidden in (" pin ", " notes ", "bootstrap"):
+        assert forbidden not in joined
+    for action in actions:
+        if " ui " in f" {action} ":
+            assert "--detach" in action, "the blocking dashboard was offered"
 
 
 # --- the dashboard leads, rather than reporting --------------------------

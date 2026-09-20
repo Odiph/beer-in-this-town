@@ -50,12 +50,21 @@ class Check:
     fix: str = ""            # what the person does about it, in their words
     action: str = ""         # an action id the dashboard can offer as a button
     verified: bool = False   # proven by a live round-trip, not merely detected
+    # Somewhere to actually go. A row that says what is wrong and offers no
+    # way to act on it leaves the reader to go and find the page themselves,
+    # which is the work this dashboard exists to remove.
+    links: tuple[tuple[str, str], ...] = ()
+    # The longer answer, behind a disclosure: why this row exists and what
+    # goes wrong when it is red. Kept out of `detail` so the panel stays
+    # scannable for someone who already knows.
+    why: str = ""
 
     def to_row(self) -> dict:
         return {
             "key": self.key, "label": self.label, "state": self.state,
             "detail": self.detail, "fix": self.fix, "action": self.action,
-            "verified": self.verified,
+            "verified": self.verified, "why": self.why,
+            "links": [{"label": lbl, "url": url} for lbl, url in self.links],
         }
 
 
@@ -202,6 +211,74 @@ def _keys_check(s: Settings) -> tuple[Check, ...]:
     return (geo, places)
 
 
+# Where to go, and the longer answer, keyed by row. Attached in one place
+# rather than at each branch: every row has several outcomes and the links
+# do not vary between them, so repeating them per branch is how one gets
+# quietly dropped from the branch nobody tested.
+REFERENCE: dict[str, tuple[tuple[tuple[str, str], ...], str]] = {
+    "chrome": (
+        (("Download Chrome", "https://www.google.com/chrome/"),),
+        "Google refuses to complete a sign-in inside a browser that reports "
+        "itself as automated — it answers \"This browser or app may not be "
+        "secure\". So the login runs in an ordinary Chrome process against a "
+        "profile folder inside this project, and the automation reuses that "
+        "session afterwards. Google blocks the sign-in flow, not a session "
+        "that already exists.",
+    ),
+    "playwright": (
+        (("What Playwright is", "https://playwright.dev/python/docs/intro"),),
+        "Playwright drives the browser that captures your sign-in and, later, "
+        "saves places into a list. Nothing that only reads Untappd needs it, "
+        "which is why a plain install leaves it out.",
+    ),
+    "google": (
+        (("Your Google account", "https://myaccount.google.com/"),
+         ("Create an account", "https://accounts.google.com/signup")),
+        "The Google session is what lets this save places into one of your "
+        "Maps lists and upload a map layer. Collecting the venue data needs "
+        "none of it — so a failure here costs you the map, not the data.",
+    ),
+    "untappd": (
+        (("Sign in to Untappd", "https://untappd.com/login"),
+         ("Create an account", "https://untappd.com/signup")),
+        "Untappd shows a signed-out visitor only 5 search results. This is "
+        "the one that quietly ruins a run: the scrape finishes, reports "
+        "success, and hands you five venues instead of a hundred — with the "
+        "diff, the baseline and the map all built on top of them. It also "
+        "fills the YOU column, which of these you have already checked into.",
+    ),
+    "geocoding": (
+        (("Geocoding pricing",
+          "https://developers.google.com/maps/documentation/geocoding/usage-and-billing"),
+         ("Nominatim usage policy",
+          "https://operations.osmfoundation.org/policies/nominatim/")),
+        "Most Untappd venues carry their own coordinates, so this only runs "
+        "for the ones that do not. Without a key it falls back to Nominatim "
+        "at one request a second, which is free and slower.",
+    ),
+    "places": (
+        (("Enable the Places API",
+          "https://console.cloud.google.com/apis/library/places.googleapis.com"),
+         ("What it costs",
+          "https://developers.google.com/maps/billing-and-pricing/pricing")),
+        "Optional. With a key, `closures` asks Google whether each venue "
+        "still trades — Untappd keeps a page for a bar that shut in 2019, and "
+        "its lifetime check-ins make it outrank a good bar that opened last "
+        "year. 5,000 lookups a month are free. Venues Places cannot match are "
+        "recorded as unmatched, never as closed.",
+    ),
+}
+
+
+def _with_reference(check: Check) -> Check:
+    """Attach the row's links and long answer, if it has any."""
+    entry = REFERENCE.get(check.key)
+    if entry is None:
+        return check
+    links, why = entry
+    return replace(check, links=links, why=why)
+
+
 def collect(s: Settings,
             proven: dict[str, VerifyResult] | None = None) -> tuple[Check, ...]:
     """Every check, in the order a first-time user meets them.
@@ -211,13 +288,14 @@ def collect(s: Settings,
     the filesystem shows and say plainly that it has not been tested.
     """
     proven = proven or {}
-    return (
+    rows = (
         _chrome_check(),
         _playwright_check(),
         _google_check(s, proven.get("google")),
         _untappd_check(s, proven.get("untappd")),
         *_keys_check(s),
     )
+    return tuple(_with_reference(c) for c in rows)
 
 
 def blocking(checks: tuple[Check, ...]) -> tuple[Check, ...]:

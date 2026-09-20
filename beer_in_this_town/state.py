@@ -128,6 +128,16 @@ def inspect_state(s: Settings) -> dict[str, Any]:
     }
 
 
+def _serving() -> dict | None:
+    """The dashboard running for this checkout, if any. Never raises."""
+    try:
+        from .ui import existing
+
+        return existing()
+    except Exception:  # a UI that cannot even be imported is not running
+        return None
+
+
 def blocked_on(state: dict[str, Any]) -> str | None:
     """What a person -- not an agent -- has to do before the loop can go on.
 
@@ -174,6 +184,20 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
     # `verify` is what an agent runs afterwards to find out whether the human
     # actually finished.
     if not state["logged_in"]:
+        # Opening the dashboard IS the next action, and an agent can now do
+        # it: `--detach` returns instead of blocking, and the page is
+        # read-only with no route that can touch an account. Leaving it out
+        # is what stranded the user -- the agent finished the install, said
+        # "ready", and the one thing that would have told them what to do
+        # next was the one thing it had been told not to run.
+        #
+        # Offered only while nothing is serving. Once it is up, the loop ends:
+        # re-launching a running dashboard forever is the same
+        # non-termination as the `selfcheck` it replaced.
+        from .ui import existing
+
+        if existing() is None:
+            return ["python -m beer_in_this_town ui --detach --json"]
         return []
 
     if state["latest_csv"] and state["latest_kml"]:
@@ -203,7 +227,9 @@ def hints(state: dict[str, Any], s: Settings) -> list[str]:
             "Once that is done, `python -m beer_in_this_town verify --json` "
             "checks both accounts for real and needs no browser -- an agent "
             "can run it to find out whether the sign-in actually took.",
-        ]
+        ] + ([f"The dashboard is already open at {running['url']} — send them "
+              f"there rather than starting another."]
+             if (running := _serving()) else [])
 
     out: list[str] = []
     guards = state.get("write_guardrails") or {}

@@ -72,12 +72,13 @@ def test_main_routes_a_bare_call_to_ui(monkeypatch):
     seen = {}
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True, raising=False)
     monkeypatch.setattr(cli, "cmd_ui",
-                        lambda s, port, open_browser: seen.update(
-                            port=port, open_browser=open_browser)
+                        lambda s, port, open_browser, detach=False: seen.update(
+                            port=port, open_browser=open_browser, detach=detach)
                         or cli.Envelope(command="ui", ok=True))
 
     assert cli.main([]) == 0
     assert seen["open_browser"] is True, "the browser was not opened for the user"
+    assert seen["detach"] is False, "a person at a terminal wants the foreground server"
 
 
 @pytest.mark.unit

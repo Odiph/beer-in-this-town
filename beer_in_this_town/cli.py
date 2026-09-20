@@ -608,13 +608,40 @@ def cmd_closures(s: Settings, csv_path: str, out: str | None,
     )
 
 
-def cmd_ui(s: Settings, port: int, open_browser: bool) -> Envelope:
-    """Serve the setup dashboard on localhost until interrupted.
+def cmd_ui(s: Settings, port: int, open_browser: bool,
+           detach: bool = False) -> Envelope:
+    """Serve the setup dashboard on localhost.
 
-    Blocks. The envelope is printed on the way out, so `--json` describes the
-    session that just ended rather than one about to start.
+    `--detach` starts it in its own process and returns immediately, which is
+    what makes it something an agent can open for a user. Without it this
+    blocks, and the envelope is printed on the way out.
     """
-    from .ui import serve
+    from .ui import serve, serve_detached
+
+    if detach:
+        try:
+            rec = serve_detached(s, port=port)
+        except RuntimeError as exc:
+            return fail("ui", Problem(
+                code="port_unavailable",
+                message=str(exc),
+                remedy=f"Pass --port with a number other than {port}, or stop "
+                       f"whatever is already listening on it.",
+            ))
+        return Envelope(
+            command="ui", ok=True,
+            data={"url": rec["url"], "pid": rec["pid"], "port": rec["port"],
+                  "started": rec["started"]},
+            hints=[
+                ("Opened the setup dashboard." if rec["started"]
+                 else "A dashboard was already running for this checkout.")
+                + f" Send the user to {rec['url']} — it walks them through "
+                  f"signing in. The link carries the key for that session.",
+                "Signing in needs their password, so it is theirs to do. When "
+                "they say they are done, run `verify --json` to check it took.",
+            ],
+            next_actions=[],
+        )
 
     try:
         url = serve(s, port=port, open_browser=open_browser)
@@ -1280,6 +1307,10 @@ def build_parser() -> argparse.ArgumentParser:
                          f"to 127.0.0.1 only.")
     ui.add_argument("--no-open", action="store_true",
                     help="do not open a browser; just print the URL")
+    ui.add_argument("--detach", action="store_true",
+                    help="start it in the background and return immediately, "
+                         "instead of blocking. This is the form an agent can "
+                         "run to open the dashboard for a person.")
 
     closures = sub.add_parser(
         "closures",
@@ -1395,7 +1426,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "verify":
             env = cmd_verify(s)
         elif args.cmd == "ui":
-            env = cmd_ui(s, args.port, open_browser=not args.no_open)
+            env = cmd_ui(s, args.port, open_browser=not args.no_open,
+                         detach=args.detach)
         elif args.cmd == "closures":
             env = cmd_closures(s, args.csv, args.out, args.limit)
         elif args.cmd == "score":

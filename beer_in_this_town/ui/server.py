@@ -34,14 +34,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
+import subprocess
+import sys
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from ..config import Settings
+from ..config import ROOT, STATE_DIR, Settings
 from . import checks
 from .actions import ACTIONS
 from .jobs import Runner
@@ -266,11 +270,24 @@ def make_handler(board: Dashboard):
     return Handler
 
 
-def build(s: Settings, port: int = DEFAULT_PORT) -> tuple[ThreadingHTTPServer, str]:
+class _Server(ThreadingHTTPServer):
+    """A dashboard that refuses to share its port.
+
+    `http.server` sets `allow_reuse_address`, and on Windows that let a second
+    dashboard bind a port another one was already LISTENING on -- no error,
+    two servers, two different keys, and requests going to whichever the OS
+    felt like. A port collision has to fail loudly: the whole point of the
+    record on disk is that there is one dashboard per checkout.
+    """
+
+    allow_reuse_address = False
+
+
+def build(s: Settings, port: int = DEFAULT_PORT) -> tuple[_Server, str]:
     """Bind the dashboard and return it with the URL that carries its key."""
     board = Dashboard(settings=s, token=secrets.token_urlsafe(32),
                       runner=Runner(), proven={})
-    httpd = ThreadingHTTPServer((HOST, port), make_handler(board))
+    httpd = _Server((HOST, port), make_handler(board))
     httpd.daemon_threads = True
     # The token rides in the fragment: browsers never put a fragment in a
     # Referer header or a server log, so handing it over costs nothing.
@@ -278,11 +295,20 @@ def build(s: Settings, port: int = DEFAULT_PORT) -> tuple[ThreadingHTTPServer, s
     return httpd, url
 
 
+# Where a detached dashboard records itself, so a second `--detach` finds the
+# first one instead of starting a rival on another port.
+RUNNING = STATE_DIR / "ui.json"
+
+
+HANDSHAKE_ENV = "BEERTOWN_UI_HANDSHAKE"
+
+
 def serve(s: Settings, port: int = DEFAULT_PORT,
           open_browser: bool = True) -> str:
     """Run until interrupted. Returns the URL it served."""
     httpd, url = build(s, port)
     log.info("Dashboard on %s", url)
+    _record(url, httpd.server_address[1])
     if open_browser:
         import webbrowser
 
@@ -291,4 +317,132 @@ def serve(s: Settings, port: int = DEFAULT_PORT,
         httpd.serve_forever()
     finally:
         httpd.server_close()
+        _forget()
     return url
+
+
+def _record(url: str, port: int) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    # The handshake, not the pid, is how a detaching parent recognises *its*
+    # child's record. Matching on pid looked equivalent and was not: a stale
+    # record from an earlier server reads as "someone else's", and the parent
+    # waits out its whole timeout beside a dashboard that started fine.
+    RUNNING.write_text(json.dumps({
+        "url": url, "port": port, "pid": os.getpid(),
+        "handshake": os.environ.get(HANDSHAKE_ENV, ""),
+    }), encoding="utf-8")
+
+
+def _forget() -> None:
+    try:
+        RUNNING.unlink()
+    except OSError:
+        pass
+
+
+def _alive(pid: int) -> bool:
+    """Is that process still there? Unknown counts as yes.
+
+    Guessing "gone" would start a second dashboard beside a live one, and two
+    servers racing for the same Chrome profile is the thing the single-job
+    rule already exists to prevent.
+    """
+    if pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+            return str(pid) in out
+        os.kill(pid, 0)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return True
+
+
+def _read_record() -> dict | None:
+    """Whatever is on disk, without asking the OS whether it is still alive."""
+    if not RUNNING.exists():
+        return None
+    try:
+        rec = json.loads(RUNNING.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return rec if isinstance(rec, dict) and rec.get("url") else None
+
+
+def existing() -> dict | None:
+    """The dashboard already running for this checkout, if there is one.
+
+    The liveness probe shells out, so this is not something to call in a
+    tight loop -- `serve_detached` waits on the record instead, since it
+    holds the child handle and already knows whether it is alive.
+    """
+    rec = _read_record()
+    if rec is None:
+        return None
+    if not _alive(int(rec.get("pid", 0))):
+        _forget()
+        return None
+    return rec
+
+
+def serve_detached(s: Settings, port: int = DEFAULT_PORT) -> dict:
+    """Start the dashboard in its own process and return straight away.
+
+    The reason this exists: the foreground server blocks, so AGENTS.md told
+    an agent never to start it -- and in an agent-driven setup that meant
+    nobody ever opened the dashboard at all. The install finished, the agent
+    reported success, and the user was left having to already know the name
+    of the thing built to tell them what to do.
+
+    Blocking was the only reason it was off-limits. The page is read-only,
+    bound to localhost, and has no route that can touch an account, so once
+    it stops hanging the caller there is nothing left to forbid.
+    """
+    if (already := existing()) is not None:
+        return {**already, "started": False}
+
+    handshake = secrets.token_urlsafe(12)
+    child = subprocess.Popen(
+        [sys.executable, "-m", "beer_in_this_town", "ui", "--port", str(port)],
+        cwd=str(ROOT),
+        env={**os.environ, HANDSHAKE_ENV: handshake},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        **_detach_flags(),
+    )
+
+    # Wait for the child to publish its URL. The token is minted in there, so
+    # there is nothing useful to return until it has.
+    # Poll the record, not `existing()`: that one shells out to `tasklist` on
+    # Windows, taking most of a second per turn and eating the budget before
+    # the child had finished importing. We hold the child handle, so its
+    # liveness is `poll()` -- free, and immediate.
+    deadline = time.time() + 30.0
+    while time.time() < deadline:
+        rec = _read_record()
+        if rec is not None and rec.get("handshake") == handshake:
+            return {**rec, "started": True}
+        if child.poll() is not None:
+            raise RuntimeError(
+                f"The dashboard exited immediately (code {child.returncode}). "
+                f"Port {port} may already be in use by something else."
+            )
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        f"The dashboard did not report a URL within 30s. Check whether "
+        f"port {port} is free."
+    )
+
+
+def _detach_flags() -> dict:
+    """Survive the parent exiting, on either platform."""
+    if os.name == "nt":
+        return {"creationflags": subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
