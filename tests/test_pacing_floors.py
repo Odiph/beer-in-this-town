@@ -209,3 +209,32 @@ def test_status_can_see_the_breaker(tmp_path):
     assert report["breaker"]["consecutive"] == 3
     assert report["breaker"]["tripped"] is True
     assert report["can_write"] is False
+
+
+@pytest.mark.unit
+def test_a_damaged_read_budget_fails_closed(tmp_path):
+    """Reading a truncated budget as "nothing spent" refills the ceiling.
+
+    The write ledger fails closed; this was modelled on it and failed open,
+    which hands back a full hour's allowance for the price of one interrupted
+    write -- and the file is rewritten up to 600 times an hour.
+    """
+    from beer_in_this_town import http_client
+    from beer_in_this_town.config import Settings
+
+    path = tmp_path / "read_budget.json"
+    path.write_text('{"window_start": 123', encoding="utf-8")   # truncated
+    s = Settings(hourly_budget=600)
+    assert http_client.ReadBudget(s, path=path).remaining() == 0
+
+
+@pytest.mark.unit
+def test_the_read_budget_is_written_atomically(tmp_path):
+    from beer_in_this_town import http_client
+    from beer_in_this_town.config import Settings
+
+    path = tmp_path / "read_budget.json"
+    budget = http_client.ReadBudget(Settings(hourly_budget=5), path=path)
+    budget.record()
+    assert not path.with_suffix(".tmp").exists(), "no temp file left behind"
+    assert http_client.ReadBudget(Settings(hourly_budget=5), path=path).remaining() == 4

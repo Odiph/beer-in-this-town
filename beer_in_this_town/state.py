@@ -137,11 +137,10 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
     that ever terminated it. What a human might want to do next lives in
     `hints`, which nothing is instructed to execute.
     """
-    if not state["logged_in"]:
-        # bootstrap opens a real browser and waits up to 15 minutes for a
-        # person, so it is not something to hand an agent as a next action.
-        return []
-
+    # A session is only needed for the YOU column and for the writing
+    # commands. Returning [] here ended the loop before any safe work was
+    # done, on a fresh install where `run --no-upload` would have worked fine:
+    # bootstrap belongs in hints, not in the way.
     query = state.get("last_run", {}).get("query") or s.query
     if state["latest_csv"] and state["latest_kml"]:
         # Nothing further an agent should start on its own. An empty list is
@@ -151,7 +150,7 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
         return []
 
     return [
-        f"python -m beer_in_this_town run --query {query} "
+        f'python -m beer_in_this_town run --query "{query}" '
         f"--count {s.target_count} --no-upload --json"
     ]
 

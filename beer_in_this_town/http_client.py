@@ -64,6 +64,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import random
 import time
 from pathlib import Path
@@ -119,22 +120,35 @@ class ReadBudget:
         self.window_start, self.count = self._read()
 
     def _read(self) -> tuple[float, int]:
+        if not self.path.exists():
+            return time.time(), 0
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            start = float(raw.get("window_start", 0.0))
-            count = int(raw.get("count", 0))
-        except (OSError, ValueError, TypeError):
-            return time.time(), 0
+            start = float(raw["window_start"])
+            count = int(raw["count"])
+        except (OSError, ValueError, TypeError, KeyError):
+            # Fail CLOSED, like the write ledger this is modelled on. Reading
+            # a damaged budget as "nothing spent" hands back a full allowance
+            # for the price of one truncated write -- and this file is
+            # rewritten up to 600 times an hour, so truncation is not exotic.
+            log.warning("%s is unreadable; assuming the hour's budget is spent.",
+                        self.path.name)
+            return time.time(), self.s.hourly_budget
         if time.time() - start >= 3600:
             return time.time(), 0
         return start, count
 
     def _write(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        # Atomic: a crash mid-write left a truncated file, which the reader
+        # above now (correctly) treats as a spent hour. Better not to produce
+        # one in the first place.
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(
             json.dumps({"window_start": self.window_start, "count": self.count}),
             encoding="utf-8",
         )
+        os.replace(tmp, self.path)
 
     def _roll(self) -> None:
         if time.time() - self.window_start >= 3600:
