@@ -18,6 +18,20 @@ class VenueRef:
 
     @property
     def url(self) -> str:
+        """The venue's page, or "" when this ref cannot name one.
+
+        A ref rebuilt from a CSV that predates the `url` and `venue_id`
+        columns has no slug, and interpolating one anyway produced
+        `https://untappd.com/v//American Taproom - Waterloo`: a string that
+        looks like a link, rides into the CSV and the KML's "View on Untappd",
+        and fails only when somebody follows it. Absent beats confidently
+        wrong, the same way a style line that cannot be placed is left empty.
+
+        Deliberately not a search URL. A search is not this venue's page, and
+        substituting one would be the same error in better clothes.
+        """
+        if not (self.slug and self.venue_id):
+            return ""
         return f"https://untappd.com/v/{self.slug}/{self.venue_id}"
 
 
