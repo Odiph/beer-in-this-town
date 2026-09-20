@@ -113,3 +113,96 @@ machine.
 - **The labelling pass has not happened**, so #6/#7/#8 remain unmeasured and
   `classify.py` is still unvalidated guesses — which is why it is not wired
   into `run`.
+
+---
+
+# The setup and closure branch
+
+Nine more commits, on `feat/places-closure-check` (PR #23). Same rule as
+above: ordered by what it costs if it is wrong, not by when it was written.
+
+One idea runs through all of them, and it is worth having before the diff:
+**a cookie on disk is not a working account.** `bootstrap` detects a Google
+session and reports success. Nothing ever detected an Untappd one — which is
+why a signed-out Untappd first announced itself as `search_login_required`, a
+hundred requests into a run. Most of what follows is that distinction being
+applied in one more place, and then in one more place after that.
+
+## Tier 1 — read these
+
+### `07bbbc5` fix: `run` is no longer offered on a session nobody has tested
+**Start here.** Found by running `/verify-change` over the rest, and it is the
+same bug the dashboard was built to prevent, surviving in the place that
+mattered most — the agent contract.
+
+`status` decided everything from `logged_in`, which only means
+`storage_state.json` exists. On my machine, where `verify` had already proved
+both sessions dead, it reported `blocked_on: null` and offered `run`. Signed
+out of Untappd, search stops at 5 results: that run builds a five-venue corpus
+and reports a finished scrape, with the diff, the baseline and the map resting
+on it.
+
+What to check: the table in `state.next_actions`. `verify` now gates `run`,
+and the verdict persists to `state/verification.json` so the loop terminates.
+The judgement call is the **12-hour TTL** — long enough to be useful, short
+enough that a stale verdict is not the same claim in a new hat. A probe that
+could not *run* records nothing, so a missing browser cannot masquerade as a
+signed-out account.
+
+### `d964408` feat: a setup dashboard that tests the accounts
+The largest commit, and the only one that opens a listening socket. That
+server can launch Chrome on your profile and write `storage_state.json`, so
+its front door is the risk.
+
+"Localhost" is not a boundary — any page in your browser can reach 127.0.0.1.
+Four guards, each tested over a real socket: bind 127.0.0.1 only; a per-start
+key required on every API call, delivered in the URL fragment so it never
+reaches a `Referer`; a `Host` allow-list against DNS rebinding; cross-site
+`Origin` refused. The fifth is absence — no route there can `pin` or write
+notes, and a test asserts it stays that way.
+
+What to check: `server.py`'s docstring against its handlers. And
+`profile_has_untappd_session`, which answers yes/no/**unknown** — the
+cookie-name list behind it is a guess, never checked against a live login, so
+a miss reports unknown rather than "signed out".
+
+### `fb0f26c` feat: ask Google Places whether a venue still trades
+Closes #7. The rule is the whole design: **a missing match is not a closure.**
+A failed lookup collapses four cases wanting opposite outcomes — closed,
+renamed, too new, simply not listed — so only an explicit
+`CLOSED_PERMANENTLY`/`CLOSED_TEMPORARILY` closes a venue, and closed venues are
+flagged rather than dropped.
+
+What to check: the `except` ordering in `resolve_closures`. `PlacesUnavailable`
+is re-raised before the broad handler can see it, which is the fifth time this
+repo has written that raise and the first time it was tested from the caller.
+Also the cost note in the module docstring — Text Search **Pro**, 5,000/month
+free, then $25.60/1000; `types` and the place id ride along free, which is why
+they are cached for #6/#8.
+
+## Tier 2 — skim
+
+- **`9fc6753`** `ui --detach`. The FTUE dead-ended: `ui` blocked, so agents
+  were told never to start it, so nothing ever opened the one thing built to
+  tell a user what to do. Found by watching it happen. Two Windows bugs fell
+  out — `http.server` sets `allow_reuse_address`, so two dashboards silently
+  shared a port; and the parent matched its child by pid, waiting out a full
+  timeout beside a dashboard that had started fine.
+- **`aeb7adc`** The agent loop did not terminate. Two commits earlier I had
+  replaced `run` with `selfcheck` for a signed-out user — correct reasoning,
+  and nothing selfcheck does changes the session, so it ran forever. Adds
+  `data.blocked_on`, and `verify`.
+- **`9592cbf`** Found by cloning into an empty directory: a brand-new user was
+  told to `run`.
+- **`dca1c8c`** The three-step wizard. The card said "Step 4 of 5" under a
+  stepper reading 2 of 3.
+- **`b4e995c`** A bare `beertown` opens the dashboard.
+
+## What is still unverified here
+
+- **Nothing has hit the real Places API.** Stubs only. First real call should
+  be `closures --limit 3`.
+- The account verifiers *have* run against live Google and Untappd — that is
+  how we know both sessions are dead.
+- The dashboard's **connect** flow has never completed: no one has signed in
+  through it, so the capture-and-verify path is exercised only by its parts.
