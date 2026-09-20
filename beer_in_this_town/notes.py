@@ -338,6 +338,17 @@ def add_notes(
                 else:
                     journal[key] = "failed"
                     breaker.record_failure()
+                    if breaker.is_tripped:
+                        # Same as pin: checked only at the top of the loop, a
+                        # run that fails its last three notes trips nothing.
+                        breaker.reset()
+                        ledger.start_cooloff(
+                            f"{limits.max_consecutive_failures} consecutive failures"
+                        )
+                        raise Tripped(
+                            f"Stopped after {limits.max_consecutive_failures} "
+                            f"consecutive failures; a cool-off has started."
+                        )
                     log.error("  note did not stick (reads %r)", written)
 
                 _save_journal(journal, list_name)
