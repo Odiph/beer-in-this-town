@@ -22,7 +22,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .agent_io import Envelope, Problem, emit, fail, log_to_stderr
-from .config import DATA_DIR, Settings, ensure_dirs
+from .config import DATA_DIR, SEARCH_URL, Settings, ensure_dirs
 from .export import (
     commit_run,
     diff_against_previous,
@@ -45,7 +45,13 @@ from .mymaps_upload import manual_instructions, upload_kml
 from .notes import MAX_GAP_S as NOTES_MAX_GAP
 from .notes import MIN_GAP_S as NOTES_MIN_GAP
 from .notes import add_notes, notes_from_csv
-from .parsers import ParseError, assert_corpus_quality, parse_venue_stats
+from .parsers import (
+    ClientRenderedSearch,
+    ParseError,
+    assert_corpus_quality,
+    parse_search_page,
+    parse_venue_stats,
+)
 from .pin_to_list import MAX_GAP_S as PIN_MAX_GAP
 from .pin_to_list import MIN_GAP_S as PIN_MIN_GAP
 from .pin_to_list import pin_places, places_from_csv
@@ -269,14 +275,40 @@ def _capture_session(s: Settings, sync_playwright) -> Envelope:
     )
 
 
-def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
-    """Cheap pre-flight: one venue page, full shape assertion."""
+def _probe_search(client, s: Settings) -> str:
+    """Is the search page one of the two shapes we know how to handle?
+
+    Either it carries `.beer-item` rows (server-rendered) or an `#algolia-hits`
+    container the browser path can fill (client-rendered). Anything else is a
+    stale selector, and saying so is the entire reason this probe exists:
+    search moved to Algolia, every `run` broke, and `selfcheck` stayed green
+    for the duration because venue detail pages were never affected.
+
+    Deliberately says nothing about how many results came back. Anonymous
+    search is capped at five by Untappd's login gate, so a count assertion
+    would fail on a healthy signed-out install.
+    """
+    html = client.get(SEARCH_URL, params={"q": s.query, "type": "venues"},
+                      use_cache=False)
+    try:
+        parse_search_page(html)
+    except ClientRenderedSearch:
+        return "client-rendered"
+    return "server-rendered"
+
+
+def cmd_selfcheck(s: Settings, slug: str, venue_id: str,
+                  probe_search: bool = True) -> Envelope:
+    """Cheap pre-flight: one venue page and one search page, shape asserted."""
     ref = VenueRef(venue_id=venue_id, slug=slug, name="selfcheck",
                    category=None, address=None, city=None)
+    search_shape = "not checked"
     try:
         with PoliteClient(s) as client:
             html = client.get(ref.url, use_cache=False)
             venue = parse_venue_stats(html, ref)
+            if probe_search:
+                search_shape = _probe_search(client, s)
     except ParseError as exc:
         return fail("selfcheck", Problem(
             code="selectors_stale",
@@ -302,7 +334,8 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
         command="selfcheck",
         ok=True,
         data={"url": ref.url, "total": venue.total, "unique": venue.unique,
-              "monthly": venue.monthly, "coords_embedded": venue.has_coords},
+              "monthly": venue.monthly, "coords_embedded": venue.has_coords,
+              "search": search_shape},
         next_actions=["python -m beer_in_this_town run --json"],
     )
 
@@ -620,6 +653,9 @@ def build_parser() -> argparse.ArgumentParser:
                            help="verify selectors still work (1 request)")
     check.add_argument("--slug", default="american-taproom-waterloo")
     check.add_argument("--id", dest="venue_id", default="7480946")
+    check.add_argument("--skip-search", action="store_true",
+                       help="only check the venue page (one request). The "
+                            "search probe is what catches a search outage.")
 
     run = sub.add_parser("run", parents=[common],
                          help="scrape, export, diff, and optionally upload")
@@ -700,7 +736,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "bootstrap":
             env = cmd_bootstrap(s, args.timeout, args.capture)
         elif args.cmd == "selfcheck":
-            env = cmd_selfcheck(s, args.slug, args.venue_id)
+            env = cmd_selfcheck(s, args.slug, args.venue_id,
+                                probe_search=not args.skip_search)
         elif args.cmd == "run":
             try:
                 formats = parse_formats(args.format)

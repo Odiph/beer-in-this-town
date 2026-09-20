@@ -47,7 +47,7 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `list_missing` | Target saved list does not exist | Ask the human to create it, or pick another `--list`. |
 | `robots_disallow` | robots.txt forbids the paths | **Stop and ask.** Do not pass `--i-read-robots` on your own initiative. |
 | `corpus_quality_gate` | <90% of venues parsed cleanly | Read `debug/*.html`, fix selectors in `parsers.py`, re-run. Nothing was written. |
-| `selectors_stale` | `selfcheck` could not parse a known-good page, or neither search path parsed during `run` | Same as above. From `selfcheck` this is the cheap early warning; note it only covers venue detail pages, not search. |
+| `selectors_stale` | `selfcheck` could not parse a known-good venue page or the search page, or neither search path parsed during `run` | Same as above. `selfcheck` is the cheap early warning and covers both surfaces; `data.search` says which shape the search page had. |
 | `search_login_required` | Untappd's sign-in wall cut the search short (anonymous search stops at 5) | Ask the human to sign in to Untappd in the browser profile. `bootstrap` only detects a Google session, so it cannot confirm this one. |
 | `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Not per-venue — check the key and billing, or unset it for Nominatim. Nothing was written. |
 | `csv_missing` | No input data | Run `run` first. |
