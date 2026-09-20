@@ -359,6 +359,7 @@ legal advice. You are responsible for your own use of it.
 | `bootstrap` | One-time login (opens a real Chrome) | reads |
 | `selfcheck` | Two requests: are the venue *and search* selectors alive | no |
 | `ui` | Setup dashboard: connect and test your accounts | reads |
+| `verify` | Test both accounts actually work (no browser window) | reads |
 | `run` | Collect → CSV + map files + diff | no |
 | `closures` | Ask Google Places whether each venue still trades | no |
 | `pin` | Save into a Google Maps list | **writes** |

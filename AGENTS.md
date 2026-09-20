@@ -51,7 +51,8 @@ stderr. Parse stdout; ignore stderr unless debugging.
 
 | `error.code` | Meaning | What to do |
 |---|---|---|
-| `not_signed_in` | Playwright profile has no Google session | **Stop and ask the human.** Requires their password; you cannot do this. |
+| `not_signed_in` | An account is signed out — from `verify`, `pin` or `notes` | **Stop and ask the human.** Requires their password; you cannot do this. `data.accounts` says which one and how it was established. |
+| `verify_unavailable` | The account check itself could not run | Not a signed-out account — usually a missing browser. Fix what the message names. Do **not** report this as "signed out". |
 | `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off. `status` reports the lock's age and whether it is stale under `data.write_guardrails.lock`. Do not delete the lock file; an abandoned one is broken automatically after 2h. |
 | `list_missing` | Target saved list does not exist | Ask the human to create it, or pick another `--list`. |
 | `list_ambiguous` | `--list` does not name exactly one list — no list matches it exactly, or several do | **Stop and ask.** Nothing was saved. Do not retry with a nearby name; that is how a place lands in the wrong list. |
@@ -131,6 +132,39 @@ divides that back out. Two consequences worth knowing:
   reported as a clean result.
 - A CSV with no `category` column makes every kind prediction `unsettled`, so
   the kind measurement says nothing. `label` warns when it sees this.
+
+## Setup, when you are the one driving
+
+`status` empties `next_actions` for two different reasons: the work is done,
+or it cannot go on without a person. **`data.blocked_on` tells them apart** --
+`null` means finished, `"sign_in"` means a human has to sign in.
+
+This used to loop. `next_actions` handed back `selfcheck`, nothing selfcheck
+does changes the session, and the loop above ran it forever. An empty list is
+the end of the loop; being blocked on a password is the end.
+
+The sequence when `blocked_on` is `"sign_in"`:
+
+1. **Stop looping.** Report it. Do not substitute `run` -- signed out of
+   Untappd, search stops at 5 results and a run builds a five-venue corpus
+   that looks like a finished scrape.
+2. **Ask the human to run `beertown ui`.** It needs a password, so it is not
+   yours to do, and it blocks on a browser window.
+3. **Then run `verify --json`** to find out whether it actually took.
+
+## The `verify` command
+
+Tests both accounts for real: a headless Maps load for Google, one request for
+Untappd. Read-only, opens no window, always returns -- safe for an agent, and
+the only way to answer "did the sign-in work" without the dashboard.
+
+Read `ran` before `ok`. `ok: false, ran: true` is a signed-out account.
+`ran: false` means the check could not run at all, which is a different
+problem with the opposite remedy, and reporting it as "signed out" sends the
+human through a login that was never broken.
+
+A cookie on disk is not a working account. `status`'s `logged_in` only means
+`storage_state.json` exists; this is what settles it.
 
 ## The `ui` command
 

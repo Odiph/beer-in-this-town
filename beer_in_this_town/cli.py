@@ -75,7 +75,13 @@ from .pin_to_list import (
 from .places import PlacesUnavailable, resolve_closures
 from .places import counts as closure_counts
 from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
-from .state import hints, inspect_state, next_actions, record_run
+from .state import (
+    blocked_on,
+    hints,
+    inspect_state,
+    next_actions,
+    record_run,
+)
 from .ui.server import DEFAULT_PORT as UI_DEFAULT_PORT
 
 log = logging.getLogger("beer_in_this_town")
@@ -176,12 +182,67 @@ def setup_logging(verbose: bool, as_json: bool) -> None:
 # --------------------------------------------------------------------------
 def cmd_status(s: Settings) -> Envelope:
     state = inspect_state(s)
+    # Additive field, so no schema bump -- AGENTS.md says `data` gains keys
+    # without one. It tells an empty `next_actions` that means "finished"
+    # apart from one that means "waiting for a person".
+    state = {**state, "blocked_on": blocked_on(state)}
     return Envelope(
         command="status",
         ok=True,
         data=state,
         next_actions=next_actions(state, s),
         hints=hints(state, s),
+    )
+
+
+def cmd_verify(s: Settings) -> Envelope:
+    """Test both accounts for real. Read-only, terminates, agent-safe.
+
+    The dashboard blocks on a person, which is right for a sign-in and wrong
+    for everything else: an agent still needs to know whether the sign-in
+    took, and had no way to ask. This is that question, with an envelope.
+
+    It opens a headless browser and makes one request. It writes nothing,
+    touches no saved list, and always returns.
+    """
+    from .ui.checks import verify_google, verify_untappd
+
+    results = {}
+    for name, verifier in (("google", verify_google),
+                           ("untappd", verify_untappd)):
+        r = verifier(s)
+        results[name] = {"ok": r.ok, "ran": r.ran, "detail": r.detail,
+                         "evidence": r.evidence}
+
+    failed = [k for k, v in results.items() if not v["ok"]]
+    # A probe that could not run is not a signed-out account, and the two
+    # want opposite remedies. Never collapse them -- see VerifyResult.ran.
+    unran = [k for k, v in results.items() if not v["ran"]]
+
+    if unran:
+        return fail("verify", Problem(
+            code="verify_unavailable",
+            message="Could not test " + " and ".join(unran) + ": "
+                    + "; ".join(results[k]["evidence"] for k in unran),
+            remedy="This is not a signed-out account -- the check itself "
+                   "could not run. Fix what the message names (usually a "
+                   "missing browser) and re-run.",
+        ), accounts=results)
+
+    if failed:
+        return fail("verify", Problem(
+            code="not_signed_in",
+            message="Signed out of " + " and ".join(failed) + ".",
+            remedy="Ask the human to run `beertown ui` and sign in; it needs "
+                   "a password, so an agent cannot do it. Signed out of "
+                   "Untappd, search stops at 5 results and a run would build "
+                   "a five-venue corpus.",
+        ), accounts=results)
+
+    return Envelope(
+        command="verify", ok=True,
+        data={"accounts": results, "verified": True},
+        next_actions=["python -m beer_in_this_town status --json"],
     )
 
 
@@ -1204,6 +1265,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="sampling seed; the same seed regenerates the same "
                             "sheet")
 
+    sub.add_parser("verify", parents=[common],
+                   help="test that both accounts actually work (headless, "
+                        "read-only, no browser window)")
+
     ui = sub.add_parser(
         "ui",
         parents=[common],
@@ -1249,7 +1314,7 @@ def build_parser() -> argparse.ArgumentParser:
 # Every subcommand name, so a bare invocation can be told from a mistyped one.
 _SUBCOMMANDS = frozenset({
     "status", "doctor", "bootstrap", "selfcheck", "run", "pin", "notes",
-    "label", "score", "closures", "ui",
+    "label", "score", "closures", "ui", "verify",
 })
 
 
@@ -1327,6 +1392,8 @@ def main(argv: list[str] | None = None) -> int:
             env = cmd_bootstrap(s, args.timeout, args.capture)
         elif args.cmd == "label":
             env = cmd_label(s, args.csv, args.out, args.quota, args.seed)
+        elif args.cmd == "verify":
+            env = cmd_verify(s)
         elif args.cmd == "ui":
             env = cmd_ui(s, args.port, open_browser=not args.no_open)
         elif args.cmd == "closures":
