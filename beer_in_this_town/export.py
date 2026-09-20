@@ -84,7 +84,8 @@ def write_kml(venues: list[Venue], path: Path, title: str) -> Path:
             f"Unique: {v.unique}<br/>"
             f"Monthly: {v.monthly}<br/>"
             f"You: {v.you if v.you is not None else '-'}<br/>"
-            f'<a href="{v.ref.url}">View on Untappd</a>'
+            # An empty href would render as a link back to the current page.
+            + (f'<a href="{v.ref.url}">View on Untappd</a>' if v.ref.url else "")
         )
         ET.SubElement(pm, "description").text = desc
 
@@ -179,7 +180,8 @@ def write_gpx(venues: list[Venue], path: Path, title: str) -> Path:
         wpt = ET.SubElement(gpx, "wpt", {"lat": f"{v.lat:.6f}", "lon": f"{v.lng:.6f}"})
         ET.SubElement(wpt, "name").text = v.ref.name
         ET.SubElement(wpt, "desc").text = _stats_line(v)
-        ET.SubElement(wpt, "link", {"href": v.ref.url})
+        if v.ref.url:
+            ET.SubElement(wpt, "link", {"href": v.ref.url})
 
     path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(gpx).write(path, encoding="utf-8", xml_declaration=True)

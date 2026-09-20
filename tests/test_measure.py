@@ -246,3 +246,24 @@ def test_a_csv_with_no_category_column_is_read_without_inventing_one():
     assert len(venues) == 1
     assert venues[0].ref.category is None
     assert venues[0].total == 20259, "thousands separators must survive"
+
+
+@pytest.mark.unit
+def test_a_row_with_no_venue_id_gets_no_url_rather_than_a_broken_one():
+    """A CSV predating the url column must not produce a plausible 404.
+
+    `https://untappd.com/v//American Taproom - Waterloo` looks like a link,
+    survives into the CSV and the KML's "View on Untappd", and fails only when
+    somebody follows it. Absent beats confidently wrong -- the same rule the
+    style-line parser and the corpus gate already follow.
+    """
+    from beer_in_this_town.models import VenueRef
+
+    real = VenueRef(venue_id="7480946", slug="american-taproom-waterloo",
+                    name="American Taproom", category=None, address=None, city=None)
+    assert real.url == "https://untappd.com/v/american-taproom-waterloo/7480946"
+
+    reconstructed = VenueRef(venue_id="American Taproom", slug="",
+                             name="American Taproom", category=None,
+                             address=None, city=None)
+    assert reconstructed.url == ""
