@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import time
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -130,6 +131,73 @@ def _search_url(name: str, address: str | None, region: str | None = None) -> st
     if region and region.lower() not in query.lower():
         query = f"{query}, {region}"
     return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(query)
+
+
+class AmbiguousList(RuntimeError):
+    """The requested list name does not identify exactly one list.
+
+    Raised rather than resolved. Picking the nearest label is how a place
+    lands in somebody else's list, and the verification step cannot catch it
+    afterwards because it is looking at the list that was actually clicked.
+    """
+
+
+# A picker row's accessible name often carries a place count -- "Bars (12)",
+# "Bars 12 places". That is the same list, so the count is stripped before
+# names are compared; nothing else about the label is.
+_COUNT_SUFFIX = re.compile(r"\s*(\(\d+\)|·?\s*\d+\s+places?)\s*$", re.I)
+
+
+def _list_key(name: str) -> str:
+    """Compare list names case- and padding-insensitively, and nothing more."""
+    return _COUNT_SUFFIX.sub("", (name or "").strip()).strip().casefold()
+
+
+def saved_in_names(text: str) -> set[str]:
+    """The list names out of a "Saved in ..." line, which may name several."""
+    return {part.strip() for part in (text or "").split(",") if part.strip()}
+
+
+def saved_in_target(text: str, list_name: str) -> bool:
+    """Is the place in EXACTLY the list we asked for?
+
+    Substring matching here reported success for the wrong list: an account
+    with "Bars" and "London Bars" saves into the latter, the reload reads
+    "Saved in London Bars", and `"bars" in "london bars"` is True. The run
+    then journals `ok` and never retries it.
+    """
+    want = _list_key(list_name)
+    return any(_list_key(n) == want for n in saved_in_names(text))
+
+
+def pick_list_row(row_names: list[str], list_name: str) -> int:
+    """Index of the row that IS the requested list. Never the nearest one."""
+    want = _list_key(list_name)
+    hits = [i for i, n in enumerate(row_names) if _list_key(n) == want]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise AmbiguousList(
+            f"No list in the picker is named exactly {list_name!r}. It offered: "
+            f"{', '.join(repr(n) for n in row_names) or '(nothing)'}. Nothing "
+            f"was saved -- clicking the closest name is how a place lands in "
+            f"the wrong list."
+        )
+    raise AmbiguousList(
+        f"{len(hits)} lists are named {list_name!r}. Rename one in Google Maps "
+        f"so the target is unambiguous; guessing between them is not safe."
+    )
+
+
+def list_exists_in(body: str, list_name: str) -> bool:
+    """Does the saved-lists page carry this list, as a line of its own?
+
+    Checking `list_name.lower() in body.lower()` passed for "Bars" whenever
+    "London Bars" existed, so a run could clear pre-flight against a list the
+    user does not have.
+    """
+    want = _list_key(list_name)
+    return any(_list_key(line) == want for line in (body or "").splitlines())
 
 
 def _saved_in(page) -> str | None:
@@ -251,7 +319,7 @@ def _assert_ready(page, list_name: str) -> None:
     page.wait_for_timeout(4000)
     body = page.locator("body").inner_text(timeout=15_000)
 
-    if list_name.lower() not in body.lower():
+    if not list_exists_in(body, list_name):
         raise RuntimeError(
             f"Saved list {list_name!r} not found in this account.\n"
             "This tool saves INTO an existing list; it does not create one.\n"
@@ -275,17 +343,22 @@ def _pin_once(page, list_name: str) -> str | None:
     # two attempts are reliably swallowed: the menu is still animating, Maps
     # discards the click, and we burn three interactions per place instead of
     # one -- slower, and three times the footprint for a rate-limited script.
-    row = (
+    candidates = (
         page.get_by_role("menuitemradio", name=list_name, exact=False)
         .or_(page.get_by_role("menuitemcheckbox", name=list_name, exact=False))
-        .first
     )
-    row.wait_for(state="visible", timeout=15_000)
+    candidates.first.wait_for(state="visible", timeout=15_000)
     page.wait_for_timeout(1200)  # settle: the menu animates after it is visible
 
     # Match the row by its accessible name. Position is irrelevant, so a reflow
     # cannot make this hit the neighbouring list -- the bug that put a Singapore
     # bar into a London list during the manual attempt.
+    #
+    # The role query is a substring match, so it offers "London Bars" for a
+    # request of "Bars" too. Resolving that with .first is how the wrong list
+    # gets clicked, and the verification below cannot see it afterwards.
+    names = candidates.all_inner_texts()
+    row = candidates.nth(pick_list_row(names, list_name))
     row.click(timeout=15_000)
 
     # Dismiss the picker and give Maps time to actually commit the write before
@@ -476,7 +549,7 @@ def pin_places(
                     breaker.record_failure()
                     time.sleep(random.uniform(min_gap_s, max_gap_s))
                     continue
-                if list_name.lower() in already.lower():
+                if saved_in_target(already, list_name):
                     journal[journal_key(name, address)] = "ok"
                     log.info("  already in %s", list_name)
                     _save_journal(journal, list_name)
@@ -506,7 +579,7 @@ def pin_places(
                                     "assuming either way", attempt)
                         page.wait_for_timeout(2000)
                         continue
-                    if list_name.lower() in landed.lower():
+                    if saved_in_target(landed, list_name):
                         outcome = "ok"
                         log.info("  saved (verified: %r)", landed)
                         break

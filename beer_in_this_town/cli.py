@@ -65,7 +65,7 @@ from .parsers import (
 )
 from .pin_to_list import MAX_GAP_S as PIN_MAX_GAP
 from .pin_to_list import MIN_GAP_S as PIN_MIN_GAP
-from .pin_to_list import pin_places, places_from_csv
+from .pin_to_list import AmbiguousList, pin_places, places_from_csv
 from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
 from .state import inspect_state, next_actions, record_run
 
@@ -649,6 +649,15 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
             remedy="Wait. Do not re-run until the cool-off expires; check "
                    "`python -m beer_in_this_town status --json`. Do not delete "
                    "state/rate_ledger.json.",
+        ))
+    except AmbiguousList as exc:
+        # Nothing was saved. Resolving this by picking the nearest name is the
+        # wrong-list failure the verification step cannot see afterwards.
+        return fail("pin", Problem(
+            code="list_ambiguous",
+            message=str(exc),
+            remedy="Pass --list with the list's exact name, or rename the "
+                   "lists in Google Maps so the target is unambiguous.",
         ))
     except RuntimeError as exc:
         text = str(exc)
