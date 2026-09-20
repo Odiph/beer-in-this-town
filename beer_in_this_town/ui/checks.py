@@ -316,6 +316,31 @@ def ready(checks: tuple[Check, ...]) -> bool:
 
 
 
+# What the city actually controls, for the step that asks for it. Every line
+# here is a mechanical consequence of the query, not advice about what makes a
+# nice night out -- the second kind ages badly and nobody can check it.
+SEARCH_NOTES = (
+    ("It goes straight to Untappd's venue search",
+     "The search is already limited to venues, so “london” is the "
+     "whole query. “bars in london” searches for a venue with "
+     "those words in its name."),
+    ("A place name, at the size you want the map",
+     "“berlin” and “kreuzberg” are both fine and give "
+     "you different maps. A query with few matching venues finishes early "
+     "and collects fewer than the 100 asked for — that is the query "
+     "running out, not a failure."),
+    ("It names the comparison for next time",
+     "Each run is diffed against the last one with the same query, so "
+     "“london” and “London” share a history but "
+     "“London, UK” starts a fresh one, where the first diff "
+     "reports every venue as new."),
+    ("It names the map",
+     "“london” becomes “London Bars”, which is the "
+     "Google Maps list `pin` would later save into. Create that list first, "
+     "with that exact name, if you plan to use it."),
+)
+
+
 @dataclass(frozen=True)
 class NextStep:
     """The one thing to do now, and nothing else.
@@ -332,6 +357,9 @@ class NextStep:
     cta: str = ""       # button label; empty when the user acts elsewhere
     action: str = ""    # the action id that button starts
     done: bool = False
+    # (heading, body) pairs, shown behind a disclosure on the step that needs
+    # them. Empty for the steps that do not.
+    notes: tuple[tuple[str, str], ...] = ()
 
 
 def next_step(rows: tuple[Check, ...]) -> NextStep:
@@ -380,6 +408,7 @@ def next_step(rows: tuple[Check, ...]) -> NextStep:
         "run it yourself. Either way the run happens in your terminal, where "
         "you can watch it and stop it.",
         done=True,
+        notes=SEARCH_NOTES,
     )
 
 

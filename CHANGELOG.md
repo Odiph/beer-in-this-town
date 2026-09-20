@@ -7,6 +7,18 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **The browser search path did not encode the query.** It built the URL with
+  an f-string, so `&` in a city started a new parameter and `#` turned the
+  rest into a fragment — "rock & roll" searched for "rock ", returned results,
+  and looked perfectly healthy. The HTTP path always passed `params=`; the
+  browser path is the one that actually runs now that Untappd's search is
+  client-rendered.
+- The city step explains what the query decides: it is Untappd's venue search,
+  it names the diff baseline for next time, and it derives the Maps list name.
+  Every line is a mechanical consequence someone can check, not advice about
+  what makes a good night out.
+- README covers the wizard, with a screenshot of the first screen and a GIF of
+  the last step.
 - **The city typed in the dashboard reaches the agent.** It used to live in
   `localStorage` and nowhere else, so the wizard would hand a person a London
   command while `status` went on offering Singapore — both halves behaving

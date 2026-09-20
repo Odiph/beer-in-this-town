@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from urllib.parse import urlencode
 
 from .config import SEARCH_URL, Settings
 from .http_client import (
@@ -114,12 +115,24 @@ def search_via_http(client: PoliteClient, s: Settings) -> list[VenueRef]:
     )
 
 
+def search_url_for(query: str) -> str:
+    """Untappd's venue search for this query, correctly encoded.
+
+    urlencode, not an f-string. Interpolating the query raw meant an `&` in it
+    started a new parameter and a `#` turned the rest into a fragment -- so
+    "rock & roll" searched for "rock ", returned results, and gave no sign
+    anything was wrong. The HTTP path has always passed `params=`; this is the
+    path that actually runs now that search is client-rendered.
+    """
+    return f"{SEARCH_URL}?{urlencode({'q': query, 'type': 'venues'})}"
+
+
 def search_via_browser(s: Settings) -> list[VenueRef]:
     """Fallback: drive real Chrome and click Show More until we have enough."""
     from playwright.sync_api import TimeoutError as PWTimeout
     from playwright.sync_api import sync_playwright
 
-    url = f"{SEARCH_URL}?q={s.query}&type=venues"
+    url = search_url_for(s.query)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             user_data_dir=str(s.profile_dir),

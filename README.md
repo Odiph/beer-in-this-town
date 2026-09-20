@@ -28,9 +28,12 @@ opt-in, never run on their own, and spelled out in
 [Where the lines are](#where-the-lines-are).
 
 ```bash
+beertown                    # opens the setup wizard, once
 beertown status --json      # where am I, what is next
 beertown run --query singapore --count 100 --json
 ```
+
+![The setup wizard on a machine that has never run it](docs/setup-signin.jpg)
 
 ---
 
@@ -131,7 +134,8 @@ tier, but billing must be enabled on the key.
 beertown
 ```
 
-That's it. With no arguments it opens a dashboard on `localhost` that walks you through the one-time setup:
+That's it. With no arguments it opens a wizard on `localhost` — three steps,
+once — that walks you through the setup:
 Chrome, your Google account, your Untappd account. It signs you in, then
 **tests both accounts with a real round-trip** — and only calls them connected
 once that passes.
@@ -142,6 +146,12 @@ That distinction is the point. A cookie on disk means a login happened once,
 not that the account works now. Before this, a stale Untappd session announced
 itself as `search_login_required` a hundred requests into a run; the dashboard
 finds it in one.
+
+The last step asks for your city and hands it to whatever is driving — press
+**Use this city** and the next `status` offers a `run` for *your* city rather
+than the built-in default. Or copy the command and run it yourself.
+
+![Naming a city in the last step of the wizard](docs/setup-wizard.gif)
 
 While anything is running, the page narrates what it's doing and why it's
 taking as long as it is — including the pacing waits, which are deliberate.
@@ -368,6 +378,14 @@ legal advice. You are responsible for your own use of it.
 | `score` | Report how accurate those filters actually are | no |
 
 ## Agent-driven use
+
+The setup is agent-driven too. `status` reports `blocked_on: "sign_in"` with an
+empty `next_actions` when it needs a person, and the action it offers first is
+`ui --detach`, which starts the wizard in its own process and returns at once —
+so an agent opens it *for* you rather than telling you to type something. You
+sign in; it runs `verify --json` to find out whether that took. `run` is not
+offered until a verification has actually passed.
+
 
 Every command emits exactly one envelope on stdout:
 
