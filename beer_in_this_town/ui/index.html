@@ -78,6 +78,23 @@
   }
   .tag.tested{background:var(--ok-wash); color:var(--ok)}
 
+  /* per-row: somewhere to go, and the longer answer on request */
+  .rowgo{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px}
+  .rowgo a{
+    color:var(--accent); font-size:13px; font-weight:600; text-decoration:none;
+    border-bottom:1px solid transparent;
+  }
+  .rowgo a:hover{border-bottom-color:var(--accent)}
+  .rowgo a:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  .rowgo button{padding:7px 12px; font-size:13px; border-radius:8px}
+  .rowgo button.go{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
+  li details{margin-top:7px}
+  li summary{
+    cursor:pointer; font-size:12.5px; color:var(--muted); width:fit-content;
+  }
+  li summary:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:4px}
+  li details p{margin:6px 0 0; font-size:13px; color:var(--muted); max-width:60ch}
+
   .actions{display:flex; gap:10px; flex-wrap:wrap; margin-top:16px}
   button{
     font:inherit; font-weight:600; font-size:14px; cursor:pointer;
@@ -247,6 +264,43 @@ function renderChecks(rows) {
       fix.className = "fix";
       fix.textContent = c.fix;
       body.appendChild(fix);
+    }
+
+    // Somewhere to act, and somewhere to go. A row that names a problem and
+    // leaves you to find the page yourself is the work this page removes.
+    const needsAction = c.action && c.state !== "ok";
+    if (needsAction || (c.links && c.links.length)) {
+      const go = document.createElement("div");
+      go.className = "rowgo";
+      if (needsAction) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "go";
+        b.id = "row-" + c.key + "-" + c.action;
+        b.textContent = c.action === "connect" ? "Sign in" : "Test it";
+        b.disabled = busy;
+        b.addEventListener("click", () => start(c.action));
+        go.appendChild(b);
+      }
+      for (const link of c.links || []) {
+        const a = document.createElement("a");
+        a.href = link.url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = link.label + " ↗";
+        go.appendChild(a);
+      }
+      body.appendChild(go);
+    }
+
+    if (c.why) {
+      const d = document.createElement("details");
+      const s = document.createElement("summary");
+      s.textContent = "Why this matters";
+      const para = document.createElement("p");
+      para.textContent = c.why;
+      d.append(s, para);
+      body.appendChild(d);
     }
 
     li.appendChild(body);
@@ -456,6 +510,7 @@ function renderButtons(state) {
   for (const id of BUTTONS) $(id).disabled = busy;
   const lead = $("leadgo").querySelector("button.primary");
   if (lead) lead.disabled = busy;
+  for (const b of document.querySelectorAll(".rowgo button")) b.disabled = busy;
 }
 
 async function tick() {
