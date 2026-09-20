@@ -29,6 +29,8 @@ from .export import (
     today_stamp,
     write_csv,
     write_diff_outputs,
+    write_geojson,
+    write_gpx,
     write_kml,
 )
 from .geocode import GeocoderUnavailable, geocode_missing
@@ -51,6 +53,23 @@ from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
 from .state import inspect_state, next_actions, record_run
 
 log = logging.getLogger("beer_in_this_town")
+
+
+MAP_FORMATS = ("kml", "geojson", "gpx")
+
+
+def parse_formats(raw: str) -> tuple[str, ...]:
+    """Validate --format at the boundary rather than writing nothing silently."""
+    asked = tuple(f.strip().lower() for f in raw.split(",") if f.strip())
+    unknown = [f for f in asked if f not in MAP_FORMATS]
+    if unknown:
+        raise ValueError(
+            f"Unknown map format(s): {', '.join(unknown)}. "
+            f"Choose from {', '.join(MAP_FORMATS)}."
+        )
+    if not asked:
+        raise ValueError(f"--format needs at least one of {', '.join(MAP_FORMATS)}.")
+    return asked
 
 
 def setup_logging(verbose: bool, as_json: bool) -> None:
@@ -289,7 +308,7 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
 
 
 def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
-            skip_robots: bool) -> Envelope:
+            skip_robots: bool, formats: tuple[str, ...] = ("kml",)) -> Envelope:
     ensure_dirs()
     stamp = today_stamp()
 
@@ -357,7 +376,17 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
         ), venues_scraped=len(venues))
 
     csv_path = write_csv(venues, DATA_DIR / f"venues_{s.query}_{stamp}.csv")
-    kml_path = write_kml(venues, DATA_DIR / f"venues_{s.query}_{stamp}.kml", s.map_title)
+
+    base = DATA_DIR / f"venues_{s.query}_{stamp}"
+    # KML stays in the default set so existing workflows are untouched.
+    written: dict[str, str] = {}
+    if "kml" in formats:
+        written["kml"] = str(write_kml(venues, base.with_suffix(".kml"), s.map_title))
+    if "geojson" in formats:
+        written["geojson"] = str(write_geojson(venues, base.with_suffix(".geojson")))
+    if "gpx" in formats:
+        written["gpx"] = str(write_gpx(venues, base.with_suffix(".gpx"), s.map_title))
+    kml_path = Path(written["kml"]) if "kml" in written else None
 
     diff = diff_against_previous(venues, s.query)
     write_diff_outputs(diff, stamp)
@@ -380,7 +409,11 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
         )
 
     map_url = None
-    if upload:
+    if upload and kml_path is None:
+        warnings.append(
+            "--upload needs a KML; add kml to --format. Nothing was uploaded."
+        )
+    elif upload:
         map_url = upload_kml(kml_path, s)
         if not map_url:
             warnings.append("My Maps automation failed; import the KML by hand.")
@@ -392,7 +425,8 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
         data={
             "venues": len(venues),
             "csv": str(csv_path),
-            "kml": str(kml_path),
+            "kml": written.get("kml"),
+            "maps": written,
             "new_since_last_run": len(diff["new"]),
             "changed": len(diff["changed"]),
             "my_maps_url": map_url,
@@ -592,6 +626,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--query", default="singapore")
     run.add_argument("--count", type=int, default=100)
     run.add_argument("--title", default=None, help='My Maps title, e.g. "Singapore Bars"')
+    run.add_argument("--format", default="kml",
+                     help="comma-separated map formats: kml (My Maps), geojson "
+                          "and gpx (Organic Maps, OsmAnd -- these pin on the "
+                          "everyday map). Default: kml")
     run.add_argument("--no-upload", action="store_true", help="write files only")
     run.add_argument("--browser-search", action="store_true",
                      help="force the Show More click path instead of HTTP pagination")
@@ -664,9 +702,21 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "selfcheck":
             env = cmd_selfcheck(s, args.slug, args.venue_id)
         elif args.cmd == "run":
+            try:
+                formats = parse_formats(args.format)
+            except ValueError as exc:
+                env = fail("run", Problem(
+                    code="bad_format",
+                    message=str(exc),
+                    remedy="Re-run with --format kml (My Maps), geojson or gpx "
+                           "(Organic Maps, OsmAnd), comma-separated.",
+                ))
+                emit(env, as_json)
+                return 1
             env = cmd_run(s, upload=not args.no_upload,
                           force_browser=args.browser_search,
-                          skip_robots=args.i_read_robots)
+                          skip_robots=args.i_read_robots,
+                          formats=formats)
         elif args.cmd == "notes":
             env = cmd_notes(s, args.csv, args.list_name, args.limit,
                             args.region or None, args.min_gap, args.max_gap)

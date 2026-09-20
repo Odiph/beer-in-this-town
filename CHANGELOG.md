@@ -6,6 +6,16 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `--format kml,geojson,gpx` on `run`. The everyday-map use case — the thing
+  the project is actually for — had only two routes: a My Maps layer that gives
+  up the everyday-map pins, or `pin`, which gets them back by automating a UI
+  Google's terms say not to automate. Organic Maps, OsmAnd and every OSM-based
+  client import GPX and GeoJSON as bookmarks on the everyday map, offline, with
+  no account. The gap "there is no API for this" documents is real for Google,
+  not for every map. Default is unchanged (`kml`), and an unknown format fails
+  at the boundary with `bad_format` rather than writing no map quietly.
+
 ### Fixed
 - State artifacts were global where they describe one city or one list, so a
   second city could not be scraped without damage. `previous_run.json` was a
