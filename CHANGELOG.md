@@ -29,6 +29,28 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   at the boundary with `bad_format` rather than writing no map quietly.
 
 ### Fixed
+- `score` reported numbers that did not mean what they said. A dropped venue
+  was judged by "was this a real venue", which every café in the `non_beer`
+  bucket is — so with every label correct the harness reported that 100% of
+  dropped venues were dropped wrongly. A drop is now judged against the claim
+  the classifier actually made about that bucket. Found by an independent
+  review of the harness; caught nothing because the tests only ever built two
+  buckets, neither of them `non_beer`.
+- Every rate's denominator is now the rows that answered *that* question. A
+  blank counted as "no error", so a sheet where only `true_kind` was filled
+  reported a clean corpus nobody had looked at.
+- `?` is an abstention rather than a verdict. It counted as "private",
+  inflating the expensive rate, while an unrecognised value like `closed`
+  counted as "not closed" and deflated the cheap one — silently, in the tool
+  built to stop exactly that. Unknown values now fail `labels_unusable`
+  naming the row and the cell.
+- `unsettled` predictions are excluded from kind accuracy instead of scored as
+  wrong, so the metric stops measuring how often the category line was blank.
+- The labelling sheet survives a spreadsheet. The bucket sizes rode in a `#`
+  comment on line 1; Excel and Sheets parse that as CSV and write it back
+  mangled, after which `score` failed with a remedy that failed the same way.
+  They now ride in a `_stratum_size` column, and a sheet saved in the system
+  codepage is read as cp1252 rather than crashing.
 - `selfcheck` could not see a search outage. It fetched one venue detail page,
   which is server-rendered and was unaffected when Untappd moved search to
   Algolia, so it returned `ok: true` for the whole time every `run` was
