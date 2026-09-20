@@ -95,6 +95,10 @@ trial it with `--limit` first.
 It only annotates places already in the target list; anything else is recorded
 as `not-in-list` and left alone. A note that already matches is never rewritten.
 
+Like `pin`, it runs a pre-flight first and reports `not_signed_in` or
+`list_missing` rather than working through a hundred places against a
+signed-out browser.
+
 ## The `label` and `score` commands
 
 `classify.py` holds candidate heuristics for venue kind, closed venues and

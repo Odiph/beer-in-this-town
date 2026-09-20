@@ -779,6 +779,38 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
             message=str(exc),
             remedy="Wait for the cool-off. Do not retry or delete the ledger.",
         ))
+    except AmbiguousList as exc:
+        return fail("notes", Problem(
+            code="list_ambiguous",
+            message=str(exc),
+            remedy="Pass --list with the list's exact name, or rename the "
+                   "lists in Google Maps so the target is unambiguous.",
+        ))
+    except RuntimeError as exc:
+        # Same split `pin` makes. Without it, a signed-out profile and a
+        # missing list both arrived as notes_failed with a "re-run" remedy,
+        # which is the one thing that cannot help either.
+        message = str(exc)
+        if "Not signed in" in message:
+            return fail("notes", Problem(
+                code="not_signed_in",
+                message=message,
+                remedy="Run `python -m beer_in_this_town bootstrap` yourself "
+                       "and sign in; an agent cannot do this.",
+            ))
+        if "not found in this account" in message:
+            return fail("notes", Problem(
+                code="list_missing",
+                message=message,
+                remedy="Create the list by hand in Google Maps, or pass a "
+                       "--list that exists.",
+            ))
+        return fail("notes", Problem(
+            code="notes_failed",
+            message=message,
+            remedy="Re-run; progress is journalled so completed notes are "
+                   "skipped.",
+        ))
     except Exception as exc:
         return fail("notes", Problem(
             code="notes_failed",
