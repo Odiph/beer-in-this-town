@@ -128,6 +128,13 @@ def looks_private(v: Venue) -> bool:
     The discriminating shape is many check-ins concentrated in very few
     people. Requiring both halves is what keeps a brand-new venue -- low
     unique, low total -- out of the bucket.
+
+    Known to be a candidate generator rather than a decider. The shape has at
+    least three causes and this cannot separate them: a home, a hotel room,
+    and one regular at a thoroughly public venue. The seed corpus has
+    `Hong Lee Coffeeshop` at 2,807 check-ins over 2 unique visitors against a
+    median of 4.1 -- a kopitiam, not a flat. #20 proposes the Places lookup
+    that tells them apart; until then nothing here should decide alone.
     """
     if v.unique is None or v.total is None:
         return False
