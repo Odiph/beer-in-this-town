@@ -52,7 +52,7 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Not per-venue — check the key and billing, or unset it for Nominatim. Nothing was written. |
 | `csv_missing` | No input data | Run `run` first. |
 | `labels_incomplete` | A sampled bucket came back with no labels | Ask the human to label a few rows in every bucket. The rare ones are the point. |
-| `labels_unusable` | The sheet lost its bucket-size header | Re-generate with `label` and copy the answers across. |
+| `labels_unusable` | An answer is outside the accepted vocabulary, or the sheet lost its `_stratum`/`_stratum_size` columns | The message names the row and cell. Answers are `y` / `n` / `?`; a blank means unanswered. |
 | `notes_failed` | The notes pass failed | Re-run; progress resumes. |
 | `interrupted` | Ctrl-C | Re-run the same command; progress is journalled. |
 | `unexpected_error` | Unhandled | Re-run with `-v` for a traceback. |
@@ -99,6 +99,10 @@ divides that back out. Two consequences worth knowing:
 
 - Labelling only the easy rows breaks the weighting. `score` refuses a bucket
   with no labels and warns about thin ones, but cannot detect cherry-picking.
+- Every rate's denominator is the rows that answered **that** question. A blank
+  is not an answer and `?` is not a verdict, so a rate can come back `null`
+  meaning *unknown* — which is not the same as zero errors, and must not be
+  reported as a clean result.
 - A CSV with no `category` column makes every kind prediction `unsettled`, so
   the kind measurement says nothing. `label` warns when it sees this.
 

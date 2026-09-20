@@ -15,6 +15,7 @@ import pytest
 
 from beer_in_this_town.measure import (
     LabelSheet,
+    LabelsUnusable,
     PartialStratum,
     score_labels,
     stratified_sample,
@@ -267,3 +268,200 @@ def test_a_row_with_no_venue_id_gets_no_url_rather_than_a_broken_one():
                              name="American Taproom", category=None,
                              address=None, city=None)
     assert reconstructed.url == ""
+
+
+# --- what the review found: rates that did not mean what they claimed ------
+def _mixed(n_bar=90, n_cafe=10, n_private=5):
+    """A corpus with all three drop reasons, so each is judged on its own claim."""
+    return ([_venue(str(i)) for i in range(n_bar)]
+            + [_venue(f"c{i}", category="Cafe") for i in range(n_cafe)]
+            + [_venue(f"p{i}", total=400, unique=1, monthly=5) for i in range(n_private)])
+
+
+def _answer(sheet, per_stratum):
+    return [dict(r, **per_stratum.get(r["_stratum"], {})) for r in sheet.rows]
+
+
+@pytest.mark.unit
+def test_a_correctly_dropped_cafe_is_not_an_error():
+    """Every cafe in drop:non_beer is a real, public, open place.
+
+    Judging a drop by "was this a real venue" therefore scored a perfectly
+    correct drop as a mistake: with every label right, the rate read 1.0. A
+    drop has to be judged against the claim the classifier actually made.
+    """
+    sheet = stratified_sample(_mixed(), quota=5, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "y", "is_open": "y",
+                                "true_kind": "craft_beer_bar"},
+        "drop:non_beer": {"is_public": "y", "is_open": "y", "true_kind": "non_beer"},
+        "drop:private": {"is_public": "n", "is_open": "?", "true_kind": ""},
+    })
+    report = score_labels(rows, sheet.stratum_sizes)
+    assert report["rates"]["real_venue_dropped"] == pytest.approx(0.0)
+    assert report["rates"]["private_space_kept"] == pytest.approx(0.0)
+
+
+@pytest.mark.unit
+def test_a_beer_venue_dropped_as_non_beer_is_an_error():
+    """The other direction of the same bucket must still be caught."""
+    sheet = stratified_sample(_mixed(), quota=5, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "y", "is_open": "y",
+                                "true_kind": "craft_beer_bar"},
+        "drop:non_beer": {"is_public": "y", "is_open": "y", "true_kind": "brewery"},
+        "drop:private": {"is_public": "n", "is_open": "?", "true_kind": ""},
+    })
+    report = score_labels(rows, sheet.stratum_sizes)
+    assert report["rates"]["real_venue_dropped"] > 0.5
+    assert report["disagreements"]["real_venue_dropped"]
+
+
+@pytest.mark.unit
+def test_a_blank_answer_is_not_scored_as_no_error():
+    """A blank used to read as 'not private', so an unlabelled corpus read clean."""
+    sheet = stratified_sample(_mixed(n_cafe=0, n_private=5), quota=5, seed=1)
+    # Only true_kind is filled on the kept rows: is_public was never answered.
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"true_kind": "craft_beer_bar"},
+        "drop:private": {"is_public": "n", "is_open": "?"},
+    })
+    report = score_labels(rows, sheet.stratum_sizes)
+    assert report["rates"]["private_space_kept"] is None, \
+        "no answer to the question means unknown, never 0.0"
+
+
+@pytest.mark.unit
+def test_not_sure_is_an_abstention_not_a_verdict():
+    """'?' used to count as private, inflating the expensive rate to 1.0."""
+    sheet = stratified_sample(_mixed(n_cafe=0), quota=5, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "?", "is_open": "?"},
+        "drop:private": {"is_public": "n", "is_open": "?"},
+    })
+    report = score_labels(rows, sheet.stratum_sizes)
+    assert report["rates"]["private_space_kept"] is None
+    assert report["abstained"]["is_public"] >= 5
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("field,value", [
+    ("is_public", "maybe"), ("is_open", "closed"), ("true_kind", "Beer Bar"),
+])
+def test_an_answer_outside_the_vocabulary_stops_the_score(field, value):
+    """'closed' read as not-closed, silently. Name the row instead of guessing."""
+    sheet = stratified_sample(_mixed(n_cafe=0), quota=5, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "y", "is_open": "y",
+                                "true_kind": "craft_beer_bar"},
+        "drop:private": {"is_public": "n", "is_open": "?"},
+    })
+    rows[0][field] = value
+    with pytest.raises(LabelsUnusable, match=field):
+        score_labels(rows, sheet.stratum_sizes)
+
+
+@pytest.mark.unit
+def test_common_spellings_are_accepted():
+    """Rejecting 'yes' would be pedantry, not rigour."""
+    sheet = stratified_sample(_mixed(n_cafe=0), quota=5, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "Yes", "is_open": "YES",
+                                "true_kind": "Craft Beer Bar"},
+        "drop:private": {"is_public": "no", "is_open": "?"},
+    })
+    report = score_labels(rows, sheet.stratum_sizes)
+    assert report["rates"]["private_space_kept"] == pytest.approx(0.0)
+    assert report["rates"]["venue_kind_correct"] == pytest.approx(1.0)
+
+
+@pytest.mark.unit
+def test_an_abstaining_prediction_is_not_scored_as_a_wrong_kind():
+    """`unsettled` is a deliberate abstention in classify.py.
+
+    Scoring it wrong turned kind accuracy into a measure of how often the
+    category line was blank -- 0.0 on a CSV with no category column, which
+    AGENTS.md describes as saying nothing.
+    """
+    sheet = stratified_sample([_venue(str(i), category=None) for i in range(40)],
+                              quota=5, seed=1)
+    rows = _answer(sheet, {"review:unsettled": {"is_public": "y", "is_open": "y",
+                                                "true_kind": "craft_beer_bar"}})
+    report = score_labels(rows, sheet.stratum_sizes)
+    assert report["rates"]["venue_kind_correct"] is None
+    assert any("kind" in w for w in report["warnings"])
+
+
+@pytest.mark.unit
+def test_a_row_from_a_different_sheet_is_refused():
+    """A hand-edited or stale sheet used to KeyError into unexpected_error."""
+    sheet = stratified_sample(_mixed(n_cafe=0), quota=5, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "y", "is_open": "y"},
+        "drop:private": {"is_public": "n", "is_open": "?"},
+    })
+    rows[0]["_stratum"] = "keep:invented_bucket"
+    with pytest.raises(LabelsUnusable, match="invented_bucket"):
+        score_labels(rows, sheet.stratum_sizes)
+
+
+@pytest.mark.unit
+def test_a_closed_venue_kept_is_reported_on_its_own():
+    """#7's direction: the classifier kept something that has shut."""
+    sheet = stratified_sample(_mixed(n_cafe=0), quota=5, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "y", "is_open": "n",
+                                "true_kind": "craft_beer_bar"},
+        "drop:private": {"is_public": "n", "is_open": "?"},
+    })
+    report = score_labels(rows, sheet.stratum_sizes)
+    assert report["rates"]["closed_venue_kept"] == pytest.approx(1.0)
+    assert report["rates"]["private_space_kept"] == pytest.approx(0.0)
+
+
+# --- the sheet has to survive a spreadsheet --------------------------------
+@pytest.mark.unit
+def test_the_sheet_survives_a_round_trip_through_a_spreadsheet(tmp_path):
+    """The labeller opens this in Excel or Sheets, which rewrites the file.
+
+    The bucket sizes used to ride in a `#` comment on line 1. Any spreadsheet
+    parses that as CSV -- commas split it into cells, quotes double -- and
+    saving puts it back mangled, so `score` failed with a remedy ("re-generate
+    and copy your answers across") that fails in exactly the same way.
+    """
+    import csv as _csv
+
+    from beer_in_this_town.measure import read_sheet, write_sheet
+
+    sheet = stratified_sample(_mixed(n_cafe=4, n_private=3), quota=4, seed=1)
+    path = tmp_path / "labels.csv"
+    write_sheet(sheet, path)
+
+    # What a spreadsheet does: read every line as CSV, write every cell back.
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        grid = list(_csv.reader(fh))
+    with path.open("w", encoding="utf-8-sig", newline="") as fh:
+        _csv.writer(fh).writerows(grid)
+
+    rows, sizes = read_sheet(path)
+    assert sizes == sheet.stratum_sizes
+    assert len(rows) == len(sheet.rows)
+    assert {r["_stratum"] for r in rows} == set(sheet.stratum_sizes)
+
+
+@pytest.mark.unit
+def test_a_sheet_saved_as_ansi_still_reads(tmp_path):
+    """Excel's default save is the system codepage, not UTF-8."""
+    from beer_in_this_town.measure import read_sheet, write_sheet
+
+    sheet = stratified_sample(_mixed(n_cafe=0, n_private=2), quota=3, seed=1)
+    path = tmp_path / "labels.csv"
+    write_sheet(sheet, path)
+    # Rename whatever row was actually sampled, rather than assuming one.
+    original = sheet.rows[0]["name"]
+    text = path.read_text(encoding="utf-8-sig").replace(original, "Café Münster")
+    path.write_bytes(text.encode("cp1252"))
+
+    rows, sizes = read_sheet(path)
+    assert sizes == sheet.stratum_sizes
+    assert any("Münster" in r["name"] for r in rows)

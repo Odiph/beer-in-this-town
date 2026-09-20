@@ -43,6 +43,7 @@ from .http_client import (
 )
 from .measure import (
     DEFAULT_QUOTA,
+    LabelsUnusable,
     PartialStratum,
     read_sheet,
     score_labels,
@@ -438,6 +439,15 @@ def cmd_score(s: Settings, labels_path: str) -> Envelope:
 
     try:
         report = score_labels(rows, sizes)
+    except LabelsUnusable as exc:
+        # A value outside the vocabulary. Guessing at it is how a typo becomes
+        # a verdict, so the row and the cell are named instead.
+        return fail("score", Problem(
+            code="labels_unusable",
+            message=str(exc),
+            remedy="Fix that cell and re-run. Answers are y, n or ? (or yes / "
+                   "no); true_kind must be one of the kinds `label` predicts.",
+        ))
     except PartialStratum as exc:
         return fail("score", Problem(
             code="labels_incomplete",
