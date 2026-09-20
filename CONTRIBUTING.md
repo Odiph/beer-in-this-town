@@ -19,6 +19,12 @@ pytest -q -m unit
 browser. CI never touches Untappd or Google. If you need a fixture, paste the
 markup into the test file rather than fetching it.
 
+**Check your change reaches the code path.** The most common bug in this repo
+by a wide margin is an exception raised deliberately in one function and
+swallowed by a broad `except` in its caller — it has shipped five times. Before
+claiming a fix works, trace the raise to its handler. The `verify-change` skill
+in `.claude/skills/` is that check written down.
+
 **Parsers fail loudly.** Never add a silent fallback to a selector. If the
 markup might be missing, raise `ParseError` and dump the HTML to `debug/`. A
 scraper that returns wrong numbers is worse than one that stops.
