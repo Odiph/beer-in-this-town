@@ -15,6 +15,7 @@ without parsing tracebacks.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -39,6 +40,15 @@ from .http_client import (
     BudgetExceeded,
     PoliteClient,
     RateLimitTripped,
+)
+from .measure import (
+    DEFAULT_QUOTA,
+    PartialStratum,
+    read_sheet,
+    score_labels,
+    stratified_sample,
+    venues_from_csv,
+    write_sheet,
 )
 from .models import VenueRef
 from .mymaps_upload import manual_instructions, upload_kml
@@ -337,6 +347,121 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str,
               "monthly": venue.monthly, "coords_embedded": venue.has_coords,
               "search": search_shape},
         next_actions=["python -m beer_in_this_town run --json"],
+    )
+
+
+def cmd_label(s: Settings, csv_path: str, out: str | None,
+              quota: int, seed: int) -> Envelope:
+    """Emit a labelling sheet: a stratified sample for a human to judge.
+
+    Reads only what `run` already wrote. No network, no browser, no account.
+    """
+    source = Path(csv_path)
+    if not source.exists():
+        return fail("label", Problem(
+            code="csv_missing",
+            message=f"No such CSV: {source}",
+            remedy="Run `run` first, or pass --csv with a path that exists.",
+        ))
+
+    venues = venues_from_csv(source)
+    if not venues:
+        return fail("label", Problem(
+            code="csv_missing",
+            message=f"{source.name} carried no venue rows.",
+            remedy="Check the file is one this project wrote, then re-run.",
+        ))
+
+    sheet = stratified_sample(venues, quota=quota, seed=seed)
+    target = Path(out) if out else DATA_DIR / f"labels_{source.stem}.csv"
+    write_sheet(sheet, target)
+
+    warnings = []
+    # An early `run` -- and the seed CSV -- carried no category column at all.
+    # Every venue is then "unsettled" by definition, so a labeller would spend
+    # 45 minutes answering true_kind against a classifier that never had an
+    # opinion to be wrong about. Say so before they start, not after.
+    if not any(v.ref.category for v in venues):
+        warnings.append(
+            "No venue in this CSV has a category, so every kind prediction is "
+            "'unsettled' and the venue-kind measurement will say nothing. The "
+            "closure and private-space measurements are unaffected. Re-scrape "
+            "with a current `run` to measure kind."
+        )
+    thin = [b for b, n in sheet.counts_by_stratum().items() if n < quota]
+    if thin:
+        warnings.append(
+            f"{len(thin)} bucket(s) held fewer venues than the quota and were "
+            f"taken whole: {', '.join(sorted(thin))}"
+        )
+
+    return Envelope(
+        command="label",
+        ok=True,
+        data={
+            "sheet": str(target),
+            "rows": len(sheet.rows),
+            "venues": len(venues),
+            "buckets": sheet.counts_by_stratum(),
+            "bucket_population": sheet.stratum_sizes,
+        },
+        warnings=warnings,
+        next_actions=[
+            f'# fill in is_public, is_open and true_kind in "{target}"',
+            "# label every row -- picking which ones to answer breaks the "
+            "weighting",
+            f'python -m beer_in_this_town score --labels "{target}" --json',
+        ],
+    )
+
+
+def cmd_score(s: Settings, labels_path: str) -> Envelope:
+    """Report how wrong the candidate classifier is, by direction."""
+    source = Path(labels_path)
+    if not source.exists():
+        return fail("score", Problem(
+            code="csv_missing",
+            message=f"No such labelling sheet: {source}",
+            remedy="Generate one first: python -m beer_in_this_town label "
+                   "--csv data/venues_<city>_<date>.csv --json",
+        ))
+
+    try:
+        rows, sizes = read_sheet(source)
+    except ValueError as exc:
+        return fail("score", Problem(
+            code="labels_unusable",
+            message=str(exc),
+            remedy="Re-generate the sheet with `label` and copy your answers "
+                   "into it.",
+        ))
+
+    try:
+        report = score_labels(rows, sizes)
+    except PartialStratum as exc:
+        return fail("score", Problem(
+            code="labels_incomplete",
+            message=str(exc),
+            remedy="Label at least a few rows in every bucket. The rare "
+                   "buckets are the ones the measurement exists for.",
+        ))
+
+    # The rows behind each rate, grouped, so the failures can be read rather
+    # than counted. A rate says how bad; only the rows say why.
+    disagreements = report.pop("disagreements")
+    dump = DATA_DIR / f"disagreements_{source.stem}.json"
+    dump.write_text(json.dumps(disagreements, indent=1), encoding="utf-8")
+
+    return Envelope(
+        command="score",
+        ok=True,
+        data={**report, "disagreements": str(dump),
+              "disagreement_counts": {k: len(v) for k, v in disagreements.items()}},
+        warnings=report.get("warnings", []),
+        next_actions=[
+            f"# read {dump} before changing any threshold in classify.py",
+            "# thresholds live in beer_in_this_town/classify.py",
+        ],
     )
 
 
@@ -703,6 +828,30 @@ def build_parser() -> argparse.ArgumentParser:
     notes.add_argument("--max-gap", type=float, default=NOTES_MAX_GAP)
     notes.add_argument("--region", default="Singapore")
 
+    label = sub.add_parser(
+        "label",
+        parents=[common],
+        help="emit a stratified sample to label by hand, so the venue "
+             "heuristics can be measured rather than guessed at",
+    )
+    label.add_argument("--csv", required=True, help="any CSV this project wrote")
+    label.add_argument("--out", default=None, help="where to write the sheet")
+    label.add_argument("--quota", type=int, default=DEFAULT_QUOTA,
+                       help=f"rows per bucket (default {DEFAULT_QUOTA}). Every "
+                            f"bucket gets the same quota, rare ones included; "
+                            f"scoring divides that back out.")
+    label.add_argument("--seed", type=int, default=0,
+                       help="sampling seed; the same seed regenerates the same "
+                            "sheet")
+
+    score = sub.add_parser(
+        "score",
+        parents=[common],
+        help="report the venue heuristics' error rates from a labelled sheet",
+    )
+    score.add_argument("--labels", required=True,
+                       help="a sheet written by `label`, with answers filled in")
+
     pin.add_argument("--region", default="Singapore",
                      help="appended to each search so a name cannot match the "
                           "wrong country; pass '' to disable")
@@ -735,6 +884,10 @@ def main(argv: list[str] | None = None) -> int:
             env = cmd_doctor(s)
         elif args.cmd == "bootstrap":
             env = cmd_bootstrap(s, args.timeout, args.capture)
+        elif args.cmd == "label":
+            env = cmd_label(s, args.csv, args.out, args.quota, args.seed)
+        elif args.cmd == "score":
+            env = cmd_score(s, args.labels)
         elif args.cmd == "selfcheck":
             env = cmd_selfcheck(s, args.slug, args.venue_id,
                                 probe_search=not args.skip_search)
