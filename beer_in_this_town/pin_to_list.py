@@ -379,7 +379,11 @@ def _unsave(page, wrong_list: str) -> None:
     """Undo a save that landed in the wrong list."""
     try:
         _save_button(page).click(timeout=10_000)
-        row = page.get_by_role("menuitemradio", name=wrong_list, exact=False).first
+        # Exact, like the other three sites. Undoing against a substring match
+        # can uncheck a different list than the one that was wrongly saved to,
+        # which turns one bad save into two.
+        rows = page.get_by_role("menuitemradio", name=wrong_list, exact=False)
+        row = rows.nth(pick_list_row(rows.all_inner_texts(), wrong_list))
         row.click(timeout=10_000)
         page.wait_for_timeout(2000)
         page.keyboard.press("Escape")
@@ -486,6 +490,11 @@ def pin_places(
                 _abort_if_blocked(page, ledger)
 
                 if breaker.is_tripped:
+                    # Clear it as the cool-off begins: the cool-off is the
+                    # punishment, and a count that outlives it trips the next
+                    # run before it can earn a success to clear it -- a
+                    # permanent lockout rather than a pause.
+                    breaker.reset()
                     ledger.start_cooloff(
                         f"{breaker.consecutive} consecutive failures"
                     )
@@ -565,6 +574,15 @@ def pin_places(
                     ledger.record_write()
                     try:
                         landed = _pin_once(page, list_name)
+                    except AmbiguousList:
+                        # Never per-place and never worth retrying: the list
+                        # name does not change between places, so every
+                        # remaining one would fail the same way -- three
+                        # budget charges and a breaker failure each, until the
+                        # breaker trips and starts a six-hour cool-off. Caught
+                        # here it was invisible: cmd_pin's handler could not
+                        # fire and `list_ambiguous` was unreachable.
+                        raise
                     except Exception as exc:
                         log.warning("  attempt %d error: %s", attempt, exc)
                         # An interstitial can appear mid-attempt; without this

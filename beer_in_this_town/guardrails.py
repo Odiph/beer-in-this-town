@@ -106,7 +106,7 @@ _held: tuple[Path, str] | None = None
 
 
 def inspect_guardrails(
-    limits: Limits, path: Path | None = None
+    limits: Limits, path: Path | None = None, breaker_path: Path | None = None
 ) -> dict[str, object]:
     """What the write guardrails currently say, without changing any of it.
 
@@ -142,12 +142,18 @@ def inspect_guardrails(
             "path": str(lock_path),
         }
 
+    breaker = CircuitBreaker(limits.max_consecutive_failures, path=breaker_path)
+
     return {
         "used_today": used,
         "remaining_today": ledger.remaining_today(),
         "max_per_day": limits.max_per_day,
         "cooloff_remaining_h": round(cooloff_h, 2),
-        "can_write": cooloff_h <= 0 and ledger.remaining_today() > 0,
+        "breaker": {"consecutive": breaker.consecutive,
+                    "limit": breaker.limit,
+                    "tripped": breaker.is_tripped},
+        "can_write": (cooloff_h <= 0 and ledger.remaining_today() > 0
+                      and not breaker.is_tripped),
         "ledger_corrupt": ledger.corrupt,
         "lock": lock,
     }
@@ -487,21 +493,50 @@ class CircuitBreaker:
     human again because the process restarted.
     """
 
-    def __init__(self, limit: int, path: Path | None = None) -> None:
+    def __init__(self, limit: int, path: Path | None = None,
+                 max_age_s: float = DEFAULT_COOLOFF_HOURS * 3600) -> None:
         self.limit = limit
         self.path = path if path is not None else BREAKER
+        self.max_age_s = max_age_s
         self.consecutive = self._read()
 
     def _read(self) -> int:
+        """The count, unless it is older than the cool-off it would cause.
+
+        A run of failures says something about conditions *now*. Left to
+        accumulate forever, three failures from last week trip a healthy run
+        before it touches a single place -- and since the trip fires ahead of
+        any work, no success can ever occur to clear it. That is a permanent
+        lockout of both writing commands, which is a far worse failure than
+        the gap persistence was added to close.
+        """
         try:
-            return int(json.loads(self.path.read_text(encoding="utf-8"))["consecutive"])
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            count = int(raw["consecutive"])
+            at = float(raw.get("at", 0.0))
         except (OSError, ValueError, TypeError, KeyError):
             return 0
+        if _now() - at >= self.max_age_s:
+            log.info("Discarding a circuit-breaker count older than %.0fh.",
+                     self.max_age_s / 3600)
+            return 0
+        return count
 
     def _write(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({"consecutive": self.consecutive}),
-                             encoding="utf-8")
+        self.path.write_text(
+            json.dumps({"consecutive": self.consecutive, "at": _now()}),
+            encoding="utf-8",
+        )
+
+    def reset(self) -> None:
+        """Clear the count. Called when a cool-off starts.
+
+        The cool-off is the punishment for tripping; carrying the count past
+        it would punish the next run for the same failures, forever.
+        """
+        self.consecutive = 0
+        self._write()
 
     def record_success(self) -> None:
         self.consecutive = 0

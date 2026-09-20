@@ -138,3 +138,74 @@ def test_a_success_clears_the_persisted_breaker(tmp_path):
     breaker.record_failure()
     breaker.record_success()
     assert CircuitBreaker(limit=3, path=path).consecutive == 0
+
+
+@pytest.mark.unit
+def test_a_tripped_breaker_does_not_lock_the_account_out_forever(tmp_path):
+    """Persisting the count created a self-perpetuating lockout.
+
+    `is_tripped` is read at the top of the loop, before any place is
+    attempted, and `record_success` -- the only thing that cleared it -- sits
+    after a successful write that can therefore never happen. So a stale 3
+    tripped every subsequent run instantly, started a fresh six-hour cool-off
+    each time, and never came down.
+
+    The cool-off IS the punishment for tripping. Starting one settles the
+    debt, so the count resets with it.
+    """
+    from beer_in_this_town.guardrails import CircuitBreaker
+
+    path = tmp_path / "breaker.json"
+    breaker = CircuitBreaker(limit=3, path=path)
+    for _ in range(3):
+        breaker.record_failure()
+    assert breaker.is_tripped
+
+    breaker.reset()
+    assert CircuitBreaker(limit=3, path=path).is_tripped is False
+
+
+@pytest.mark.unit
+def test_a_stale_breaker_count_expires(tmp_path):
+    """Failures from days ago say nothing about conditions now."""
+    import json
+    import time as _t
+
+    from beer_in_this_town.guardrails import CircuitBreaker
+
+    path = tmp_path / "breaker.json"
+    path.write_text(json.dumps({"consecutive": 3, "at": _t.time() - 48 * 3600}),
+                    encoding="utf-8")
+    assert CircuitBreaker(limit=3, path=path).consecutive == 0
+
+
+@pytest.mark.unit
+def test_a_recent_breaker_count_is_kept(tmp_path):
+    """Within the window it still carries across a restart, which was the point."""
+    import json
+    import time as _t
+
+    from beer_in_this_town.guardrails import CircuitBreaker
+
+    path = tmp_path / "breaker.json"
+    path.write_text(json.dumps({"consecutive": 2, "at": _t.time() - 60}),
+                    encoding="utf-8")
+    assert CircuitBreaker(limit=3, path=path).consecutive == 2
+
+
+@pytest.mark.unit
+def test_status_can_see_the_breaker(tmp_path):
+    """status said can_write: true while the next run tripped instantly."""
+    import json
+    import time as _t
+
+    from beer_in_this_town.guardrails import Limits, inspect_guardrails
+
+    ledger = tmp_path / "rate_ledger.json"
+    (tmp_path / "breaker.json").write_text(
+        json.dumps({"consecutive": 3, "at": _t.time()}), encoding="utf-8")
+    report = inspect_guardrails(Limits(), path=ledger,
+                                breaker_path=tmp_path / "breaker.json")
+    assert report["breaker"]["consecutive"] == 3
+    assert report["breaker"]["tripped"] is True
+    assert report["can_write"] is False

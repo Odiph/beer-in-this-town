@@ -465,3 +465,106 @@ def test_a_sheet_saved_as_ansi_still_reads(tmp_path):
     rows, sizes = read_sheet(path)
     assert sizes == sheet.stratum_sizes
     assert any("Münster" in r["name"] for r in rows)
+
+
+@pytest.mark.unit
+def test_a_rebuilt_venue_keeps_a_working_untappd_url(tmp_path):
+    """The slug is the second-to-last segment, not the last.
+
+    Taking the last one produced https://untappd.com/v/<id>/<id> for every row
+    in the labelling sheet -- a dead link, on the button a human clicks to
+    judge the venue.
+    """
+    import csv as _csv
+
+    from beer_in_this_town.measure import venues_from_csv
+
+    path = tmp_path / "v.csv"
+    url = "https://untappd.com/v/american-taproom-waterloo/7480946"
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        w = _csv.DictWriter(fh, fieldnames=["venue_id", "name", "url"])
+        w.writeheader()
+        w.writerow({"venue_id": "7480946", "name": "American Taproom", "url": url})
+    assert venues_from_csv(path)[0].ref.url == url
+
+
+@pytest.mark.unit
+def test_a_row_with_no_url_still_yields_no_url(tmp_path):
+    import csv as _csv
+
+    from beer_in_this_town.measure import venues_from_csv
+
+    path = tmp_path / "v.csv"
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        w = _csv.DictWriter(fh, fieldnames=["name"])
+        w.writeheader()
+        w.writerow({"name": "American Taproom"})
+    assert venues_from_csv(path)[0].ref.url == ""
+
+
+@pytest.mark.unit
+def test_the_drop_rate_denominator_is_the_buckets_own_question():
+    """"Answered any of the three" looked per-question and was not.
+
+    A drop:private row that answered only `is_open` counted in the
+    denominator while contributing nothing to the numerator, so a blank
+    `is_public` scored as "dropped correctly" -- the same blank-reads-as-
+    no-error bug the rewrite was meant to close, one column across.
+    """
+    sheet = stratified_sample(_mixed(n_cafe=0, n_private=8), quota=8, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "y", "is_open": "y",
+                                "true_kind": "craft_beer_bar"},
+        # is_public deliberately blank: the question this bucket turns on.
+        "drop:private": {"is_open": "y"},
+    })
+    report = score_labels(rows, sheet.stratum_sizes)
+    assert report["rates"]["real_venue_dropped"] is None, \
+        "unanswered must be unknown, never zero"
+
+
+@pytest.mark.unit
+def test_not_sure_on_the_buckets_question_is_not_a_verdict_either():
+    sheet = stratified_sample(_mixed(n_cafe=0, n_private=8), quota=8, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "y", "is_open": "y",
+                                "true_kind": "craft_beer_bar"},
+        "drop:private": {"is_public": "?", "is_open": "y"},
+    })
+    assert score_labels(rows, sheet.stratum_sizes)["rates"]["real_venue_dropped"] is None
+
+
+@pytest.mark.unit
+def test_partially_answered_drops_weight_only_the_rows_that_answered():
+    """The weight must be over rows that answered THAT question."""
+    sheet = stratified_sample(_mixed(n_cafe=0, n_private=10), quota=10, seed=1)
+    rows = []
+    private_seen = 0
+    for r in sheet.rows:
+        row = dict(r)
+        if r["_stratum"] == "drop:private":
+            private_seen += 1
+            if private_seen <= 5:                       # half answer the question
+                row["is_public"] = "y" if private_seen == 1 else "n"
+            else:                                       # half answer the other one
+                row["is_open"] = "y"
+        else:
+            row.update({"is_public": "y", "is_open": "y",
+                        "true_kind": "craft_beer_bar"})
+        rows.append(row)
+    report = score_labels(rows, sheet.stratum_sizes)
+    # 1 of the 5 that answered is wrongly dropped -> 0.2, not 0.1.
+    assert report["rates"]["real_venue_dropped"] == pytest.approx(0.2)
+
+
+@pytest.mark.unit
+def test_unsettled_is_not_accepted_as_a_human_answer():
+    """It is the classifier declining to decide, not a kind a venue can be."""
+    sheet = stratified_sample(_mixed(n_cafe=0, n_private=3), quota=3, seed=1)
+    rows = _answer(sheet, {
+        "keep:craft_beer_bar": {"is_public": "y", "is_open": "y",
+                                "true_kind": "unsettled"},
+        "drop:private": {"is_public": "n"},
+    })
+    with pytest.raises(LabelsUnusable, match="true_kind"):
+        score_labels(rows, sheet.stratum_sizes)
