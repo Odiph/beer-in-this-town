@@ -207,3 +207,46 @@ def test_retry_after_accepts_both_legal_forms():
     assert _retry_after_seconds("Wed, 21 Aug 2030 07:28:00 GMT", 60) > 0
     assert _retry_after_seconds("nonsense", 60) == 60
     assert _retry_after_seconds(None, 60) == 60
+
+
+# --- the contract must not steer an agent into a write --------------------
+@pytest.mark.unit
+def test_next_actions_never_carries_a_write_or_a_comment(tmp_path, monkeypatch):
+    """AGENTS.md says run the first action and repeat until the list is empty.
+
+    It also says never run `pin` unasked. While `pin` was listed, those two
+    rules contradicted each other and the loop won -- `pin` was the only entry
+    that ever emptied the list, so an obedient agent was walked into the
+    account write by the contract itself.
+    """
+    from beer_in_this_town import state
+    from beer_in_this_town.config import Settings
+
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "venues_london_2026-09-20.csv").write_text("venue_id\n", encoding="utf-8")
+    (data / "venues_london_2026-09-20.kml").write_text("<kml/>", encoding="utf-8")
+    monkeypatch.setattr(state, "DATA_DIR", data)
+    session = tmp_path / "storage_state.json"
+    session.write_text("{}", encoding="utf-8")
+    s = Settings(storage_state=session)
+
+    inspected = state.inspect_state(s)
+    actions = state.next_actions(inspected, s)
+
+    assert actions == [], "with the files in hand the loop must be able to end"
+    for command in state.next_actions(state.inspect_state(s), s):
+        assert not command.lstrip().startswith("#")
+        for forbidden in (" pin ", " notes ", "bootstrap"):
+            assert forbidden not in f" {command} "
+
+
+@pytest.mark.unit
+def test_hints_are_prose_and_stay_out_of_next_actions():
+    """A hint is for a person; nothing is told to execute it."""
+    from beer_in_this_town.agent_io import Envelope
+
+    env = Envelope(command="run", ok=True, hints=["a human can run: pin ..."])
+    payload = json.loads(env.to_json())
+    assert payload["hints"] == ["a human can run: pin ..."]
+    assert payload["next_actions"] == []

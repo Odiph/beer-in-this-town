@@ -29,6 +29,23 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   at the boundary with `bad_format` rather than writing no map quietly.
 
 ### Fixed
+- The agent contract steered an agent into the account write it forbids.
+  `AGENTS.md` says to run the first `next_action` and repeat until the list is
+  empty, and also that `pin` must never run without a human asking. `pin` was
+  listed in `next_actions` and was the only entry that ever emptied it, so
+  following the contract led an agent into the ToS-crossing write. `pin`,
+  `notes` and `bootstrap` are out of `next_actions` entirely; an empty list
+  now genuinely means the safe work is finished.
+- `next_actions` no longer carries `#` comments. It promises literal runnable
+  commands, and an agent passing argv as a list got `#` as an argument while
+  one that shelled out silently no-opped and looped on the same suggestion.
+  Prose moved to a new additive `hints` field that nothing executes.
+- `--region` defaulted to "Singapore" for every city, so a London CSV searched
+  Maps for "..., London, Singapore". The guard exists precisely so a bare name
+  cannot match a venue in the wrong country. It is now read from the CSV's own
+  city column, and when that cannot be established the run says the guard is
+  off rather than quietly appending nothing. An explicit `--region ''` still
+  switches it off and is no longer collapsed back into re-derivation.
 - `pin` identified the target saved list by substring, in all three places it
   checks one: picking the row in the list picker, verifying what Maps said
   afterwards, and confirming the list exists at all. An account holding both

@@ -65,9 +65,14 @@ from .parsers import (
 )
 from .pin_to_list import MAX_GAP_S as PIN_MAX_GAP
 from .pin_to_list import MIN_GAP_S as PIN_MIN_GAP
-from .pin_to_list import AmbiguousList, pin_places, places_from_csv
+from .pin_to_list import (
+    AmbiguousList,
+    pin_places,
+    places_from_csv,
+    region_from_csv,
+)
 from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
-from .state import inspect_state, next_actions, record_run
+from .state import hints, inspect_state, next_actions, record_run
 
 log = logging.getLogger("beer_in_this_town")
 
@@ -110,6 +115,7 @@ def cmd_status(s: Settings) -> Envelope:
         ok=True,
         data=state,
         next_actions=next_actions(state, s),
+        hints=hints(state, s),
     )
 
 
@@ -408,10 +414,17 @@ def cmd_label(s: Settings, csv_path: str, out: str | None,
         },
         warnings=warnings,
         next_actions=[
-            f'# fill in is_public, is_open and true_kind in "{target}"',
-            "# label every row -- picking which ones to answer breaks the "
-            "weighting",
             f'python -m beer_in_this_town score --labels "{target}" --json',
+        ],
+        hints=[
+            f'Fill in is_public, is_open and true_kind in "{target}" first.',
+            "Answer every row: picking which ones to fill in breaks the "
+            "weighting. y / n / ? are the accepted answers, and ? is a real "
+            "one -- it is recorded as an abstention rather than guessed into "
+            "a verdict.",
+            "A model must not fill these in. The point is a human judgement "
+            "to check the classifier against; a model labelling its own "
+            "classifier's output measures nothing.",
         ],
     )
 
@@ -468,9 +481,11 @@ def cmd_score(s: Settings, labels_path: str) -> Envelope:
         data={**report, "disagreements": str(dump),
               "disagreement_counts": {k: len(v) for k, v in disagreements.items()}},
         warnings=report.get("warnings", []),
-        next_actions=[
-            f"# read {dump} before changing any threshold in classify.py",
-            "# thresholds live in beer_in_this_town/classify.py",
+        next_actions=[],
+        hints=[
+            f"Read {dump} before changing any threshold: a rate says how bad, "
+            f"only the rows say why.",
+            "The thresholds live in beer_in_this_town/classify.py.",
         ],
     )
 
@@ -600,11 +615,33 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
             "my_maps_url": map_url,
         },
         warnings=warnings,
-        next_actions=[
-            f'python -m beer_in_this_town pin --csv "{csv_path}" '
-            f'--list "{s.map_title}" --limit 3 --json'
+        next_actions=[],
+        hints=[
+            f'The data is in "{csv_path}". To put it on a Google Maps saved '
+            f'list a human can run: pin --csv "{csv_path}" --list '
+            f'"{s.map_title}" --limit 3 --json. That writes to the account, so '
+            f'it is never started unasked; the map files above need nothing.'
         ],
     )
+
+
+def resolve_region(region: str | None, path: Path) -> tuple[str | None, list[str]]:
+    """Work out the region guard, and say so when it cannot be established.
+
+    None means "not specified" -- read it from the data. An explicit "" means
+    the caller switched the guard off deliberately, which is theirs to do.
+    """
+    if region is not None:
+        return (region or None), []
+    found = region_from_csv(path)
+    if found:
+        log.info("Region %r read from the CSV.", found)
+        return found, []
+    return None, [
+        "No city column in this CSV, so no region is appended to the Maps "
+        "lookups. A bare venue name can match a place in another country; "
+        "pass --region to restore that guard."
+    ]
 
 
 def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
@@ -619,6 +656,7 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
         ))
 
     places = places_from_csv(path)
+    region, region_warnings = resolve_region(region, path)
     log.info("Read %d place(s) from %s", len(places), path)
 
     try:
@@ -692,7 +730,8 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
               "not_found_names": missing[:20],
               "ambiguous_names": ambiguous[:20], "list": list_name},
         warnings=(
-            ([f"{len(missing)} place(s) had no Google Maps match"] if missing else [])
+            region_warnings
+            + ([f"{len(missing)} place(s) had no Google Maps match"] if missing else [])
             + ([f"{len(ambiguous)} place(s) resolved to a different venue "
                 "and were skipped -- check them by hand"] if ambiguous else [])
         ),
@@ -713,6 +752,7 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
         ))
 
     places = notes_from_csv(path)
+    region, region_warnings = resolve_region(region, path)
     log.info("Read %d place(s) with stats from %s", len(places), path)
 
     try:
@@ -754,8 +794,9 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
         data={"written": tally["ok"], "failed": tally["failed"],
               "not_found": tally["not-found"], "ambiguous": tally["ambiguous"],
               "not_in_list": tally["not-in-list"], "list": list_name},
-        warnings=([f"{len(unpinned)} place(s) are not in the list yet; "
-                   "run pin first"] if unpinned else []),
+        warnings=(region_warnings
+                  + ([f"{len(unpinned)} place(s) are not in the list yet; "
+                      "run pin first"] if unpinned else [])),
         next_actions=([f'python -m beer_in_this_town notes --csv "{path}" '
                        f'--list "{list_name}" --json']
                       if tally["failed"] else []),
@@ -845,7 +886,8 @@ def build_parser() -> argparse.ArgumentParser:
     notes.add_argument("--limit", type=int, default=None)
     notes.add_argument("--min-gap", type=float, default=NOTES_MIN_GAP)
     notes.add_argument("--max-gap", type=float, default=NOTES_MAX_GAP)
-    notes.add_argument("--region", default="Singapore")
+    notes.add_argument("--region", default=None,
+                       help="as for pin; read from the CSV when not given")
 
     label = sub.add_parser(
         "label",
@@ -871,9 +913,10 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--labels", required=True,
                        help="a sheet written by `label`, with answers filled in")
 
-    pin.add_argument("--region", default="Singapore",
+    pin.add_argument("--region", default=None,
                      help="appended to each search so a name cannot match the "
-                          "wrong country; pass '' to disable")
+                          "wrong country. Read from the CSV's city column when "
+                          "not given; pass '' to disable")
     return p
 
 
@@ -928,10 +971,12 @@ def main(argv: list[str] | None = None) -> int:
                           formats=formats)
         elif args.cmd == "notes":
             env = cmd_notes(s, args.csv, args.list_name, args.limit,
-                            args.region or None, args.min_gap, args.max_gap)
+                            # NOT `or None`: "" is the caller switching the
+                            # guard off, None is "work it out from the CSV".
+                            args.region, args.min_gap, args.max_gap)
         elif args.cmd == "pin":
             env = cmd_pin(s, args.csv, args.list_name, args.limit,
-                          args.region or None, args.min_gap, args.max_gap)
+                          args.region, args.min_gap, args.max_gap)
         else:  # pragma: no cover -- argparse enforces the choices
             raise SystemExit(f"unknown command {args.cmd}")
     except KeyboardInterrupt:

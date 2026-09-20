@@ -123,41 +123,55 @@ def inspect_state(s: Settings) -> dict[str, Any]:
 
 
 def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
-    """Literal commands to run next. Ordered; the first one is the recommendation."""
+    """Literal commands to run next. Ordered; the first one is the recommendation.
+
+    Only read-only, safe commands appear here. `pin` and `notes` write to the
+    user's Google account and AGENTS.md says an agent must never run them
+    without being asked -- while the loop this list defines says to run the
+    first action and repeat until it is empty. Listing them made those two
+    rules contradict each other, and the loop won: `pin` was the only action
+    that ever terminated it. What a human might want to do next lives in
+    `hints`, which nothing is instructed to execute.
+    """
     if not state["logged_in"]:
-        return [
-            "python -m beer_in_this_town bootstrap",
-            "# then: python -m beer_in_this_town selfcheck --json",
-        ]
+        # bootstrap opens a real browser and waits up to 15 minutes for a
+        # person, so it is not something to hand an agent as a next action.
+        return []
 
     query = state.get("last_run", {}).get("query") or s.query
+    if state["latest_csv"] and state["latest_kml"]:
+        # Nothing further an agent should start on its own. An empty list is
+        # what AGENTS.md defines as the end of the loop, and now that the
+        # account-writing commands are out of it the loop can actually reach
+        # that end -- previously `pin` was the only thing that terminated it.
+        return []
+
+    return [
+        f"python -m beer_in_this_town run --query {query} "
+        f"--count {s.target_count} --no-upload --json"
+    ]
+
+
+def hints(state: dict[str, Any], s: Settings) -> list[str]:
+    """What a person might want to do next. Never executed by anything."""
+    if not state["logged_in"]:
+        return ["No saved session. Run `python -m beer_in_this_town bootstrap` "
+                "yourself -- it opens a browser and waits for you to sign in."]
+
+    out: list[str] = []
     list_name = state.get("last_run", {}).get("map_title") or s.map_title
-
-    if not state["latest_csv"]:
-        return [
-            f"python -m beer_in_this_town run --query {query} "
-            f"--count {s.target_count} --no-upload --json",
-        ]
-
-    actions: list[str] = []
-    if not state["latest_kml"]:
-        actions.append(
-            f"python -m beer_in_this_town run --query {query} "
-            f"--count {s.target_count} --no-upload --json"
-        )
-
+    csv_path = state.get("latest_csv")
     pins = state["pin_progress"]
-    if pins["ok"] == 0:
-        actions.append(
-            f'python -m beer_in_this_town pin --csv "{state["latest_csv"]}" '
-            f'--list "{list_name}" --limit 3 --json   # trial run first'
+    if csv_path and pins["ok"] == 0:
+        out.append(
+            f'To build a real Google Maps saved list, a human can run: pin '
+            f'--csv "{csv_path}" --list "{list_name}" --limit 3 --json. It '
+            "writes to the account and automates a UI that Google's terms do "
+            "not permit, so it is never something to start unasked."
         )
-    elif pins["failed"]:
-        actions.append(
-            f'python -m beer_in_this_town pin --csv "{state["latest_csv"]}" '
-            f'--list "{list_name}" --json   # retries only what failed'
+    elif csv_path and pins["failed"]:
+        out.append(
+            f'{pins["failed"]} place(s) failed to pin. A human can retry just '
+            f'those: pin --csv "{csv_path}" --list "{list_name}" --json.'
         )
-
-    if not actions:
-        actions.append("# pipeline complete -- re-run `run` to refresh the data")
-    return actions
+    return out

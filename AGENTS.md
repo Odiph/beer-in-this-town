@@ -26,13 +26,19 @@ stderr. Parse stdout; ignore stderr unless debugging.
   "schema_version": "1.0",
   "data": { "venues": 100, "csv": "...", "kml": "..." },
   "warnings": ["4 venue(s) have no coordinates and are not pinned"],
-  "next_actions": ["python -m beer_in_this_town pin --csv \"...\" --limit 3 --json"],
+  "next_actions": ["python -m beer_in_this_town label --csv \"...\" --json"],
+  "hints": ["To build a Google Maps saved list, a human can run: pin --csv ..."],
   "error": null
 }
 ```
 
 - `ok` — did the command achieve its purpose. Exit code matches (`0` / `1`).
 - `next_actions` — **literal runnable commands**, best first. Not hints.
+  Only read-only, safe commands appear here; it never contains `pin`, `notes`
+  or `bootstrap`, and never contains a `#` comment. An **empty list is the end
+  of the loop**, not an error.
+- `hints` — prose for a human: what only a person can decide to do next.
+  Nothing executes this, and an agent must not treat it as a next action.
 - `error` — present only on failure. Always carries `code` and `remedy`.
 - `schema_version` — treat a change as breaking.
 
@@ -65,6 +71,11 @@ stderr. Parse stdout; ignore stderr unless debugging.
 2. **Never run `pin` without an explicit human instruction.** It automates the
    Google Maps UI, which is against Google's ToS (see README). Default to the
    supported My Maps KML path.
+
+   This used to contradict the loop above, and the loop won: `pin` was listed
+   in `next_actions` and was the only entry that ever emptied it, so following
+   the contract led an agent into the write. It is now in `hints` instead —
+   where nothing is instructed to run it.
 3. **Trial before bulk.** First `pin` run should use `--limit 3`. Report the
    result before doing the rest.
 4. **Do not lower the pacing.** `--min-gap` / `--max-gap` exist to keep the
