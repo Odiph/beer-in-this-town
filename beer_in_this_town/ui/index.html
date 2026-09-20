@@ -169,6 +169,16 @@
   .lead.done{border-left-color:var(--ok)}
   .lead.done .step{color:var(--ok)}
 
+  .notes{margin-top:14px}
+  .notes > summary{
+    cursor:pointer; font-size:13px; color:var(--accent); font-weight:600;
+    width:fit-content;
+  }
+  .notes > summary:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
+  .notes dl{margin:10px 0 0; display:grid; gap:10px}
+  .notes dt{font-weight:600; font-size:13.5px}
+  .notes dd{margin:2px 0 0; font-size:13px; color:var(--muted); max-width:62ch}
+
   .signup{margin-top:12px; font-size:13px; color:var(--muted)}
   .signup a{color:var(--accent); font-weight:600}
   .signup a+a{margin-left:14px}
@@ -424,6 +434,23 @@ function renderLead(state) {
   }
 
   if (step.done) renderCityForm(go, state);
+
+  if (step.notes && step.notes.length) {
+    const d = document.createElement("details");
+    d.className = "notes";
+    const s = document.createElement("summary");
+    s.textContent = "What the city name decides";
+    const dl = document.createElement("dl");
+    for (const n of step.notes) {
+      const dt = document.createElement("dt");
+      dt.textContent = n.heading;
+      const dd = document.createElement("dd");
+      dd.textContent = n.body;
+      dl.append(dt, dd);
+    }
+    d.append(s, dl);
+    go.appendChild(d);
+  }
 }
 
 const UNSAVED = "Press “Use this city” so the agent picks it up, or "

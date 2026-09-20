@@ -268,6 +268,7 @@ def make_handler(board: Dashboard):
                 "next_step": {
                     "key": step.key, "title": step.title, "body": step.body,
                     "cta": step.cta, "action": step.action, "done": step.done,
+                    "notes": [{"heading": h, "body": b} for h, b in step.notes],
                 },
                 "defaults": {"query": board.settings.query,
                              "count": board.settings.target_count},
