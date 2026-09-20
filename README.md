@@ -114,7 +114,7 @@ Your session, journals and rate ledger live in `state/`, `data/` and
 
 ```bash
 beertown doctor --json      # deps, session, geocoder
-beertown selfcheck --json   # 1 request: are the selectors alive
+beertown selfcheck --json   # 2 requests: are the selectors alive
 beertown run --query singapore --count 100 --no-upload --json
 ```
 
@@ -253,7 +253,7 @@ legal advice. You are responsible for your own use of it.
 | `status` | Where the pipeline is, what to run next | no |
 | `doctor` | Dependencies, session, geocoder | no |
 | `bootstrap` | One-time login (opens a real Chrome) | reads |
-| `selfcheck` | One request: are the selectors alive | no |
+| `selfcheck` | Two requests: are the venue *and search* selectors alive | no |
 | `run` | Scrape → CSV + KML + diff | no |
 | `pin` | Save into a Google Maps list | **writes** |
 | `notes` | Write stats into each place's note | **writes** |

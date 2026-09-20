@@ -17,6 +17,15 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   at the boundary with `bad_format` rather than writing no map quietly.
 
 ### Fixed
+- `selfcheck` could not see a search outage. It fetched one venue detail page,
+  which is server-rendered and was unaffected when Untappd moved search to
+  Algolia, so it returned `ok: true` for the whole time every `run` was
+  failing. `AGENTS.md` sells it as the cheap early warning for
+  `selectors_stale` and the agent loop leans on it before committing to a run;
+  an early warning that cannot see the most likely failure turns "I don't know"
+  into a false "fine". It now also probes the search page and asserts it is one
+  of the two shapes the code handles. `--skip-search` keeps the old
+  one-request behaviour.
 - State artifacts were global where they describe one city or one list, so a
   second city could not be scraped without damage. `previous_run.json` was a
   single baseline: a London run diffed itself against Singapore — every venue
