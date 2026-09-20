@@ -226,8 +226,15 @@ def make_handler(board: Dashboard):
         def _state(self) -> dict:
             rows = checks.collect(board.settings, board.proven)
             job = board.runner.current
+            step = checks.next_step(rows)
             return {
                 "ok": True,
+                "next_step": {
+                    "key": step.key, "title": step.title, "body": step.body,
+                    "cta": step.cta, "action": step.action, "done": step.done,
+                },
+                "defaults": {"query": board.settings.query,
+                             "count": board.settings.target_count},
                 "checks": [c.to_row() for c in rows],
                 "ready": checks.ready(rows),
                 "blocking": [c.key for c in checks.blocking(rows)],

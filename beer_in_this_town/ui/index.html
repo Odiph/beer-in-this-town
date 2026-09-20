@@ -110,6 +110,41 @@
   ol.steps li.aside .txt::before{content:"— "}
   .err{color:var(--warn); font-size:13.5px; margin-top:10px}
 
+  /* The lead: one instruction, impossible to miss. */
+  .lead{
+    margin-top:18px; background:var(--surface); border:1px solid var(--line);
+    border-left:4px solid var(--accent); border-radius:12px; padding:18px;
+  }
+  .lead .step{
+    font-family:var(--mono); font-size:11px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--accent); font-weight:600;
+  }
+  .lead h2{font-size:19px; margin:4px 0 6px; letter-spacing:-.01em;
+           text-transform:none; color:var(--ink); font-weight:700}
+  .lead p{margin:0; color:var(--muted); font-size:14px}
+  .lead .go{margin-top:14px}
+  .lead.done{border-left-color:var(--ok)}
+  .lead.done .step{color:var(--ok)}
+
+  .signup{margin-top:12px; font-size:13px; color:var(--muted)}
+  .signup a{color:var(--accent); font-weight:600}
+  .signup a+a{margin-left:14px}
+
+  .cityform{display:flex; gap:8px; margin-top:14px; flex-wrap:wrap}
+  .cityform input{
+    font:inherit; font-size:15px; flex:1 1 180px; min-width:0;
+    padding:11px 12px; border-radius:10px; border:1.5px solid var(--line);
+    background:var(--ground); color:var(--ink);
+  }
+  .cityform input:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .cmd{
+    margin-top:12px; background:var(--sunk); border:1px solid var(--line);
+    border-radius:10px; padding:12px; font-family:var(--mono); font-size:12.5px;
+    overflow-x:auto; white-space:pre; color:var(--ink);
+  }
+  .cmdrow{display:flex; gap:10px; align-items:center; margin-top:8px; flex-wrap:wrap}
+  .cmdnote{font-size:12.5px; color:var(--muted); flex:1 1 220px}
+
   footer{margin-top:28px; color:var(--muted); font-size:13px}
   code{font-family:var(--mono); font-size:12.5px; background:var(--sunk);
        padding:1px 5px; border-radius:4px}
@@ -123,13 +158,20 @@
     <p class="sub">Get connected once. Everything after this runs from the terminal.</p>
   </header>
 
-  <div class="banner" id="banner">Loading…</div>
+  <div class="lead" id="lead">
+    <div class="step" id="leadstep">Checking…</div>
+    <h2 id="leadtitle">Reading your setup</h2>
+    <p id="leadbody">One moment.</p>
+    <div class="go" id="leadgo"></div>
+  </div>
+
+  <div class="banner" id="banner" hidden></div>
 
   <h2>Setup</h2>
   <ul class="checks" id="checks"></ul>
 
   <div class="actions">
-    <button class="primary" id="connect" type="button">Connect accounts</button>
+    <button id="connect" type="button">Sign in again</button>
     <button id="verify" type="button">Test both accounts</button>
     <button id="selectors" type="button">Check Untappd's pages</button>
   </div>
@@ -212,29 +254,136 @@ function renderChecks(rows) {
   }
 }
 
+// Someone with no Untappd account cannot sign in to one, and "sign in" is
+// the wrong word for them. Both paths, named plainly.
+const SIGNUP = {
+  connect: [
+    ["https://accounts.google.com/signup", "Create a Google account"],
+    ["https://untappd.com/signup", "Create an Untappd account"],
+  ],
+};
+
+const ORDER = ["chrome", "playwright", "connect", "verify", "run"];
+
+function renderLead(state) {
+  const step = state.next_step;
+  if (!step) return;
+  const lead = $("lead");
+  lead.className = "lead" + (step.done ? " done" : "");
+
+  const n = ORDER.indexOf(step.key) + 1;
+  $("leadstep").textContent = step.done
+    ? "Ready — last step"
+    : "Step " + n + " of " + ORDER.length;
+  $("leadtitle").textContent = step.title;
+  $("leadbody").textContent = step.body;
+
+  const go = $("leadgo");
+  // Rebuilt only when the step changes, so typing in the city field is not
+  // wiped out by the one-second poll.
+  if (go.dataset.key === step.key && !state.busy) return;
+  go.dataset.key = step.key;
+  go.textContent = "";
+
+  if (step.cta && step.action) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "primary";
+    b.id = "lead-" + step.action;
+    b.textContent = step.cta;
+    b.disabled = !!state.busy;
+    b.addEventListener("click", () => start(step.action));
+    go.appendChild(b);
+  }
+
+  for (const [href, text] of SIGNUP[step.key] || []) {
+    const row = go.querySelector(".signup") || document.createElement("div");
+    row.className = "signup";
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = text;
+    row.appendChild(a);
+    go.appendChild(row);
+  }
+
+  if (step.done) renderCityForm(go, state);
+}
+
+function renderCityForm(go, state) {
+  const form = document.createElement("div");
+  form.className = "cityform";
+
+  const input = document.createElement("input");
+  input.id = "city";
+  input.type = "text";
+  input.placeholder = "London";
+  input.setAttribute("aria-label", "City to collect venues for");
+  let saved = "";
+  try { saved = localStorage.getItem("beertown.city") || ""; } catch (e) {}
+  input.value = saved || state.defaults.query || "";
+  form.appendChild(input);
+  go.appendChild(form);
+
+  const cmd = document.createElement("div");
+  cmd.className = "cmd";
+  cmd.id = "cmd";
+  go.appendChild(cmd);
+
+  const row = document.createElement("div");
+  row.className = "cmdrow";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "Copy command";
+  const note = document.createElement("span");
+  note.className = "cmdnote";
+  note.textContent = "--no-upload writes the files without touching your "
+    + "Google Maps. Drop it once you've seen the results.";
+  row.append(copy, note);
+  go.appendChild(row);
+
+  const build = () => {
+    const city = (input.value || "").trim() || state.defaults.query;
+    cmd.textContent = 'beertown run --query "' + city + '" --count '
+      + state.defaults.count + " --no-upload";
+    try { localStorage.setItem("beertown.city", input.value.trim()); } catch (e) {}
+  };
+  input.addEventListener("input", build);
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(cmd.textContent);
+      copy.textContent = "Copied";
+      setTimeout(() => { copy.textContent = "Copy command"; }, 1600);
+    } catch (e) {
+      // Clipboard can be refused; selecting the text still works.
+      copy.textContent = "Select it above";
+    }
+  });
+  build();
+}
+
 function renderBanner(state) {
   const el = $("banner");
   el.className = "banner";
-  if (state.busy) {
-    el.classList.add("");
-    el.textContent = "Working — the log below says what's happening.";
+  el.hidden = !state.busy;
+  if (state.busy) el.textContent = "Working — the log below says what's happening.";
+}
+
+async function start(action) {
+  if (busy) return;
+  renderButtons({ busy: true });
+  try {
+    await api("/api/run", { method: "POST", body: JSON.stringify({ action }) });
+  } catch (e) {
+    const el = $("banner");
+    el.hidden = false;
+    el.className = "banner bad";
+    el.textContent = e.message;
+    renderButtons({ busy: false });
     return;
   }
-  if (state.ready) {
-    el.classList.add("good");
-    el.textContent = "Both accounts tested and working. You're ready to run.";
-    return;
-  }
-  const n = state.blocking.length;
-  if (n === 0) {
-    el.textContent = "Nothing is broken, but the accounts haven't been tested "
-      + "yet. Press “Test both accounts” — a saved cookie isn't proof.";
-    return;
-  }
-  el.classList.add("bad");
-  el.textContent = n === 1
-    ? "One thing needs you. It's marked below."
-    : n + " things need you. They're marked below.";
+  tick();
 }
 
 function renderJob(job) {
@@ -305,18 +454,22 @@ function renderJob(job) {
 function renderButtons(state) {
   busy = state.busy;
   for (const id of BUTTONS) $(id).disabled = busy;
+  const lead = $("leadgo").querySelector("button.primary");
+  if (lead) lead.disabled = busy;
 }
 
 async function tick() {
   try {
     const state = await api("/api/state");
     renderChecks(state.checks);
+    renderLead(state);
     renderBanner(state);
     renderJob(state.job);
     renderButtons(state);
     if (state.job) lastJobId = state.job.id;
   } catch (e) {
     const el = $("banner");
+    el.hidden = false;
     el.className = "banner bad";
     el.textContent = TOKEN
       ? "Lost contact with the dashboard: " + e.message
@@ -325,20 +478,7 @@ async function tick() {
 }
 
 for (const id of BUTTONS) {
-  $(id).addEventListener("click", async () => {
-    if (busy) return;
-    renderButtons({ busy: true });
-    try {
-      await api("/api/run", { method: "POST", body: JSON.stringify({ action: id }) });
-    } catch (e) {
-      const el = $("banner");
-      el.className = "banner bad";
-      el.textContent = e.message;
-      renderButtons({ busy: false });
-      return;
-    }
-    tick();
-  });
+  $(id).addEventListener("click", () => start(id));
 }
 
 tick();

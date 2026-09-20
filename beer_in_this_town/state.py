@@ -137,11 +137,22 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
     that ever terminated it. What a human might want to do next lives in
     `hints`, which nothing is instructed to execute.
     """
-    # A session is only needed for the YOU column and for the writing
-    # commands. Returning [] here ended the loop before any safe work was
-    # done, on a fresh install where `run --no-upload` would have worked fine:
-    # bootstrap belongs in hints, not in the way.
     query = state.get("last_run", {}).get("query") or s.query
+
+    # This used to hand a brand-new user `run`, on the reasoning that a
+    # session is only needed for the YOU column and that `run --no-upload`
+    # "would have worked fine" without one. It does not. Signed out of
+    # Untappd, search stops at 5 results, so that run spends its requests
+    # building a five-venue corpus that looks like a completed scrape --
+    # and the diff, the baseline and the KML are then all wrong together.
+    #
+    # `selfcheck` is the honest first action instead: two requests, no
+    # account needed, and it proves the tool can still read the site. What
+    # actually unblocks the user is `ui`, which opens a browser and waits
+    # for a person, so it belongs in hints where nothing will execute it.
+    if not state["logged_in"]:
+        return ["python -m beer_in_this_town selfcheck --json"]
+
     if state["latest_csv"] and state["latest_kml"]:
         # Nothing further an agent should start on its own. An empty list is
         # what AGENTS.md defines as the end of the loop, and now that the
@@ -158,8 +169,14 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
 def hints(state: dict[str, Any], s: Settings) -> list[str]:
     """What a person might want to do next. Never executed by anything."""
     if not state["logged_in"]:
-        return ["No saved session. Run `python -m beer_in_this_town bootstrap` "
-                "yourself -- it opens a browser and waits for you to sign in."]
+        return [
+            "No saved session. Run `beertown ui` yourself -- it opens a "
+            "dashboard that signs you in and then tests both accounts "
+            "for real, rather than trusting a cookie means they work.",
+            "Both accounts matter, not just Google. Signed out of Untappd, "
+            "search stops at 5 results, so a run would build a five-venue "
+            "corpus and report it as a finished scrape.",
+        ]
 
     out: list[str] = []
     guards = state.get("write_guardrails") or {}

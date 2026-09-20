@@ -7,6 +7,19 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `ui` leads rather than reports: one directive at a time — install Chrome,
+  sign in, test, then name your city — chosen server-side in `next_step` so
+  the ordering is testable. Sign-*up* links sit beside sign-in, because
+  someone with no Untappd account cannot sign in to one. The last step takes
+  a city and hands over the exact `run` command, `--no-upload` included; the
+  run itself stays in the terminal where it can be watched and stopped.
+- `status` no longer sends a brand-new user to `run`. The old first action
+  assumed a session was only needed for the YOU column; signed out of
+  Untappd, search stops at 5 results, so that run built a five-venue corpus
+  and reported a finished scrape — with the diff, baseline and KML all wrong
+  together. `selfcheck` is the first action now, and `ui` is the hint.
+- `doctor` reports a saved session as `present (untested)` and says so, rather
+  than implying a file on disk is a working login.
 - `ui`: a localhost setup dashboard for a first-time user. Connects Google and
   Untappd in one Chrome window, then **verifies both with a real round-trip**
   before calling either connected — a headless Maps load for Google, one

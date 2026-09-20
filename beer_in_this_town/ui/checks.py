@@ -237,6 +237,72 @@ def ready(checks: tuple[Check, ...]) -> bool:
                if k in by_key)
 
 
+
+@dataclass(frozen=True)
+class NextStep:
+    """The one thing to do now, and nothing else.
+
+    A checklist tells a new user what is wrong. It does not tell them what to
+    do, and six rows of detail is worse than one instruction when five of them
+    are not actionable yet. So the panel is the evidence and this is the
+    directive -- exactly one, chosen in the order a person actually hits them.
+    """
+
+    key: str
+    title: str
+    body: str
+    cta: str = ""       # button label; empty when the user acts elsewhere
+    action: str = ""    # the action id that button starts
+    done: bool = False
+
+
+def next_step(rows: tuple[Check, ...]) -> NextStep:
+    """What to do now. Ordered by what blocks what."""
+    by_key = {c.key: c for c in rows}
+
+    if by_key["chrome"].state == ATTENTION:
+        return NextStep(
+            "chrome", "Install Google Chrome",
+            "The sign-in has to happen in a real Chrome window — Google "
+            "refuses to complete a login inside an automated browser.",
+        )
+    if by_key["playwright"].state == ATTENTION:
+        return NextStep(
+            "playwright", "Install the browser tooling",
+            'Run pip install -e ".[browser]" in the project folder, then '
+            "reload this page.",
+        )
+
+    accounts = (by_key["google"], by_key["untappd"])
+    if any(c.state == ATTENTION for c in accounts):
+        # The row labels are "Google account" / "Untappd account", which read
+        # as "Sign in to Untappd account" once joined into a sentence.
+        short = {"google": "Google", "untappd": "Untappd"}
+        missing = [short[c.key] for c in accounts if c.state == ATTENTION]
+        return NextStep(
+            "connect", "Sign in to your accounts",
+            f"Chrome will open. Sign in to {' and '.join(missing)}, then close "
+            f"the window — closing it is how you say you're done. No account "
+            f"yet? The links below will make one.",
+            cta="Open Chrome and sign in", action="connect",
+        )
+    if not all(c.verified for c in accounts):
+        return NextStep(
+            "verify", "Test that both accounts work",
+            "A saved cookie means a login happened once, not that it still "
+            "works. This checks each one for real — a headless Maps load, and "
+            "one request to Untappd.",
+            cta="Test both accounts", action="verify",
+        )
+
+    return NextStep(
+        "run", "Name your city",
+        "Both accounts are working. Type the city you want and copy the "
+        "command — the run itself happens in your terminal, where you can "
+        "watch it and stop it.",
+        done=True,
+    )
+
 # --------------------------------------------------------------------------
 # Tier 2: verification. A real round-trip each.
 # --------------------------------------------------------------------------
