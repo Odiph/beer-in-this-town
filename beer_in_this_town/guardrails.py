@@ -54,6 +54,7 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 LEDGER = STATE_DIR / "rate_ledger.json"
+BREAKER = STATE_DIR / "breaker.json"
 
 # Conservative defaults. A human adding bars to a list does not do 200 in a day.
 DEFAULT_MAX_PER_RUN = 60
@@ -104,7 +105,9 @@ class AlreadyRunning(Tripped):
 _held: tuple[Path, str] | None = None
 
 
-def inspect_guardrails(limits: Limits, path: Path = LEDGER) -> dict[str, object]:
+def inspect_guardrails(
+    limits: Limits, path: Path | None = None
+) -> dict[str, object]:
     """What the write guardrails currently say, without changing any of it.
 
     Several error remedies tell the caller to check `status` -- for a cool-off,
@@ -117,6 +120,7 @@ def inspect_guardrails(limits: Limits, path: Path = LEDGER) -> dict[str, object]
     anything that persists, so `status` stays the free, side-effect-free
     command it is advertised as.
     """
+    path = path if path is not None else LEDGER
     ledger = RateLedger(limits, path=path)
     cooloff_h = ledger.cooloff_remaining_s() / 3600
     used = ledger.used_today()
@@ -150,7 +154,7 @@ def inspect_guardrails(limits: Limits, path: Path = LEDGER) -> dict[str, object]
 
 
 @contextmanager
-def ledger_lock(path: Path = LEDGER) -> Iterator[None]:
+def ledger_lock(path: Path | None = None) -> Iterator[None]:
     """Hold exclusive ownership of the ledger for the length of a run.
 
     Without this, two processes -- the nightly catch-up task and someone
@@ -170,6 +174,7 @@ def ledger_lock(path: Path = LEDGER) -> Iterator[None]:
     """
     global _held
 
+    path = path if path is not None else LEDGER
     lock = path.with_suffix(".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
     token = secrets.token_hex(8)
@@ -368,9 +373,13 @@ class RateLedger:
     does not hand you a fresh allowance.
     """
 
-    def __init__(self, limits: Limits, path: Path = LEDGER) -> None:
+    def __init__(self, limits: Limits, path: Path | None = None) -> None:
         self.limits = limits
-        self.path = path
+    # Resolved at call time, not bound as a default: a default is
+    # evaluated once at import, so anything that redirects the module
+    # constant afterwards (tests, a relocated state dir) never reaches
+    # it and the write lands in the real tree.
+        self.path = path if path is not None else LEDGER
         self.corrupt = False
         raw = self._read()
         self.events: list[float] = list(raw.get("events", []))
@@ -468,17 +477,39 @@ class RateLedger:
 
 
 class CircuitBreaker:
-    """Stop after N consecutive failures instead of hammering a broken UI."""
+    """Stop after N consecutive failures instead of hammering a broken UI.
 
-    def __init__(self, limit: int) -> None:
+    The count is persisted. Without that, three failures on the last three
+    places of a run tripped nothing -- `is_tripped` is only read at the top of
+    the next iteration, and there was no next iteration -- and the following
+    run started from zero. A UI that has stopped responding the way we expect
+    is exactly when a script looks least human, and it does not start looking
+    human again because the process restarted.
+    """
+
+    def __init__(self, limit: int, path: Path | None = None) -> None:
         self.limit = limit
-        self.consecutive = 0
+        self.path = path if path is not None else BREAKER
+        self.consecutive = self._read()
+
+    def _read(self) -> int:
+        try:
+            return int(json.loads(self.path.read_text(encoding="utf-8"))["consecutive"])
+        except (OSError, ValueError, TypeError, KeyError):
+            return 0
+
+    def _write(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({"consecutive": self.consecutive}),
+                             encoding="utf-8")
 
     def record_success(self) -> None:
         self.consecutive = 0
+        self._write()
 
     def record_failure(self) -> None:
         self.consecutive += 1
+        self._write()
 
     @property
     def is_tripped(self) -> bool:

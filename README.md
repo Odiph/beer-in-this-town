@@ -330,8 +330,13 @@ Claude Code skill.
 ## Politeness and failing loudly
 
 Single connection, no concurrency, 2.0–4.5s jittered delay, 600 requests/hour
-cap, 12h disk cache, and a deliberate abort after three consecutive throttle
-responses. ~100 venues ≈ 6 minutes. None of which makes automated access permitted —
+cap **persisted to disk**, 12h disk cache, and a deliberate abort after three
+consecutive throttle responses or three consecutive transport failures.
+
+The pacing numbers have floors: they can be raised but not lowered, because a
+guardrail you can switch off with a flag is a suggestion. The hourly ceiling
+and the circuit breaker are persisted for the same reason the write budget is
+— restarting the process must not hand back a fresh allowance. ~100 venues ≈ 6 minutes. None of which makes automated access permitted —
 see [Where the lines are](#where-the-lines-are).
 
 Each of those is a defence rather than a preference, and every one is

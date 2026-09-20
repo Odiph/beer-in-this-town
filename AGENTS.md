@@ -58,6 +58,8 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `search_login_required` | Untappd's sign-in wall cut the search short (anonymous search stops at 5) | Ask the human to sign in to Untappd in the browser profile. `bootstrap` only detects a Google session, so it cannot confirm this one. |
 | `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Not per-venue — check the key and billing, or unset it for Nominatim. Nothing was written. |
 | `network_unavailable` | Several URLs in a row failed at the transport | Check connectivity, then re-run. The run stopped instead of sleeping through the backoff ladder per venue. |
+| `bad_arguments` | An argument was rejected — most often a pacing value below its floor | **Do not retry with a different number.** The floors are account-safety limits; the message says which one. |
+| `bad_pacing` | `--max-gap` is below `--min-gap` | Pass a real range, or omit both and take the defaults. |
 | `csv_missing` | No input data | Run `run` first. |
 | `labels_incomplete` | A sampled bucket came back with no labels | Ask the human to label a few rows in every bucket. The rare ones are the point. |
 | `labels_unusable` | An answer is outside the accepted vocabulary, or the sheet lost its `_stratum`/`_stratum_size` columns | The message names the row and cell. Answers are `y` / `n` / `?`; a blank means unanswered. |
@@ -79,8 +81,10 @@ stderr. Parse stdout; ignore stderr unless debugging.
    where nothing is instructed to run it.
 3. **Trial before bulk.** First `pin` run should use `--limit 3`. Report the
    result before doing the rest.
-4. **Do not lower the pacing.** `--min-gap` / `--max-gap` exist to keep the
-   user's account safe. Raise them if throttled; do not lower them.
+4. **Do not lower the pacing.** `--min-gap` / `--max-gap` / `--delay` exist to
+   keep the user's account safe. Raise them if throttled; do not lower them.
+   This is now enforced rather than asked: a value below the default is
+   refused with `bad_arguments`, and the floors are the shipped defaults.
 5. **A failed parse is a real finding.** The quality gate deliberately writes
    nothing when data looks degraded. Do not work around it by lowering
    `parse_strictness` — fix the selector and say what changed.
@@ -154,6 +158,11 @@ defeating one still leaves the others:
 | **Circuit breaker** | 3 consecutive failures → stop and start a cool-off. Repeated failure is when a script looks least human. |
 | **Block detection** | Scans every page for CAPTCHA / "unusual traffic" / "not a robot" / forced sign-out. Any hit aborts instantly. Google serves these as HTTP 200, so text is the only signal. |
 | **Cool-off** | 6h, persisted. Applied after any trip or detected block. |
+
+Every one of those survives a restart, and so do the read-side protections:
+the hourly request ceiling and the circuit-breaker count are both on disk. A
+guardrail you can clear by starting the process again is a speed bump, not a
+guardrail.
 
 Rules for agents:
 

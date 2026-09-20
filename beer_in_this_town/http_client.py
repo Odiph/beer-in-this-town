@@ -71,7 +71,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from .config import CACHE_DIR, Settings
+from .config import CACHE_DIR, STATE_DIR, Settings
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +96,60 @@ def _retry_after_seconds(header: str | None, fallback: int) -> float:
 # Consecutive URLs that failed at the transport before the run stops.
 # Mirrors max_consecutive_429: a handful of dead URLs is a flaky page,
 # a run of them is a network that is not there.
+READ_BUDGET = STATE_DIR / "read_budget.json"
+
+
+class ReadBudget:
+    """The hourly request ceiling, persisted like the write ledger is.
+
+    The README calls 600/hour a hard cap. It lived in memory on the client, so
+    restarting the process handed back a full allowance -- which makes it the
+    one protection an ordinary retry loop could reset, while the write ledger
+    beside it is on disk precisely so that cannot happen. A ceiling you can
+    clear by starting again is a speed bump.
+    """
+
+    def __init__(self, s: Settings, path: Path | None = None) -> None:
+        self.s = s
+    # Resolved at call time, not bound as a default: a default is
+    # evaluated once at import, so anything that redirects the module
+    # constant afterwards (tests, a relocated state dir) never reaches
+    # it and the write lands in the real tree.
+        self.path = path if path is not None else READ_BUDGET
+        self.window_start, self.count = self._read()
+
+    def _read(self) -> tuple[float, int]:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            start = float(raw.get("window_start", 0.0))
+            count = int(raw.get("count", 0))
+        except (OSError, ValueError, TypeError):
+            return time.time(), 0
+        if time.time() - start >= 3600:
+            return time.time(), 0
+        return start, count
+
+    def _write(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(
+            json.dumps({"window_start": self.window_start, "count": self.count}),
+            encoding="utf-8",
+        )
+
+    def _roll(self) -> None:
+        if time.time() - self.window_start >= 3600:
+            self.window_start, self.count = time.time(), 0
+
+    def remaining(self) -> int:
+        self._roll()
+        return max(0, self.s.hourly_budget - self.count)
+
+    def record(self) -> None:
+        self._roll()
+        self.count += 1
+        self._write()
+
+
 MAX_CONSECUTIVE_TRANSPORT_ERRORS = 3
 
 
@@ -163,8 +217,8 @@ class PoliteClient:
             },
         )
         self._last_request_at = 0.0
-        self._window_start = time.time()
-        self._window_count = 0
+        # On disk, so restarting does not refill the ceiling.
+        self._budget = ReadBudget(self.s)
         self._consecutive_429 = 0
         self._consecutive_transport_errors = 0
 
@@ -182,9 +236,7 @@ class PoliteClient:
         turns a transient error into a block.
         """
         now = time.time()
-        if now - self._window_start >= 3600:
-            self._window_start, self._window_count = now, 0
-        if self._window_count >= self.s.hourly_budget:
+        if self._budget.remaining() <= 0:
             # Raise rather than sleep until the window rolls. A ceiling that
             # you can wait out is not a ceiling: it would quietly convert an
             # oversized job into an all-night crawl with nobody watching.
@@ -199,7 +251,7 @@ class PoliteClient:
         elapsed = now - self._last_request_at
         if elapsed < wait:
             time.sleep(wait - elapsed)
-        self._window_count += 1
+        self._budget.record()
 
     @staticmethod
     def _cache_path(url: str, params: dict | None) -> Path:

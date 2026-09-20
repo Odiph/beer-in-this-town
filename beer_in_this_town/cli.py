@@ -78,6 +78,69 @@ from .state import hints, inspect_state, next_actions, record_run
 log = logging.getLogger("beer_in_this_town")
 
 
+class EnvelopeParser(argparse.ArgumentParser):
+    """An argparse parser that still honours the envelope contract.
+
+    argparse writes usage to stderr and exits 2, so a rejected flag produced
+    no envelope at all -- and the contract says every invocation prints
+    exactly one. An agent got an unparseable blob and no `error.code` to
+    branch on, which for a rejected *pacing* flag is the worst case: the
+    remedy is to stop, and a caller with nothing to read may simply retry.
+    """
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        as_json = "--json" in sys.argv
+        emit(fail(
+            _requested_command(),
+            Problem(
+                code="bad_arguments",
+                message=message,
+                remedy=f"Fix the argument and re-run. "
+                       f"`{self.prog} --help` lists the valid ones.",
+            ),
+        ), as_json)
+        raise SystemExit(2)
+
+
+def _requested_command() -> str:
+    """The subcommand from argv, for an envelope built before parsing finished."""
+    known = {"status", "doctor", "bootstrap", "selfcheck", "run", "pin",
+             "notes", "label", "score"}
+    return next((a for a in sys.argv[1:] if a in known), "beer-in-this-town")
+
+
+def at_least(floor: float, what: str):
+    """An argparse type that refuses to go below a floor.
+
+    The pacing numbers are account-safety guardrails, and AGENTS.md rule 4
+    says not to lower them. Prose is not a guardrail: every other protection
+    in this project fails closed, and these could be switched off with a flag
+    by anyone -- or any agent -- who had not read the rule.
+
+    Raising them is always allowed. A throttled user is explicitly told to.
+    """
+    def parse(raw: str) -> float:
+        value = float(raw)
+        if value < floor:
+            raise argparse.ArgumentTypeError(
+                f"{what} must be at least {floor:g}s. It paces requests so "
+                f"this does not look like a script; lowering it is what gets "
+                f"an account flagged. Raise it if you are being throttled."
+            )
+        return value
+    return parse
+
+
+def check_pacing(min_gap: float, max_gap: float) -> None:
+    """Refuse a range that is not a range."""
+    if max_gap < min_gap:
+        raise ValueError(
+            f"--max-gap ({max_gap:g}s) is below --min-gap ({min_gap:g}s). "
+            f"The gap is drawn from that range, so an inverted one paces on "
+            f"nonsense."
+        )
+
+
 MAP_FORMATS = ("kml", "geojson", "gpx")
 
 
@@ -851,8 +914,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="emit one machine-readable envelope on stdout "
                              "(logs go to stderr)")
 
-    p = argparse.ArgumentParser(prog="beer_in_this_town", parents=[common])
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p = EnvelopeParser(prog="beer_in_this_town", parents=[common])
+    # parser_class so a rejected flag on a SUBcommand also emits an
+    # envelope -- that is where the pacing floors live.
+    sub = p.add_subparsers(dest="cmd", required=True,
+                           parser_class=EnvelopeParser)
 
     sub.add_parser("status", parents=[common],
                    help="where the pipeline is up to, and what to run next")
@@ -889,8 +955,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="force the Show More click path instead of HTTP pagination")
     run.add_argument("--i-read-robots", action="store_true",
                      help="proceed even if robots.txt disallows these paths")
-    run.add_argument("--delay", type=float, default=None,
-                     help="override the minimum inter-request delay in seconds")
+    run.add_argument("--delay", type=at_least(Settings().min_delay_s, "--delay"),
+                     default=None,
+                     help="raise the minimum inter-request delay, in seconds. "
+                          "It cannot be lowered: the pacing is what keeps this "
+                          "from looking like a script.")
 
     pin = sub.add_parser(
         "pin",
@@ -903,10 +972,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="exact name of the existing Google Maps list")
     pin.add_argument("--limit", type=int, default=None,
                      help="only do the first N (use for a small trial run)")
-    pin.add_argument("--min-gap", type=float, default=PIN_MIN_GAP,
+    pin.add_argument("--min-gap", type=at_least(PIN_MIN_GAP, "--min-gap"),
+                     default=PIN_MIN_GAP,
                      help=f"minimum seconds between places "
                           f"(default {PIN_MIN_GAP:.0f})")
-    pin.add_argument("--max-gap", type=float, default=PIN_MAX_GAP,
+    pin.add_argument("--max-gap", type=at_least(PIN_MAX_GAP, "--max-gap"),
+                     default=PIN_MAX_GAP,
                      help=f"maximum seconds between places "
                           f"(default {PIN_MAX_GAP:.0f})")
     notes = sub.add_parser(
@@ -917,8 +988,10 @@ def build_parser() -> argparse.ArgumentParser:
     notes.add_argument("--csv", required=True)
     notes.add_argument("--list", dest="list_name", default="Singapore Bars")
     notes.add_argument("--limit", type=int, default=None)
-    notes.add_argument("--min-gap", type=float, default=NOTES_MIN_GAP)
-    notes.add_argument("--max-gap", type=float, default=NOTES_MAX_GAP)
+    notes.add_argument("--min-gap", type=at_least(NOTES_MIN_GAP, "--min-gap"),
+                       default=NOTES_MIN_GAP)
+    notes.add_argument("--max-gap", type=at_least(NOTES_MAX_GAP, "--max-gap"),
+                       default=NOTES_MAX_GAP)
     notes.add_argument("--region", default=None,
                        help="as for pin; read from the CSV when not given")
 
@@ -960,6 +1033,18 @@ def main(argv: list[str] | None = None) -> int:
     verbose = getattr(args, "verbose", False)
     setup_logging(verbose, as_json)
     s = Settings.from_env()
+
+    if args.cmd in {"pin", "notes"}:
+        try:
+            check_pacing(args.min_gap, args.max_gap)
+        except ValueError as exc:
+            emit(fail(args.cmd, Problem(
+                code="bad_pacing",
+                message=str(exc),
+                remedy="Pass --min-gap below --max-gap, or omit both and use "
+                       "the defaults, which are chosen to look human.",
+            )), as_json)
+            return 1
 
     if args.cmd in {"run", "pin", "notes"}:
         s = replace(
