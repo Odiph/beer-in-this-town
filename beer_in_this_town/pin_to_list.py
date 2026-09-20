@@ -619,6 +619,22 @@ def pin_places(
                 else:
                     breaker.record_failure()
                     log.error("  giving up on %s after %d attempts", name, MAX_ATTEMPTS)
+                    # Check here, not only at the top of the next iteration.
+                    # Checked only there, a run that fails its last three
+                    # places trips nothing and sets no cool-off -- and the UI
+                    # having stopped responding is exactly when a script looks
+                    # least human, so the end of a run is the worst moment to
+                    # stop watching.
+                    if breaker.is_tripped:
+                        breaker.reset()
+                        ledger.start_cooloff(
+                            f"{limits.max_consecutive_failures} consecutive failures"
+                        )
+                        raise Tripped(
+                            f"Stopped after {limits.max_consecutive_failures} "
+                            f"consecutive failures. The UI is not behaving as "
+                            f"expected; a cool-off has started."
+                        )
 
                 time.sleep(random.uniform(min_gap_s, max_gap_s))
         finally:
