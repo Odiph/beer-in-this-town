@@ -114,3 +114,33 @@ def test_a_new_sweep_is_marked_complete_before_placement(monkeypatch):
                             known_near=lambda centre, radius, s: [],
                             settle_min_s=0, settle_max_s=0)
     assert app_sweep.load_finished(CITY) is not None
+
+
+def test_a_refused_census_is_retried_once_on_half_the_area(monkeypatch):
+    """Measured: an ~18 km census 504'd on two servers. Half the radius is a
+    quarter of the load."""
+    from beer_in_this_town.overpass import OverpassUnavailable
+
+    app_sweep.mark_complete(CITY, _result("Lauter"), CENTRE, "geocoder")
+    asked = []
+
+    def census_once(centre, radius, s):
+        asked.append(radius)
+        if len(asked) == 1:
+            raise OverpassUnavailable("HTTP 504")
+        return []
+
+    monkeypatch.setattr(app_pipeline, "osm_radius_km", lambda v, c: 8.0)
+    monkeypatch.setattr(app_pipeline, "calibrate",
+                        lambda venues, known, centre: (venues, None))
+    monkeypatch.setattr(app_pipeline, "to_venues", lambda r, city: r.venues)
+    app_pipeline.census(object(), CITY, None,
+                        locate_city=lambda city, s: CENTRE,
+                        known_near=census_once, settle_min_s=0, settle_max_s=0)
+    assert asked == [8.0, 4.0]
+
+
+def test_the_census_radius_is_capped():
+    far = [Venue("Far", 0, 0, 32.0 + d / 111, 34.78) for d in (2, 17)]
+    assert app_pipeline.osm_radius_km(far, (32.0, 34.78)) == \
+        app_pipeline.MAX_OSM_RADIUS_KM

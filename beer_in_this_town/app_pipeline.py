@@ -54,7 +54,7 @@ from .export import write_csv, write_geojson, write_gpx, write_kml
 from .geo import haversine_km
 from .geocode import geocode_place
 from .models import Venue
-from .overpass import nearby_venues
+from .overpass import OverpassUnavailable, nearby_venues
 
 log = logging.getLogger(__name__)
 
@@ -64,12 +64,15 @@ log = logging.getLogger(__name__)
 DEFAULT_MIN_DEPTH = 1
 DEFAULT_MAX_DEPTH = 3
 
-# The OSM census used to calibrate must cover every swept venue. The radius is
-# taken from the sweep's own spread, padded, and clamped so a runaway
-# coordinate cannot turn one Overpass query into a country.
+# The OSM census used to calibrate. The fit is one similarity (scale,
+# rotation, shift) applied to every venue, so anchors from the core are
+# enough; it does not have to reach every swept venue. The radius follows the
+# sweep's spread, padded, and is capped: measured 2026-09-22, a depth-3 Tel
+# Aviv sweep spread 17 km and the ~18 km query timed out (HTTP 504) on both
+# overpass-api.de and the kumi mirror, twice.
 OSM_MARGIN_KM = 1.0
 MIN_OSM_RADIUS_KM = 3.0
-MAX_OSM_RADIUS_KM = 25.0
+MAX_OSM_RADIUS_KM = 8.0
 
 RESET_LOCATION_DESC = "Reset location"
 _BOUNDS = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
@@ -188,7 +191,18 @@ def census(device: Device, city: str, s: Settings, *, here: bool = False,
         mark_complete(city, result, centre, source)
 
     radius = osm_radius_km(result.venues, centre)
-    known = [(o.name, o.lat, o.lng) for o in known_near(centre, radius, s)]
+    try:
+        found = known_near(centre, radius, s)
+    except OverpassUnavailable:
+        # A 504 is how Overpass says the query was too heavy as often as it
+        # says the server is busy. Half the area is a quarter of the load.
+        if radius / 2 < MIN_OSM_RADIUS_KM:
+            raise
+        radius /= 2
+        log.warning("Overpass refused the calibration census; retrying once "
+                    "at %.1f km.", radius)
+        found = known_near(centre, radius, s)
+    known = [(o.name, o.lat, o.lng) for o in found]
     fixed, cal = calibrate(result.venues, known, centre)
 
     return Census(venues=to_venues(SweepResult(venues=fixed), city),
