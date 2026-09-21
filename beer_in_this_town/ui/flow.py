@@ -34,7 +34,7 @@ def _quote(value: str) -> str:
     rather than escaped, because the escape differs between PowerShell, cmd
     and bash and a person copies this into whichever they have open.
     """
-    return value.replace('"', "").strip()
+    return config.arg_text(value)
 
 
 def data_dir_for(city: str, root: Path | None = None) -> Path:

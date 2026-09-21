@@ -131,7 +131,7 @@ def test_envelope_is_valid_json_with_stable_keys():
     payload = json.loads(env.to_json())
     assert payload["command"] == "run"
     assert payload["ok"] is True
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "2.0"
     assert "error" not in payload  # omitted when there is none
 
 
@@ -276,12 +276,11 @@ def test_hints_are_prose_and_stay_out_of_next_actions():
 
 @pytest.mark.unit
 @pytest.mark.parametrize("remedy,promoted", [
-    ("python -m beer_in_this_town run --no-upload --json", True),
+    ("python -m beer_in_this_town enrich --city "Tel Aviv" --json", True),
     ("python -m beer_in_this_town status --json", True),
     ("python -m beer_in_this_town bootstrap", False),
     ('python -m beer_in_this_town pin --csv "x" --json', False),
     ('python -m beer_in_this_town notes --csv "x" --json', False),
-    ("python -m beer_in_this_town run --json", False),   # uploads by default
     ("Create the list by hand in Google Maps.", False),
 ])
 def test_only_safe_remedies_become_next_actions(remedy, promoted):

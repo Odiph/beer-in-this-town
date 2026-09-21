@@ -46,7 +46,7 @@ stderr. Parse stdout; ignore stderr unless debugging.
 {
   "command": "filter",
   "ok": true,
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "data": { "city": "Tel Aviv", "kept": 81, "excluded": 7, "csv": "data/tel-aviv/3_venues.csv" },
   "warnings": ["2 venue(s) have no coordinates"],
   "next_actions": ["python -m beer_in_this_town export --city \"Tel Aviv\" --json"],
