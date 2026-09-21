@@ -141,6 +141,30 @@ def scope_slug(value: str) -> str:
     return slug or SCOPE_FALLBACK
 
 
+def city_slug(city: str) -> str:
+    """The directory a city's stage files live in: `Tel Aviv` -> `tel-aviv`.
+
+    Same filesystem safety as `scope_slug`. A city written in a script that
+    has no ASCII form (`תל אביב`) keeps its own letters rather than collapsing
+    to the shared fallback, which would put every such city in one folder.
+    """
+    slug = scope_slug(city)
+    if slug != SCOPE_FALLBACK:
+        return slug
+    native = re.sub(r"[\W_]+", "-", unicodedata.normalize("NFKC", city)
+                    .casefold()).strip("-")
+    return native or SCOPE_FALLBACK
+
+
+def stage_path(city: str, name: str) -> Path:
+    """`data/<slug>/<name>` -- where one step of the flow reads or writes.
+
+    `DATA_DIR` is read at call time so a redirected data directory (tests, a
+    relocated install) is honoured.
+    """
+    return DATA_DIR / city_slug(city) / name
+
+
 def ensure_dirs() -> None:
     for d in (DATA_DIR, STATE_DIR, CACHE_DIR, DEBUG_DIR):
         d.mkdir(parents=True, exist_ok=True)
