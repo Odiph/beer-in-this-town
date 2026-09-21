@@ -463,6 +463,7 @@ def _harvest_screen(device: Device) -> list[Pin]:
 
 
 def sweep(device: Device, cell: Cell, max_depth: int = 3,
+          min_depth: int = 0,
           verify_pans: bool = False, city: str | None = None,
           filter_drinking: bool = False,
           settle_min_s: float = SETTLE_MIN_S,
@@ -526,11 +527,29 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
     if city:
         save_journal(city, result)
 
-    if not is_truncated(len(pins)):
+    # `not truncated` does NOT mean `complete`, and Singapore proved it: a
+    # search for a city-state lands the map at country zoom, where the
+    # viewport is enormous and the result set sparse. It returned 13 venues,
+    # was under the cap, declared itself finished -- and matched **5 of the
+    # 100** venues in the known top-100 corpus. Few pins over a huge area
+    # reads exactly like few pins over a small one.
+    #
+    # So the cap cannot be the only reason to subdivide. `min_depth` forces
+    # splitting regardless of it, which is the crude form of bounding a cell
+    # by ground size. The proper form is `min_cell_km`, and it needs
+    # metres-per-pixel for this city's zoom -- which is not yet measurable,
+    # because the app chooses the zoom and the scale changes with it.
+    if not is_truncated(len(pins)) and _depth >= min_depth:
         log.info("Cell complete: %d venue(s).", len(pins))
         return result
 
-    result.truncated_cells += 1
+    if not is_truncated(len(pins)):
+        log.info("Cell under the cap at depth %d but min_depth is %d; "
+                 "splitting anyway -- a sparse wide viewport looks identical "
+                 "to a complete small one.", _depth, min_depth)
+
+    if is_truncated(len(pins)):
+        result.truncated_cells += 1
 
     if _depth >= max_depth:
         result.hit_depth_limit = True
@@ -593,7 +612,8 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
                     _settle(settle_min_s, settle_max_s)
 
         # The child re-searches on entry, so nothing is needed here.
-        sweep(device, cell, max_depth=max_depth, verify_pans=verify_pans,
+        sweep(device, cell, max_depth=max_depth, min_depth=min_depth,
+              verify_pans=verify_pans,
               city=city, filter_drinking=filter_drinking,
               settle_min_s=settle_min_s, settle_max_s=settle_max_s,
               _depth=_depth + 1, _result=result)

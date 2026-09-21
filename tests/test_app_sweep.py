@@ -510,3 +510,28 @@ def test_a_pan_within_tolerance_is_left_alone():
     dev = FakeDevice([full, close] + [dump_with(["x"])] * 40)
     sweep(dev, CELL, settle_max_s=0, max_depth=1, verify_pans=True)
     assert len([a for a in dev.actions if a.startswith("swipe")]) == 4
+
+
+# --- a sparse wide cell is not a complete one -----------------------------
+
+def test_a_cell_under_the_cap_still_splits_when_min_depth_demands_it():
+    """Singapore returned 13 venues, was under the cap, declared itself
+    finished -- and matched 5 of the 100 venues in a known top-100 corpus.
+    A city-state search lands the map at country zoom, where few pins over a
+    huge area read exactly like few pins over a small one."""
+    dev = FakeDevice([dump_with(["a", "b"])])
+    out = sweep(dev, CELL, settle_max_s=0, min_depth=1, max_depth=2)
+    assert out.cells_visited == 5          # split despite being under the cap
+
+
+def test_min_depth_does_not_inflate_the_truncated_count():
+    """A cell split for being wide was not hiding venues behind the cap, and
+    reporting it as truncated would overstate what was missed."""
+    dev = FakeDevice([dump_with(["a"])])
+    out = sweep(dev, CELL, settle_max_s=0, min_depth=1, max_depth=2)
+    assert out.truncated_cells == 0
+
+
+def test_min_depth_zero_keeps_the_old_behaviour():
+    dev = FakeDevice([dump_with(["a"])])
+    assert sweep(dev, CELL, settle_max_s=0).cells_visited == 1
