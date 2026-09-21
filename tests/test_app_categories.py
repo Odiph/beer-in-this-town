@@ -46,7 +46,7 @@ def panel(rows):
 
 @pytest.mark.parametrize("name", [
     "Bar", "Pub", "Beer Bar", "Brewery", "Beer Garden", "Beer Store",
-    "Dive Bar", "Gastropub", "Wine Bar", "Liquor Store", "Distillery",
+    "Dive Bar", "Gastropub", "Liquor Store",
     "Irish Pub", "Taproom", "Brewpub", "Hotel Bar",
 ])
 def test_drinking_categories_are_kept(name):
@@ -57,6 +57,7 @@ def test_drinking_categories_are_kept(name):
     "Supermarket", "Stadium", "Soccer Stadium", "Market", "Park",
     "Playground", "Hotel", "Convention Center", "Residential Building",
     "Pizza Place", "Coffee Shop", "Basketball Stadium", "Harbor / Marina",
+    "Wine Bar", "Cocktail Bar", "Winery", "Distillery",
 ])
 def test_everything_else_is_dropped(name):
     """`Supermarket` and a highway both cleared a 200 check-in bar in the

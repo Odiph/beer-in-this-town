@@ -41,14 +41,13 @@ class ParseError(RuntimeError):
     """The page did not look the way we require it to look."""
 
 
-class ClientRenderedSearch(ParseError):
-    """The search page arrived as an empty Algolia shell.
+class StatsLoginRequired(ParseError):
+    """The venue page hides its stats behind "Log In to view Venue Stats".
 
-    Untappd renders search results client-side, so an HTTP fetch gets the
-    container and none of the rows. That is the page working as designed, not a
-    selector that broke -- it is precisely what the browser path exists for.
-    Filing it as a parse failure would dump a debug/ artifact on every
-    successful run and bury the dumps that mean something.
+    Measured 2026-09-22 against a signed-out session: verified venues still
+    show their numbers, every other page shows the login prompt in place of
+    them. That is an account problem, not a layout change, and treating it as
+    one reported most of a city as `fetch_failed` inside an `ok: true` run.
     """
 
 
@@ -80,74 +79,6 @@ def _clean(text: str | None) -> str | None:
     return collapsed or None
 
 
-def _has_digit(line: str) -> bool:
-    """Street addresses carry numbers ("42 Somewhere Road", "#01-23"). Venue
-    categories and city lines do not."""
-    return any(ch.isdigit() for ch in line)
-
-
-def _split_style_lines(
-    lines: list[str],
-) -> tuple[str | None, str | None, str | None]:
-    """Assign a card's `p.style` lines to (category, address, city).
-
-    A full card carries three lines in document order, but plenty carry two and
-    a few carry one. Reading them positionally is how a missing category ends
-    up filed as the venue's category: the address shifts up one slot, the city
-    shifts into address, and the result is a CSV that looks entirely reasonable
-    and is entirely wrong. Same failure mode as the label-vs-position rule the
-    stats parser already follows.
-
-    The location line is last *when the card has one* -- and that qualifier is
-    load-bearing. Rather than assume it, the last line has to look like a
-    location (no street number) before it is accepted as one; a card whose last
-    line carries digits has no city line at all, and treating it as one would
-    file a street address as the venue's city.
-
-    Where a single line precedes the location, a digit decides. That is a
-    judgement, not a certainty, so it is logged: an address with no number in
-    it ("The Green, Church Lane") lands in the category, and downstream that
-    matters -- `places_from_csv` falls back to city-only and `journal_key`
-    degrades to the bare name, which is how two outlets of one chain collide.
-
-    A lone line is genuinely ambiguous -- "Beer Bar" and "Singapore, Singapore"
-    are the same shape -- so nothing is assigned rather than guessed. This
-    module's whole premise is that no data beats confident wrong data.
-    """
-    if not lines:
-        return None, None, None
-
-    if len(lines) == 1:
-        only = lines[0]
-        if _has_digit(only):
-            return None, only, None
-        log.info(
-            "Card has one style line, %r, which could be a category or a "
-            "location. Filing neither -- guessing here would put a venue type "
-            "in the city column or vice versa.", only,
-        )
-        return None, None, None
-
-    *rest, last = lines
-    if _has_digit(last):
-        # No location line on this card: the last line is a street address.
-        log.debug("Last style line %r carries digits, so this card has no "
-                  "location line.", last)
-        rest, city = lines, None
-    else:
-        city = last
-
-    if len(rest) >= 2:
-        return rest[0], rest[1], city
-    if len(rest) == 1:
-        line = rest[0]
-        if _has_digit(line):
-            return None, line, city
-        log.debug("Filing %r as a category: it carries no street number.", line)
-        return line, None, city
-    return None, None, city
-
-
 def parse_count(text: str) -> int | None:
     """12,345 -> 12345 ; 1.2k -> 1200 ; n/a -> None."""
     m = NUMBER_RE.search(text)
@@ -165,77 +96,15 @@ def parse_count(text: str) -> int | None:
     return int(round(value))
 
 
-def parse_search_page(html: str, *, strict: bool = True) -> list[VenueRef]:
-    """Extract every venue on one page of /search?type=venues.
-
-    strict=False is used only when probing whether a pagination scheme works,
-    where an empty page is a legitimate answer rather than an error.
-    """
-    soup = BeautifulSoup(html, "lxml")
-    items = soup.select(".beer-item")
-    if not items:
-        if not strict:
-            return []
-        # Distinguish "this page needs JavaScript" from "this page changed
-        # shape". Both used to raise the same error and dump the same file, so
-        # the routine case drowned out the one worth reading.
-        if soup.select_one("#algolia-hits") is not None:
-            raise ClientRenderedSearch(
-                "The search page carries an empty #algolia-hits container: "
-                "results are rendered client-side and cannot be read over "
-                "plain HTTP."
-            )
-        dump_debug("search_page_no_items", html)
-        raise ParseError(
-            "No .beer-item nodes and no #algolia-hits container on the search "
-            "page. Either the query returned nothing, you are logged out and "
-            "hit an interstitial, or the markup changed. See "
-            "debug/search_page_no_items.html."
-        )
-
-    refs: list[VenueRef] = []
-    for item in items:
-        try:
-            anchor = require_one(item, 'p.name a[href^="/v/"]', ctx="search-item")
-            href = anchor.get("href", "")
-            m = VENUE_HREF_RE.match(href)
-            if not m:
-                raise ParseError(f"Unparseable venue href: {href!r}")
-
-            styles = [
-                s for p in item.select("p.style") if (s := _clean(p.get_text()))
-            ]
-            category, address, city = _split_style_lines(styles)
-
-            refs.append(
-                VenueRef(
-                    venue_id=m.group("vid"),
-                    slug=m.group("slug"),
-                    name=_clean(anchor.get_text()) or "(unnamed)",
-                    category=category,
-                    address=address,
-                    city=city,
-                )
-            )
-        except ParseError as exc:
-            # One malformed card must not kill a 100-venue run, but it has to be
-            # visible in the log and counted against the strictness gate.
-            log.error("Skipping malformed search item: %s", exc)
-
-    # The corpus gate downstream only inspects stats, so a page where the style
-    # lines went unrecognised would otherwise pass in total silence. Say so.
-    unlocated = sum(1 for r in refs if r.city is None)
-    if unlocated:
-        log.info(
-            "%d of %d card(s) on this page had no recognisable location line. "
-            "Their city column will be empty rather than wrong.",
-            unlocated, len(refs),
-        )
-    return refs
-
-
 def parse_venue_stats(html: str, ref: VenueRef) -> Venue:
     soup = BeautifulSoup(html, "lxml")
+
+    gate = soup.select_one('.stats a[href*="/login"]')
+    if gate is not None and "view venue stats" in soup.select_one(
+            ".stats").get_text(" ", strip=True).lower():
+        raise StatsLoginRequired(
+            f"venue {ref.venue_id}: Untappd shows its stats only to a "
+            f"signed-in user")
 
     try:
         stats_block = require_one(soup, ".stats", ctx=f"venue:{ref.venue_id}")

@@ -19,6 +19,39 @@ Three questions, from three issues:
 The ordering between them is not arbitrary. A private space wrongly kept puts
 someone's front door on a shared map; a real venue wrongly dropped costs one
 bar to re-add from a visible list. The costly error is decided first.
+
+What a craft-beer venue is (v0.2 -- the one definition)
+-------------------------------------------------------
+`filter` and the app's category panel (`app_categories`) both read the
+vocabulary below; nothing else in the package decides what a beer venue is.
+Categories are matched as whole comma-separated parts, case- and
+accent-folded, so `Hotel Bar` is a bar and `Hotel` is not.
+
+  KEEP, specific -- brewery, brewpub, microbrewery, taproom, cidery, meadery;
+      beer bar, craft beer bar, beer garden/biergarten, beer hall; bottle
+      shop, beer store, liquor store. Wins over everything else on the line:
+      a taproom that also serves food is a taproom.
+  EXCLUDE -- supermarket, grocery, convenience store, gas station, highway or
+      road, winery, vineyard, wine bar, wine shop, cocktail bar, distillery,
+      beer festival (an event, not a place). Wins over the generic keeps, so
+      `Wine Bar, Bar` is excluded and `Wine Bar, Beer Bar` is kept.
+  KEEP, generic -- bar, pub, irish pub, gastropub, dive bar, sports bar, hotel
+      bar, lounge. Untappd presence with beer check-ins is the signal; a
+      bare `Bar` is where plenty of serious craft venues are filed.
+  EXCLUDE, restaurant-only -- every part is food (restaurant, diner, cafe...).
+  EXCLUDE, no beer category -- a category line that says none of the above.
+  KEEP, uncategorised -- no category at all. That is an unresolved sweep row:
+      it already passed the app's drinking filter, and dropping it would
+      turn "we could not look it up" into "it is not a bar".
+
+Before any of that, a private-looking venue (`looks_private`) is excluded:
+someone's front door on a shared map is the costly error. After it,
+`looks_closed` and a Places closed status only *flag* a venue -- a false
+closure deletes a real bar, so closing is the user's decision.
+
+`classify()` below is the older measurement-only candidate and keeps its own
+three-outcome verdict for `label`/`score`; `craft_beer_decision()` is what
+`filter` runs.
 """
 from __future__ import annotations
 
@@ -174,3 +207,99 @@ def classify(v: Venue) -> Classification:
         return Classification(kind, Verdict.REVIEW,
                               f"unsettled: category {v.ref.category!r} decides nothing")
     return Classification(kind, Verdict.KEEP, f"{kind.value}: category is explicit")
+
+
+# --- the craft-beer definition (see the module docstring) ----------------
+
+BREWERY_CATEGORIES = frozenset({
+    "brewery", "brewpub", "brew pub", "microbrewery", "taproom", "tap room",
+    "cidery", "meadery",
+})
+BOTTLE_SHOP_CATEGORIES = frozenset({
+    "bottle shop", "bottleshop", "beer store", "liquor store",
+    "off licence", "off-licence", "off license",
+})
+BEER_BAR_CATEGORIES = frozenset({
+    "beer bar", "craft beer bar", "craft beer", "beer garden", "biergarten",
+    "beer hall",
+})
+GENERIC_BAR_CATEGORIES = frozenset({
+    "bar", "pub", "irish pub", "gastropub", "dive bar", "sports bar",
+    "hotel bar", "lounge",
+})
+# category part -> the reason written to 3_excluded.csv
+EXCLUDED_CATEGORIES: dict[str, str] = {
+    "supermarket": "supermarket", "grocery store": "supermarket",
+    "grocery": "supermarket", "convenience store": "supermarket",
+    "gas station": "gas station", "petrol station": "gas station",
+    "highway or road": "highway/road", "highway": "highway/road",
+    "road": "highway/road", "street": "highway/road",
+    "winery": "winery", "vineyard": "winery",
+    "wine bar": "wine bar", "wine shop": "wine bar",
+    "cocktail bar": "cocktail bar", "distillery": "distillery",
+    "beer festival": "event, not a venue",
+}
+# Every category the tool wants on the map. `app_categories` toggles exactly
+# these on in the app's filter panel, so collection and filtering agree.
+KEEP_CATEGORIES = (BREWERY_CATEGORIES | BOTTLE_SHOP_CATEGORIES
+                   | BEER_BAR_CATEGORIES | GENERIC_BAR_CATEGORIES)
+
+_FOOD_WORDS = ("restaurant", "diner", "cafe", "coffee", "bakery", "pizza",
+               "burger", "steakhouse", "bistro", "sandwich", "food", "grill",
+               "eatery", "kitchen", "joint", "noodle", "sushi", "bbq")
+
+
+def category_parts(category: str | None) -> list[str]:
+    """`"American Restaurant, Beer Bar"` -> `["american restaurant", "beer bar"]`."""
+    if not category:
+        return []
+    return [" ".join(_fold(p).split()) for p in category.split(",") if p.strip()]
+
+
+@dataclass(frozen=True)
+class Decision:
+    """`filter`'s verdict on one venue. `flag` never removes a venue."""
+
+    keep: bool
+    kind: str      # brewery|bottle_shop|beer_bar|bar|uncategorised|excluded
+    reason: str
+    flag: str = ""  # "" | possibly_closed | closed
+
+
+def closure_flag(v: Venue) -> str:
+    """Closed per Places, or suspected closed per `looks_closed`, or ""."""
+    if v.is_closed:
+        return "closed"
+    if looks_closed(v):
+        return "possibly_closed"
+    return ""
+
+
+def craft_beer_decision(v: Venue) -> Decision:
+    """Is this a craft-beer venue? The one definition; see the docstring."""
+    flag = closure_flag(v)
+    if looks_private(v):
+        return Decision(False, "excluded",
+                        f"private: {v.unique} unique over {v.total} check-ins",
+                        flag)
+    parts = category_parts(v.ref.category)
+    if not parts:
+        return Decision(True, "uncategorised",
+                        "no category: kept, it passed the app's drinking filter",
+                        flag)
+    for kind, vocab in (("brewery", BREWERY_CATEGORIES),
+                        ("bottle_shop", BOTTLE_SHOP_CATEGORIES),
+                        ("beer_bar", BEER_BAR_CATEGORIES)):
+        hit = next((p for p in parts if p in vocab), None)
+        if hit:
+            return Decision(True, kind, f"category: {hit}", flag)
+    excluded = next((p for p in parts if p in EXCLUDED_CATEGORIES), None)
+    if excluded:
+        return Decision(False, "excluded", EXCLUDED_CATEGORIES[excluded], flag)
+    generic = next((p for p in parts if p in GENERIC_BAR_CATEGORIES), None)
+    if generic:
+        return Decision(True, "bar", f"category: {generic}", flag)
+    if all(any(w in p for w in _FOOD_WORDS) for p in parts):
+        return Decision(False, "excluded", "restaurant-only", flag)
+    return Decision(False, "excluded",
+                    f"no beer category: {v.ref.category}", flag)

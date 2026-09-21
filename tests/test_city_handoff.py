@@ -47,12 +47,13 @@ def ready(tmp_path):
 def test_the_city_reaches_the_agents_next_action(ready):
     """The whole point. Type London, and the agent is offered London."""
     before = next_actions(inspect_state(ready), ready)
-    assert not any(" run " in f" {a} " for a in before),         "a run was offered before anyone had named a city"
+    assert not any(" sweep " in f" {a} " for a in before), \
+        "a sweep was offered before anyone had named a city"
 
     record_intent("london")
 
     after = next_actions(inspect_state(ready), ready)
-    assert any('--query "london"' in a for a in after), \
+    assert any('sweep --city "london"' in a for a in after), \
         "the city never reached the agent"
     assert not any("singapore" in a for a in after)
 
@@ -194,16 +195,16 @@ def test_settings_carry_no_city():
 
 
 @pytest.mark.unit
-def test_run_refuses_without_a_city(monkeypatch, capsys):
+def test_sweep_refuses_without_a_city(monkeypatch, capsys):
     from beer_in_this_town import cli
 
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False, raising=False)
-    code = cli.main(["run", "--no-upload", "--json"])
+    code = cli.main(["sweep", "--json"])
     out = capsys.readouterr().out
 
     assert code == 1
     assert '"no_city"' in out
-    assert "scrape" not in out.lower() or "no_city" in out
+    assert "--city" in out
 
 
 @pytest.mark.unit
@@ -232,10 +233,10 @@ def test_the_city_a_person_named_is_enough(ready, monkeypatch, capsys):
 
     record_intent("porto")
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False, raising=False)
-    monkeypatch.setattr(cli, "cmd_run",
-                        lambda s, **kw: cli.Envelope(command="run", ok=True,
+    monkeypatch.setattr(cli, "cmd_sweep",
+                        lambda s, **kw: cli.Envelope(command="sweep", ok=True,
                                                      data={"query": s.query}))
-    assert cli.main(["run", "--no-upload", "--json"]) == 0
+    assert cli.main(["sweep", "--json"]) == 0
     assert '"porto"' in capsys.readouterr().out
 
 
@@ -245,4 +246,33 @@ def test_no_city_is_something_a_person_must_settle(ready):
 
     state = inspect_state(ready)
     assert blocked_on(state) == "choose_city"
-    assert not any(" run " in f" {a} " for a in next_actions(state, ready))
+    assert not any(" sweep " in f" {a} " for a in next_actions(state, ready))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stage", ["enrich", "filter", "export"])
+def test_the_later_stages_find_the_chosen_city_too(stage, capsys):
+    """`sweep` fell back to the dashboard's city; the next three did not, so
+    a person typing `beertown enrich` got `no_city` after choosing one."""
+    from beer_in_this_town import cli
+
+    record_intent("london")
+    assert cli.main([stage, "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "stage_input_missing", payload["error"]
+    assert 'london' in payload["error"]["remedy"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("cmd", ["pin", "notes"])
+def test_a_write_needs_a_list_the_person_named(cmd, tmp_path, capsys):
+    """The dashboard suggests "<City> Bars"; a write must not fall back to
+    that suggestion, or `no_list` can never fire and the write goes to a
+    list nobody typed."""
+    from beer_in_this_town import cli
+
+    record_intent("london")
+    csv_path = tmp_path / "3_venues.csv"
+    csv_path.write_text("name,address\nA,B\n", encoding="utf-8")
+    assert cli.main([cmd, "--csv", str(csv_path), "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "no_list"

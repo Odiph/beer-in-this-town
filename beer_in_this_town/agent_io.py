@@ -23,7 +23,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "2.0"
 
 
 @dataclass(frozen=True)
@@ -114,10 +114,6 @@ def _runnable(remedy: str) -> list[str]:
         return []
     padded = f" {remedy} "
     if any(token in padded for token in _HUMAN_ONLY):
-        return []
-    # `run` uploads to My Maps unless told not to, which is not something to
-    # start on an agent's own initiative.
-    if " run " in padded and "--no-upload" not in remedy:
         return []
     return [remedy]
 

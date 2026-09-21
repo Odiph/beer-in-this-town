@@ -63,9 +63,9 @@
     flex:none; width:9px; height:9px; border-radius:50%; margin-top:6px;
     background:var(--unknown);
   }
-  li[data-s="ok"] .dot{background:var(--ok)}
-  li[data-s="attention"] .dot{background:var(--warn)}
-  li[data-s="off"] .dot{background:var(--line)}
+  [data-s="ok"] > .dot{background:var(--ok)}
+  [data-s="attention"] > .dot{background:var(--warn)}
+  [data-s="off"] > .dot, [data-s="todo"] > .dot{background:var(--line)}
   .body{flex:1; min-width:0}
   .label{font-weight:600; font-size:14.5px}
   .detail{color:var(--muted); font-size:13.5px; overflow-wrap:anywhere}
@@ -77,15 +77,16 @@
     white-space:nowrap;
   }
   .tag.tested{background:var(--ok-wash); color:var(--ok)}
+  .tag.next{background:var(--accent); color:var(--accent-ink)}
 
   /* per-row: somewhere to go, and the longer answer on request */
   .rowgo{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px}
-  .rowgo a{
+  .rowgo a, .links a{
     color:var(--accent); font-size:13px; font-weight:600; text-decoration:none;
     border-bottom:1px solid transparent;
   }
-  .rowgo a:hover{border-bottom-color:var(--accent)}
-  .rowgo a:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  .rowgo a:hover, .links a:hover{border-bottom-color:var(--accent)}
+  a:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
   .rowgo button{padding:7px 12px; font-size:13px; border-radius:8px}
   .rowgo button.go{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
   li details{margin-top:7px}
@@ -104,6 +105,9 @@
   button.primary{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
   button:disabled{opacity:.45; cursor:default}
   button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  button.small{padding:6px 11px; font-size:12.5px; border-radius:8px}
+  button.linkish{border:0; background:none; padding:0; color:var(--accent);
+    font-size:13px; text-decoration:underline; text-underline-offset:3px}
 
   /* activity: the point of the page while something is running */
   .job{
@@ -127,22 +131,30 @@
   ol.steps li.aside .txt::before{content:"— "}
   .err{color:var(--warn); font-size:13.5px; margin-top:10px}
 
-  /* stepper: where you are, in three dots */
+  /* stepper: where you are, and a way back to any step */
   .stepper{display:flex; align-items:center; gap:0; margin-top:22px}
-  .stg{display:flex; align-items:center; gap:8px}
+  .stg{display:flex; align-items:center; gap:8px; border:0; background:none;
+       padding:4px 2px; border-radius:8px; font-weight:400}
   .stg .bead{
     width:26px; height:26px; border-radius:50%; flex:none;
     display:flex; align-items:center; justify-content:center;
     font-family:var(--mono); font-size:12px; font-weight:600;
     border:1.5px solid var(--line); background:var(--surface); color:var(--muted);
   }
-  .stg .nm{font-size:13.5px; color:var(--muted)}
+  .stg .nm{font-size:13.5px; color:var(--muted); white-space:nowrap}
   .stg[data-s="current"] .bead{border-color:var(--accent); background:var(--accent); color:var(--accent-ink)}
   .stg[data-s="current"] .nm{color:var(--ink); font-weight:600}
   .stg[data-s="done"] .bead{border-color:var(--ok); background:var(--ok-wash); color:var(--ok)}
   .stg[data-s="done"] .nm{color:var(--ok)}
-  .rail{flex:1 1 16px; min-width:14px; height:1.5px; background:var(--line); margin:0 10px}
+  .stg[aria-pressed="true"] .bead{box-shadow:0 0 0 3px var(--sunk), 0 0 0 5px var(--accent)}
+  .rail{flex:1 1 10px; min-width:8px; height:1.5px; background:var(--line); margin:0 6px}
   .rail.lit{background:var(--ok)}
+  /* Six labels do not fit a phone. Keep the one you are looking at. */
+  @media (max-width:640px){
+    .stg .nm{display:none}
+    .stg[aria-pressed="true"] .nm{display:inline}
+    .rail{margin:0 3px; min-width:4px}
+  }
 
   /* the panel is reference now, not the interface */
   .panel{margin-top:22px}
@@ -168,6 +180,9 @@
   .lead .go{margin-top:14px}
   .lead.done{border-left-color:var(--ok)}
   .lead.done .step{color:var(--ok)}
+  .lead.other{border-left-color:var(--line)}
+  .lead.other .step{color:var(--muted)}
+  .back{margin-top:8px}
 
   .notes{margin-top:14px}
   .notes > summary{
@@ -184,12 +199,14 @@
   .signup a+a{margin-left:14px}
 
   .cityform{display:flex; gap:8px; margin-top:14px; flex-wrap:wrap}
-  .cityform input{
+  .cityform input, .field input{
     font:inherit; font-size:15px; flex:1 1 180px; min-width:0;
     padding:11px 12px; border-radius:10px; border:1.5px solid var(--line);
     background:var(--ground); color:var(--ink);
   }
-  .cityform input:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .cityform input:focus-visible, .field input:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .field{display:flex; flex-direction:column; gap:6px; margin-top:10px}
+  .field label{font-size:13px; font-weight:600}
   .cmd{
     margin-top:12px; background:var(--sunk); border:1px solid var(--line);
     border-radius:10px; padding:12px; font-family:var(--mono); font-size:12.5px;
@@ -197,6 +214,40 @@
   }
   .cmdrow{display:flex; gap:10px; align-items:center; margin-top:8px; flex-wrap:wrap}
   .cmdnote{font-size:12.5px; color:var(--muted); flex:1 1 220px}
+
+  /* a command with its own copy button */
+  .copyable{display:flex; gap:8px; align-items:stretch; margin-top:8px}
+  .copyable .cmd{margin-top:0; flex:1; min-width:0}
+  .copyable button{flex:none; align-self:center}
+
+  /* numbered, human instructions */
+  ol.howto{margin:14px 0 0; padding:0; list-style:none; counter-reset:how}
+  ol.howto > li{counter-increment:how; position:relative; padding:12px 0 12px 38px;
+    border-top:1px solid var(--line)}
+  ol.howto > li:first-child{border-top:0}
+  ol.howto > li::before{
+    content:counter(how); position:absolute; left:0; top:12px;
+    width:26px; height:26px; border-radius:50%; display:flex;
+    align-items:center; justify-content:center; font-family:var(--mono);
+    font-size:12px; font-weight:600; background:var(--sunk); color:var(--ink);
+  }
+  ol.howto h3{font-size:14.5px; margin:2px 0 3px}
+  ol.howto p{margin:0; font-size:13.5px; color:var(--muted); max-width:64ch}
+  .links{display:flex; gap:14px; flex-wrap:wrap; margin-top:6px}
+
+  /* build stages */
+  ul.stages{list-style:none; margin:14px 0 0; padding:0}
+  ul.stages > li{display:flex; gap:12px; padding:14px 0; border-top:1px solid var(--line)}
+  ul.stages > li:first-child{border-top:0}
+  .count{font-family:var(--mono); font-size:12.5px; color:var(--ok);
+         font-variant-numeric:tabular-nums}
+  [data-s="todo"] .count{color:var(--muted)}
+  .path{font-family:var(--mono); font-size:12px; color:var(--muted); overflow-wrap:anywhere}
+
+  .callout{margin-top:10px; padding:10px 12px; border-radius:10px; font-size:13.5px;
+    background:var(--sunk); border:1px solid var(--line)}
+  .callout.warn{background:var(--warn-wash); border-color:var(--warn); color:var(--ink)}
+  .callout strong{display:block; margin-bottom:2px}
 
   footer{margin-top:28px; color:var(--muted); font-size:13px}
   code{font-family:var(--mono); font-size:12.5px; background:var(--sunk);
@@ -208,36 +259,40 @@
 <div class="wrap">
   <header>
     <h1>beer in this town</h1>
-    <p class="sub">Three steps, once. Everything after this runs from your terminal.</p>
+    <p class="sub">From nothing to a craft-beer map in your Google Maps, in six
+      steps. This page explains and checks; the work runs in your terminal.</p>
   </header>
 
-  <div class="stepper" id="stepper"></div>
+  <nav class="stepper" id="stepper" aria-label="Setup steps"></nav>
 
-  <div class="lead" id="lead">
+  <section class="lead" id="lead" aria-live="polite">
     <div class="step" id="leadstep">Checking…</div>
     <h2 id="leadtitle">Reading your setup</h2>
     <p id="leadbody">One moment.</p>
+    <div class="back" id="leadback" hidden></div>
     <div class="go" id="leadgo"></div>
-  </div>
+  </section>
 
-  <div class="banner" id="banner" hidden></div>
+  <div class="banner" id="banner" role="status" hidden></div>
+
+  <div id="activity"></div>
 
   <details class="panel" id="panel">
     <summary>All checks</summary>
     <ul class="checks" id="checks"></ul>
     <div class="actions">
-      <button id="connect" type="button">Sign in again</button>
-      <button id="verify" type="button">Test both accounts</button>
-      <button id="selectors" type="button">Check Untappd's pages</button>
+      <button id="emulator" type="button" data-action="emulator">Check the emulator</button>
+      <button id="connect" type="button" data-action="connect">Sign in again</button>
+      <button id="verify" type="button" data-action="verify">Test both accounts</button>
+      <button id="selectors" type="button" data-action="selectors">Check Untappd's venue page</button>
     </div>
   </details>
 
-  <div id="activity"></div>
-
   <footer>
-    This page only reads your setup and signs you in. It can't save anything to
-    your Google Maps lists — <code>pin</code> and <code>notes</code> have no
-    button here and no route on this server.
+    This page reads your setup, signs you in and checks the emulator. It can't
+    save anything to your Google Maps lists or move the emulator —
+    <code>pin</code>, <code>notes</code> and <code>sweep</code> have no button
+    here and no route on this server. You run them, from the commands shown.
   </footer>
 </div>
 
@@ -248,8 +303,16 @@ const TOKEN = location.hash.slice(1);
 if (TOKEN) history.replaceState(null, "", location.pathname);
 
 const $ = id => document.getElementById(id);
-const BUTTONS = ["connect", "verify", "selectors"];
 let busy = false, lastJobId = null;
+// The emulator check is read-only adb, so the page runs it once by itself
+// when that is the step you are on, rather than making you press a button
+// to learn what the page could have found out.
+let autoChecked = false;
+// Which step the person is looking at. null follows the current one; a
+// click on the stepper pins another, so a finished step can be reread.
+let viewKey = null;
+// What the person has typed, kept across rebuilds of the card.
+const draft = { city: null, list: null };
 
 async function api(path, options) {
   const res = await fetch(path, {
@@ -261,298 +324,549 @@ async function api(path, options) {
   return body;
 }
 
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = text;
+  return e;
+}
+
 function clock(seconds) {
   const s = Math.floor(seconds % 60), m = Math.floor(seconds / 60);
   return m + ":" + String(s).padStart(2, "0");
 }
 
+function linkRow(links) {
+  const row = el("div", "links");
+  for (const link of links || []) {
+    const a = el("a", "", link.label + " ↗");
+    a.href = link.url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    row.appendChild(a);
+  }
+  return row;
+}
+
+// A command and a button that copies it. The command is the instruction; a
+// person should never have to retype one from a screenshot.
+function copyable(text, label) {
+  const wrap = el("div", "copyable");
+  const cmd = el("div", "cmd", text);
+  cmd.tabIndex = 0;
+  if (label) cmd.setAttribute("aria-label", label);
+  const b = el("button", "small", "Copy");
+  b.type = "button";
+  b.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(cmd.textContent);
+      b.textContent = "Copied";
+      setTimeout(() => { b.textContent = "Copy"; }, 1600);
+    } catch (e) {
+      // Clipboard can be refused; selecting the text still works.
+      const r = document.createRange();
+      r.selectNodeContents(cmd);
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      b.textContent = "Selected";
+    }
+  });
+  wrap.append(cmd, b);
+  return wrap;
+}
+
+function actionButton(action, label, primary) {
+  const b = el("button", primary ? "primary" : "", label);
+  b.type = "button";
+  b.dataset.action = action;
+  b.disabled = busy;
+  b.addEventListener("click", () => start(action));
+  return b;
+}
+
+function checkRow(c) {
+  const li = el("li");
+  li.dataset.s = c.state;
+  li.appendChild(el("span", "dot"));
+  const body = el("div", "body");
+  const label = el("div", "label", c.label);
+  // "Tested" is the whole distinction this page is built around: a cookie
+  // on disk is not a working account.
+  if (c.key === "google" || c.key === "untappd") {
+    label.appendChild(el("span", "tag" + (c.verified ? " tested" : ""),
+                         c.verified ? "tested" : "not tested"));
+  }
+  body.appendChild(label);
+  body.appendChild(el("div", "detail", c.detail));
+  if (c.fix) body.appendChild(el("div", "fix", c.fix));
+
+  // Somewhere to act, and somewhere to go. A row that names a problem and
+  // leaves you to find the page yourself is the work this page removes.
+  const needsAction = c.action && c.state !== "ok";
+  if (needsAction || (c.links && c.links.length)) {
+    const go = el("div", "rowgo");
+    if (needsAction) {
+      const b = actionButton(c.action,
+        c.action === "connect" ? "Sign in"
+        : c.action === "emulator" ? "Check again" : "Test it");
+      b.className = "go";
+      b.id = "row-" + c.key + "-" + c.action;
+      go.appendChild(b);
+    }
+    for (const link of c.links || []) {
+      const a = el("a", "", link.label + " ↗");
+      a.href = link.url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      go.appendChild(a);
+    }
+    body.appendChild(go);
+  }
+  if (c.why) {
+    const d = el("details");
+    d.append(el("summary", "", "Why this matters"), el("p", "", c.why));
+    body.appendChild(d);
+  }
+  li.appendChild(body);
+  return li;
+}
+
 function renderChecks(rows) {
   const host = $("checks");
+  const sig = JSON.stringify(rows) + busy;
+  if (host.dataset.sig === sig) return;
+  host.dataset.sig = sig;
   host.textContent = "";
-  for (const c of rows) {
-    const li = document.createElement("li");
-    li.dataset.s = c.state;
-
-    const dot = document.createElement("span");
-    dot.className = "dot";
-    li.appendChild(dot);
-
-    const body = document.createElement("div");
-    body.className = "body";
-
-    const label = document.createElement("div");
-    label.className = "label";
-    label.textContent = c.label;
-    // "Tested" is the whole distinction this page is built around: a cookie
-    // on disk is not a working account.
-    if (c.key === "google" || c.key === "untappd") {
-      const tag = document.createElement("span");
-      tag.className = "tag" + (c.verified ? " tested" : "");
-      tag.textContent = c.verified ? "tested" : "not tested";
-      label.appendChild(tag);
-    }
-    body.appendChild(label);
-
-    const detail = document.createElement("div");
-    detail.className = "detail";
-    detail.textContent = c.detail;
-    body.appendChild(detail);
-
-    if (c.fix) {
-      const fix = document.createElement("div");
-      fix.className = "fix";
-      fix.textContent = c.fix;
-      body.appendChild(fix);
-    }
-
-    // Somewhere to act, and somewhere to go. A row that names a problem and
-    // leaves you to find the page yourself is the work this page removes.
-    const needsAction = c.action && c.state !== "ok";
-    if (needsAction || (c.links && c.links.length)) {
-      const go = document.createElement("div");
-      go.className = "rowgo";
-      if (needsAction) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "go";
-        b.id = "row-" + c.key + "-" + c.action;
-        b.textContent = c.action === "connect" ? "Sign in" : "Test it";
-        b.disabled = busy;
-        b.addEventListener("click", () => start(c.action));
-        go.appendChild(b);
-      }
-      for (const link of c.links || []) {
-        const a = document.createElement("a");
-        a.href = link.url;
-        a.target = "_blank";
-        a.rel = "noopener noreferrer";
-        a.textContent = link.label + " ↗";
-        go.appendChild(a);
-      }
-      body.appendChild(go);
-    }
-
-    if (c.why) {
-      const d = document.createElement("details");
-      const s = document.createElement("summary");
-      s.textContent = "Why this matters";
-      const para = document.createElement("p");
-      para.textContent = c.why;
-      d.append(s, para);
-      body.appendChild(d);
-    }
-
-    li.appendChild(body);
-    host.appendChild(li);
-  }
+  for (const c of rows) host.appendChild(checkRow(c));
 }
 
 // Someone with no Untappd account cannot sign in to one, and "sign in" is
 // the wrong word for them. Both paths, named plainly.
-const SIGNUP = {
-  connect: [
-    ["https://accounts.google.com/signup", "Create a Google account"],
-    ["https://untappd.com/signup", "Create an Untappd account"],
-  ],
+const SIGNUP = [
+  ["https://accounts.google.com/signup", "Create a Google account"],
+  ["https://untappd.com/signup", "Create an Untappd account"],
+];
+
+// What each step is, when it is not the one the server says to do now.
+const STAGE_TEXT = {
+  ready: ["Get this computer ready",
+    "Python 3.11 or newer, Google Chrome, and this project installed."],
+  emulator: ["Set up the Android emulator",
+    "The venues come from the Untappd app's map on BlueStacks. One-time setup."],
+  accounts: ["Sign in to Google and Untappd",
+    "In this tool's own Chrome profile. Each is needed for a different reason."],
+  city: ["Choose your city", "The place you want a map of."],
+  build: ["Build the map", "Four commands, in order, from a terminal in the project folder."],
+  maps: ["Put it in Google Maps",
+    "Create a saved list, then save the venues into it. You run these."],
 };
 
-// The eyebrow counts the stepper's stages, not the underlying steps. It used
-// to count its own list of five, so the card said "Step 4 of 5" under a
-// stepper reading 2 of 3 -- two numbering systems on one screen, and the
-// reader has no way to know which is the real one.
-
-function renderStepper(stages) {
+// The eyebrow counts the stepper's stages. It used to count its own list,
+// so the card said "Step 4 of 5" under a stepper reading 2 of 3 -- two
+// numbering systems on one screen.
+function renderStepper(stages, shown) {
   const host = $("stepper");
   if (!stages) return;
-  const sig = stages.map(s => s.key + s.state).join("|");
+  const sig = stages.map(s => s.key + s.state).join("|") + "/" + shown;
   if (host.dataset.sig === sig) return;
   host.dataset.sig = sig;
   host.textContent = "";
 
   stages.forEach((s, i) => {
-    if (i > 0) {
-      const rail = document.createElement("div");
-      rail.className = "rail" + (s.state !== "todo" ? " lit" : "");
-      host.appendChild(rail);
-    }
-    const stg = document.createElement("div");
-    stg.className = "stg";
+    if (i > 0) host.appendChild(el("div", "rail" + (s.state !== "todo" ? " lit" : "")));
+    const stg = el("button", "stg");
+    stg.type = "button";
     stg.dataset.s = s.state;
-    const bead = document.createElement("span");
-    bead.className = "bead";
-    bead.textContent = s.state === "done" ? "✓" : String(i + 1);
-    const nm = document.createElement("span");
-    nm.className = "nm";
-    nm.textContent = s.label;
-    stg.append(bead, nm);
+    stg.setAttribute("aria-pressed", String(s.key === shown));
+    if (s.state === "current") stg.setAttribute("aria-current", "step");
+    stg.setAttribute("aria-label", "Step " + (i + 1) + ": " + s.label
+      + (s.state === "done" ? " (done)" : s.state === "current" ? " (you are here)" : ""));
+    stg.append(el("span", "bead", s.state === "done" ? "✓" : String(i + 1)),
+               el("span", "nm", s.label));
+    stg.addEventListener("click", () => {
+      const current = (stages.find(x => x.state === "current") || stages[stages.length - 1]).key;
+      viewKey = s.key === current ? null : s.key;
+      tick();
+    });
     host.appendChild(stg);
   });
+}
+
+function currentStageKey(stages) {
+  const cur = stages.find(s => s.state === "current");
+  return cur ? cur.key : stages.length ? stages[stages.length - 1].key : "ready";
 }
 
 function renderLead(state) {
   const step = state.next_step;
   if (!step) return;
-  const lead = $("lead");
-  lead.className = "lead" + (step.done ? " done" : "");
-
   const stages = state.stages || [];
-  const at = stages.findIndex(s => s.state === "current");
-  $("leadstep").textContent = step.done
-    ? "Last step"
-    : at >= 0 ? "Step " + (at + 1) + " of " + stages.length : "Setup";
-  $("leadtitle").textContent = step.title;
-  $("leadbody").textContent = step.body;
+  const here = currentStageKey(stages);
+  const shown = viewKey || here;
+  const onCurrent = shown === here;
+  renderStepper(stages, shown);
+
+  const lead = $("lead");
+  lead.className = "lead" + (onCurrent ? (step.done ? " done" : "") : " other");
+  const at = stages.findIndex(s => s.key === shown);
+  const n = at >= 0 ? "Step " + (at + 1) + " of " + stages.length : "Setup";
+  $("leadstep").textContent = onCurrent
+    ? (step.done ? n + " · last step" : n + " · you are here")
+    : n + (stages[at] && stages[at].state === "done" ? " · done" : " · not yet");
+  $("leadtitle").textContent = onCurrent ? step.title : STAGE_TEXT[shown][0];
+  $("leadbody").textContent = onCurrent ? step.body : STAGE_TEXT[shown][1];
+
+  const back = $("leadback");
+  back.hidden = onCurrent;
+  if (!onCurrent && !back.firstChild) {
+    const b = el("button", "linkish", "Back to the step you are on");
+    b.type = "button";
+    b.addEventListener("click", () => { viewKey = null; tick(); });
+    back.appendChild(b);
+  }
 
   const go = $("leadgo");
-  // Rebuilt only when the step changes, so typing in the city field is not
+  // Rebuilt only when what it shows changes, so typing in a field is not
   // wiped out by the one-second poll.
-  if (go.dataset.key === step.key && !state.busy) return;
-  go.dataset.key = step.key;
+  const card = (state.cards || {})[shown] || {};
+  const extra = shown === "ready" || shown === "accounts" || shown === "emulator"
+    ? JSON.stringify(state.checks) : "";
+  const sig = [shown, onCurrent, step.key, step.cta, JSON.stringify(card),
+               JSON.stringify(state.intent), extra].join("§");
+  if (go.dataset.sig === sig) return;
+  go.dataset.sig = sig;
   go.textContent = "";
 
-  if (step.cta && step.action) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "primary";
+  if (onCurrent && step.cta && step.action) {
+    const b = actionButton(step.action, step.cta, true);
     b.id = "lead-" + step.action;
-    b.textContent = step.cta;
-    b.disabled = !!state.busy;
-    b.addEventListener("click", () => start(step.action));
     go.appendChild(b);
   }
+  const view = VIEWS[shown];
+  if (view) view(go, state, card, onCurrent);
+}
 
-  for (const [href, text] of SIGNUP[step.key] || []) {
-    const row = go.querySelector(".signup") || document.createElement("div");
-    row.className = "signup";
-    const a = document.createElement("a");
-    a.href = href;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.textContent = text;
-    row.appendChild(a);
-    go.appendChild(row);
-  }
+const VIEWS = {
+  ready(go, state) {
+    const list = el("ul", "checks");
+    for (const c of state.checks.filter(c => c.key === "chrome" || c.key === "playwright")) {
+      list.appendChild(checkRow(c));
+    }
+    list.style.marginTop = "14px";
+    go.appendChild(list);
+    const how = el("ol", "howto");
+    const items = [
+      ["Python 3.11 or newer", "Check with python --version.", "python --version",
+       [{ label: "Download Python", url: "https://www.python.org/downloads/" }]],
+      ["Install this project with the browser extra", "From the project folder:",
+       'pip install -e ".[browser]"', []],
+      ["Only if Chrome for automation is missing",
+       "Playwright uses your installed Chrome. If it says it cannot find it:",
+       "playwright install chrome", []],
+    ];
+    for (const [title, body, cmd, links] of items) {
+      const li = el("li");
+      li.append(el("h3", "", title), el("p", "", body));
+      if (cmd) li.appendChild(copyable(cmd, title));
+      if (links.length) li.appendChild(linkRow(links));
+      how.appendChild(li);
+    }
+    go.appendChild(how);
+  },
 
-  if (step.done) renderCityForm(go, state);
+  emulator(go, state, card, onCurrent) {
+    if (!onCurrent) go.appendChild(actionButton("emulator", "Check again", false));
+    // The live result first: it says which instruction below is the one
+    // still to do.
+    if (card.checked) {
+      const list = el("ul", "checks");
+      list.style.marginTop = "14px";
+      for (const c of card.checks) {
+        const li = el("li");
+        li.dataset.s = c.ok ? "ok" : "attention";
+        li.appendChild(el("span", "dot"));
+        const body = el("div", "body");
+        body.append(el("div", "label", c.name.replace(/_/g, " ")),
+                    el("div", "detail", c.detail));
+        if (!c.ok && c.remedy) body.appendChild(el("div", "fix", c.remedy));
+        li.appendChild(body);
+        list.appendChild(li);
+      }
+      if (card.error) {
+        const li = el("li");
+        li.dataset.s = "attention";
+        li.append(el("span", "dot"), el("div", "body", card.error));
+        list.appendChild(li);
+      }
+      go.appendChild(list);
+    } else {
+      go.appendChild(el("div", "callout",
+        "Not checked yet. Press Check again once BlueStacks is running."));
+    }
 
-  if (step.notes && step.notes.length) {
-    const d = document.createElement("details");
-    d.className = "notes";
-    const s = document.createElement("summary");
-    s.textContent = "What the city name decides";
-    const dl = document.createElement("dl");
-    for (const n of step.notes) {
-      const dt = document.createElement("dt");
-      dt.textContent = n.heading;
-      const dd = document.createElement("dd");
-      dd.textContent = n.body;
+    const how = el("ol", "howto");
+    for (const s of card.steps || []) {
+      const li = el("li");
+      li.append(el("h3", "", s.title), el("p", "", s.body));
+      if (s.cmd) li.appendChild(copyable(s.cmd, s.title));
+      if (s.links) li.appendChild(linkRow(s.links));
+      how.appendChild(li);
+    }
+    go.appendChild(how);
+    if (card.note) go.appendChild(el("p", "cmdnote", card.note));
+    if (card.doctor) {
+      const p = el("p", "cmdnote", "The same checks from a terminal (an agent can run this):");
+      p.style.marginTop = "10px";
+      go.append(p, copyable(card.doctor, "doctor command"));
+    }
+  },
+
+  accounts(go, state, card, onCurrent) {
+    if (!onCurrent) {
+      const row = el("div", "actions");
+      row.style.marginTop = "0";
+      row.append(actionButton("connect", "Open Chrome and sign in", false),
+                 actionButton("verify", "Test both accounts", false));
+      go.appendChild(row);
+    }
+    const sign = el("div", "signup");
+    for (const [href, text] of SIGNUP) {
+      const a = el("a", "", text);
+      a.href = href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      sign.appendChild(a);
+    }
+    go.appendChild(sign);
+
+    const dl = el("dl");
+    dl.style.margin = "14px 0 0";
+    for (const w of card.why || []) {
+      const dt = el("dt", "label", "Why " + w.label);
+      const dd = el("dd", "detail", w.why);
+      dd.style.margin = "2px 0 10px";
       dl.append(dt, dd);
     }
-    d.append(s, dl);
-    go.appendChild(d);
-  }
-}
+    go.appendChild(dl);
 
-const UNSAVED = "Press “Use this city” so the agent picks it up, or "
-  + "copy the command and run it yourself. --no-upload writes the files "
-  + "without touching your Google Maps.";
-
-function renderCityForm(go, state) {
-  const form = document.createElement("div");
-  form.className = "cityform";
-
-  const input = document.createElement("input");
-  input.id = "city";
-  input.type = "text";
-  input.placeholder = "London";
-  input.setAttribute("aria-label", "City to collect venues for");
-  // The server's record wins over this browser's: it is what the agent will
-  // actually use, and a stale localStorage value would show a city that is
-  // not the one in play. Nothing is prefilled beyond that -- there is no
-  // default city, so an empty box is the honest starting state.
-  let saved = "";
-  try { saved = localStorage.getItem("beertown.city") || ""; } catch (e) {}
-  input.value = (state.intent && state.intent.query) || saved || "";
-  form.appendChild(input);
-  go.appendChild(form);
-
-  const cmd = document.createElement("div");
-  cmd.className = "cmd";
-  cmd.id = "cmd";
-  go.appendChild(cmd);
-
-  const row = document.createElement("div");
-  row.className = "cmdrow";
-  const copy = document.createElement("button");
-  copy.type = "button";
-  copy.textContent = "Copy command";
-  const note = document.createElement("span");
-  note.className = "cmdnote";
-  note.textContent = state.intent
-    ? "Saved. The agent will use “" + state.intent.query
-      + "”, saving to “" + state.intent.map_title + "”."
-    : UNSAVED;
-  row.append(copy, note);
-  go.appendChild(row);
-
-  const save = document.createElement("button");
-  save.type = "button";
-  save.className = "go";
-  save.textContent = "Use this city";
-
-  const build = () => {
-    const city = (input.value || "").trim();
-    // No city, no command. Showing one built from a placeholder is how
-    // somebody copies a run for a place they never named.
-    cmd.hidden = !city;
-    cmd.textContent = city
-      ? 'beertown run --query "' + city + '" --count '
-        + state.defaults.count + " --no-upload"
-      : "";
-    save.disabled = !city;
-    try { localStorage.setItem("beertown.city", city); } catch (e) {}
-  };
-  input.addEventListener("input", () => { build(); note.textContent = UNSAVED; });
-
-  // Saving is what makes the city reach the agent. Without it this field
-  // only ever fed the command above, so a person could type London here and
-  // an agent reading `status` would go on offering something else.
-  save.addEventListener("click", async () => {
-    const city = (input.value || "").trim();
-    if (!city) { input.focus(); return; }
-    save.disabled = true;
-    try {
-      const body = await api("/api/city", {
-        method: "POST", body: JSON.stringify({ city }),
-      });
-      note.textContent = "Saved. The agent will use “"
-        + body.intent.query + "”, saving to “"
-        + body.intent.map_title + "”.";
-    } catch (e) {
-      note.textContent = e.message;
-    } finally {
-      save.disabled = false;
+    const list = el("ul", "checks");
+    for (const c of state.checks.filter(c => c.key === "google" || c.key === "untappd")) {
+      list.appendChild(checkRow(c));
     }
-  });
-  form.appendChild(save);
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(cmd.textContent);
-      copy.textContent = "Copied";
-      setTimeout(() => { copy.textContent = "Copy command"; }, 1600);
-    } catch (e) {
-      // Clipboard can be refused; selecting the text still works.
-      copy.textContent = "Select it above";
+    go.appendChild(list);
+  },
+
+  city(go, state, card) {
+    const form = el("div", "cityform");
+    const input = el("input");
+    input.id = "city";
+    input.type = "text";
+    input.placeholder = "Tel Aviv";
+    input.autocomplete = "off";
+    input.setAttribute("aria-label", "City to make a map of");
+    // The server's record wins over this browser's: it is what the agent
+    // will actually use. Nothing is prefilled beyond that -- there is no
+    // default city, so an empty box is the honest starting state.
+    let saved = "";
+    try { saved = localStorage.getItem("beertown.city") || ""; } catch (e) {}
+    input.value = draft.city !== null ? draft.city
+      : (state.intent && state.intent.query) || saved || "";
+    const save = el("button", "go primary", "Use this city");
+    save.type = "button";
+    form.append(input, save);
+    go.appendChild(form);
+
+    const note = el("p", "cmdnote");
+    note.style.marginTop = "8px";
+    note.textContent = state.intent
+      ? "Saved: “" + state.intent.query + "”. The Build step has its commands."
+      : "Not saved yet. Saving is what lets the Build step and your agent use it.";
+    go.appendChild(note);
+
+    const sync = () => {
+      const city = (input.value || "").trim();
+      draft.city = input.value;
+      save.disabled = !city;
+      try { localStorage.setItem("beertown.city", city); } catch (e) {}
+    };
+    input.addEventListener("input", sync);
+    input.addEventListener("keydown", e => { if (e.key === "Enter") save.click(); });
+    save.addEventListener("click", async () => {
+      const city = (input.value || "").trim();
+      if (!city) { input.focus(); return; }
+      save.disabled = true;
+      try {
+        await api("/api/city", { method: "POST", body: JSON.stringify({ city }) });
+        draft.city = null;
+        viewKey = null;
+        tick();
+      } catch (e) {
+        note.textContent = e.message;
+        save.disabled = false;
+      }
+    });
+    sync();
+
+    if (card.notes && card.notes.length) {
+      const d = el("details", "notes");
+      d.appendChild(el("summary", "", "What the city name decides"));
+      const dl = el("dl");
+      for (const n of card.notes) dl.append(el("dt", "", n.heading), el("dd", "", n.body));
+      d.appendChild(dl);
+      go.appendChild(d);
     }
-  });
-  build();
-}
+  },
+
+  build(go, state, card) {
+    if (!card.city) {
+      go.appendChild(el("div", "callout", "Choose a city first — the commands are built from it."));
+      return;
+    }
+    const where = el("p", "cmdnote");
+    where.textContent = "City: “" + card.city + "”. Files go to " + card.folder + "/.";
+    go.appendChild(where);
+
+    const list = el("ul", "stages");
+    card.stages.forEach((s, i) => {
+      const li = el("li");
+      li.dataset.s = s.done ? "ok" : "todo";
+      li.appendChild(el("span", "dot"));
+      const body = el("div", "body");
+      const label = el("div", "label", (i + 1) + ". " + s.title);
+      if (s.key === card.next) label.appendChild(el("span", "tag next", "next"));
+      body.appendChild(label);
+
+      let status;
+      if (!s.done) status = "Not run yet";
+      else if (s.count === null || s.count === undefined) status = "Done";
+      else status = "Done — " + s.count + (s.key === "export" ? " placemarks" : " venues");
+      if (s.done && s.excluded !== null && s.excluded !== undefined) {
+        status += ", " + s.excluded + " excluded";
+      }
+      body.appendChild(el("div", "count", status));
+      body.appendChild(el("div", "detail", s.explain));
+      if (s.precondition) {
+        const c = el("div", "callout warn");
+        c.append(el("strong", "", "By hand, before each sweep"),
+                 document.createTextNode(s.precondition));
+        body.appendChild(c);
+      }
+      body.appendChild(copyable(s.command, s.title + " command"));
+      if (s.options) body.appendChild(el("div", "detail", s.options));
+      const path = el("div", "path", "→ " + s.file
+        + (s.also && s.also.length ? " (also " + s.also.join(", ") + ")" : ""));
+      path.style.marginTop = "6px";
+      body.appendChild(path);
+      li.appendChild(body);
+      list.appendChild(li);
+    });
+    go.appendChild(list);
+    if (card.agent_note) go.appendChild(el("p", "cmdnote", card.agent_note));
+  },
+
+  maps(go, state, card) {
+    if (!card.city) {
+      go.appendChild(el("div", "callout", "Choose a city and build its map first."));
+      return;
+    }
+    if (!card.csv_ready) {
+      const c = el("div", "callout warn");
+      c.append(el("strong", "", card.csv + " is not there yet"),
+               document.createTextNode("Finish the Build step first: pin reads that file."));
+      go.appendChild(c);
+    }
+
+    const tos = el("div", "callout warn");
+    tos.append(el("strong", "", "Your choice, your account"),
+               document.createTextNode(card.tos));
+    go.appendChild(tos);
+
+    const field = el("div", "field");
+    const lab = el("label", "", "The name of your saved list");
+    lab.htmlFor = "listname";
+    const input = el("input");
+    input.id = "listname";
+    input.type = "text";
+    input.autocomplete = "off";
+    let saved = "";
+    try { saved = localStorage.getItem("beertown.list") || ""; } catch (e) {}
+    input.value = draft.list !== null ? draft.list : saved || card.list_default;
+    field.append(lab, input);
+
+    const how = el("ol", "howto");
+    const blocks = {};
+    const add = (title, body, keys, extra) => {
+      const li = el("li");
+      li.append(el("h3", "", title), el("p", "", body));
+      if (extra) li.appendChild(extra);
+      for (const k of keys || []) {
+        const c = copyable("", title);
+        blocks[k] = c.querySelector(".cmd");
+        li.appendChild(c);
+      }
+      how.appendChild(li);
+      return li;
+    };
+
+    add("Create the saved list in Google Maps",
+      "Open Google Maps signed in as the Google account you connected. "
+      + "On a computer: menu (☰) → Saved → + New list. On a phone: "
+      + "You → + New list. Give it a name and save. Then type the exact "
+      + "name here, so the commands below match it.",
+      [], (() => {
+        const w = el("div");
+        w.append(linkRow([{ label: "Open Google Maps", url: "https://www.google.com/maps" }]), field);
+        return w;
+      })());
+    add("Try three places first",
+      "This saves the first three venues into your list, with pauses "
+      + "between them. Keep that Chrome window alone while it works.",
+      ["pin_trial"]);
+    add("Check them in Google Maps",
+      "Open the list. There should be exactly three places, and they "
+      + "should be the right ones: same names, in the right spots, no "
+      + "duplicates. If anything is off, stop here and don't run the rest.");
+    add("Then the rest, over several nights",
+      "At most " + card.budget + " places a day, and fewer per run: when it "
+      + "stops at the budget, that is the guardrail working. Run the same "
+      + "command again the next day; it skips what is saved and carries on. "
+      + "If it reports a block or a CAPTCHA it stops and waits 6 hours — "
+      + "don't work around it.",
+      ["pin_rest"]);
+    add("Write the stats into each place's note",
+      "Adds each venue's Untappd numbers to the note on its saved place. "
+      + "Only touches places already in the list, and never rewrites a note "
+      + "that already matches. Three first, again, then the rest.",
+      ["notes_trial", "notes_rest"]);
+    add("Optional: flag venues that have closed",
+      "Asks the Google Places API whether each venue still trades. Needs "
+      + "your own GOOGLE_PLACES_KEY; 5,000 lookups a month are free, then "
+      + "it costs money. Closed venues are flagged, never removed.",
+      ["closures"]);
+    go.appendChild(how);
+
+    const fill = () => {
+      const name = (input.value || "").replace(/["`$;&|<>%^!\x00-\x1f\x7f]/g, "").trim() || card.list_default;
+      for (const [k, t] of Object.entries(card.templates)) {
+        if (blocks[k]) blocks[k].textContent = t.split("{list}").join(name);
+      }
+      if (blocks.closures) blocks.closures.textContent = card.closures;
+    };
+    input.addEventListener("input", () => {
+      draft.list = input.value;
+      try { localStorage.setItem("beertown.list", input.value.trim()); } catch (e) {}
+      fill();
+    });
+    fill();
+  },
+};
 
 function renderBanner(state) {
-  const el = $("banner");
-  el.className = "banner";
-  el.hidden = !state.busy;
-  if (state.busy) el.textContent = "Working — the log below says what's happening.";
+  const el_ = $("banner");
+  el_.className = "banner";
+  el_.hidden = !state.busy;
+  if (state.busy) el_.textContent = "Working — the log below says what's happening.";
 }
 
 async function start(action) {
@@ -561,10 +875,10 @@ async function start(action) {
   try {
     await api("/api/run", { method: "POST", body: JSON.stringify({ action }) });
   } catch (e) {
-    const el = $("banner");
-    el.hidden = false;
-    el.className = "banner bad";
-    el.textContent = e.message;
+    const b = $("banner");
+    b.hidden = false;
+    b.className = "banner bad";
+    b.textContent = e.message;
     renderButtons({ busy: false });
     return;
   }
@@ -582,53 +896,29 @@ function renderJob(job) {
     host.dataset.sig = sig;
     host.textContent = "";
 
-    const box = document.createElement("div");
-    box.className = "job";
-
-    const head = document.createElement("div");
-    head.className = "jobhead";
-    const title = document.createElement("strong");
-    if (job.state === "running") {
-      const p = document.createElement("span");
-      p.className = "pulse";
-      title.appendChild(p);
-    }
+    const box = el("div", "job");
+    const head = el("div", "jobhead");
+    const title = el("strong");
+    if (job.state === "running") title.appendChild(el("span", "pulse"));
     title.appendChild(document.createTextNode(
       job.state === "running" ? job.title
       : job.state === "done" ? job.title + " — finished"
       : job.title + " — stopped"));
     head.appendChild(title);
-
-    const c = document.createElement("span");
-    c.className = "clock";
+    const c = el("span", "clock", clock(job.elapsed));
     c.id = "clock";
-    c.textContent = clock(job.elapsed);
     head.appendChild(c);
     box.appendChild(head);
 
-    const steps = document.createElement("ol");
-    steps.className = "steps";
+    const steps = el("ol", "steps");
     const t0 = job.steps.length ? job.steps[0].at : 0;
     for (const s of job.steps) {
-      const li = document.createElement("li");
-      if (s.aside) li.className = "aside";
-      const t = document.createElement("span");
-      t.className = "t";
-      t.textContent = clock(s.at - t0);
-      const txt = document.createElement("span");
-      txt.className = "txt";
-      txt.textContent = s.text;
-      li.append(t, txt);
+      const li = el("li", s.aside ? "aside" : "");
+      li.append(el("span", "t", clock(s.at - t0)), el("span", "txt", s.text));
       steps.appendChild(li);
     }
     box.appendChild(steps);
-
-    if (job.error) {
-      const e = document.createElement("div");
-      e.className = "err";
-      e.textContent = job.error;
-      box.appendChild(e);
-    }
+    if (job.error) box.appendChild(el("div", "err", job.error));
     host.appendChild(box);
   } else {
     const c = $("clock");
@@ -638,34 +928,37 @@ function renderJob(job) {
 
 function renderButtons(state) {
   busy = state.busy;
-  for (const id of BUTTONS) $(id).disabled = busy;
-  const lead = $("leadgo").querySelector("button.primary");
-  if (lead) lead.disabled = busy;
-  for (const b of document.querySelectorAll(".rowgo button")) b.disabled = busy;
+  for (const b of document.querySelectorAll("button[data-action]")) b.disabled = busy;
 }
 
 async function tick() {
   try {
     const state = await api("/api/state");
+    busy = state.busy;
     renderChecks(state.checks);
-    renderStepper(state.stages);
     renderLead(state);
     renderBanner(state);
     renderJob(state.job);
     renderButtons(state);
     if (state.job) lastJobId = state.job.id;
+    const emu = (state.cards || {}).emulator;
+    if (!autoChecked && emu && !emu.checked && !state.busy
+        && state.next_step.key === "emulator") {
+      autoChecked = true;
+      start("emulator");
+    }
   } catch (e) {
-    const el = $("banner");
-    el.hidden = false;
-    el.className = "banner bad";
-    el.textContent = TOKEN
+    const b = $("banner");
+    b.hidden = false;
+    b.className = "banner bad";
+    b.textContent = TOKEN
       ? "Lost contact with the dashboard: " + e.message
       : "This page is missing its key. Open the link the terminal printed.";
   }
 }
 
-for (const id of BUTTONS) {
-  $(id).addEventListener("click", () => start(id));
+for (const b of document.querySelectorAll(".panel button[data-action]")) {
+  b.addEventListener("click", () => start(b.dataset.action));
 }
 
 tick();

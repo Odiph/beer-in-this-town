@@ -13,8 +13,6 @@ STATE_DIR = ROOT / "state"
 CACHE_DIR = ROOT / "cache"
 DEBUG_DIR = ROOT / "debug"
 
-BASE = "https://untappd.com"
-SEARCH_URL = f"{BASE}/search"
 
 # A real Chrome UA. Chrome has frozen the minor/build/patch fields at 0.0.0
 # since v107, so the major version is the only part that varies.
@@ -94,6 +92,11 @@ class Settings:
     # self-hosted instance is a legitimate answer to being throttled.
     overpass_url: str = "https://overpass-api.de/api/interpreter"
 
+    # --- the app sweep (emulator) ---------------------------------------
+    # Which adb device the sweep drives. Every adb call is addressed by
+    # serial because a BlueStacks config can put two instances on one port.
+    adb_serial: str = "127.0.0.1:5555"
+
     # --- closure check (#7) ---------------------------------------------
     # Deliberately a separate key from geocoding: different SKU, and somebody
     # may reasonably want coordinates without sending addresses to Places for
@@ -111,6 +114,7 @@ class Settings:
             google_places_key=os.environ.get("GOOGLE_PLACES_KEY") or None,
             nominatim_email=os.environ.get("NOMINATIM_EMAIL") or None,
             overpass_url=os.environ.get("OVERPASS_URL") or s.overpass_url,
+            adb_serial=os.environ.get("BEERTOWN_ADB_SERIAL") or s.adb_serial,
         )
 
 
@@ -133,6 +137,60 @@ def scope_slug(value: str) -> str:
     # A name of pure punctuation would otherwise produce "", and every such
     # list would then share one journal named after nothing.
     return slug or SCOPE_FALLBACK
+
+
+def city_slug(city: str) -> str:
+    """The directory a city's stage files live in: `Tel Aviv` -> `tel-aviv`.
+
+    Same filesystem safety as `scope_slug`. A city written in a script that
+    has no ASCII form (`תל אביב`) keeps its own letters rather than collapsing
+    to the shared fallback, which would put every such city in one folder.
+    """
+    slug = scope_slug(city)
+    if slug != SCOPE_FALLBACK:
+        return slug
+    native = re.sub(r"[\W_]+", "-", unicodedata.normalize("NFKC", city)
+                    .casefold()).strip("-")
+    return native or SCOPE_FALLBACK
+
+
+def stage_path(city: str, name: str) -> Path:
+    """`data/<slug>/<name>` -- where one step of the flow reads or writes.
+
+    `DATA_DIR` is read at call time so a redirected data directory (tests, a
+    relocated install) is honoured.
+    """
+    return DATA_DIR / city_slug(city) / name
+
+
+# The file each stage writes, under data/<slug>/. Each stage reads the one
+# before it, so these names are the pipeline's only coupling.
+SWEEP_CSV = "1_sweep.csv"
+ENRICHED_CSV = "2_enriched.csv"
+VENUES_CSV = "3_venues.csv"
+EXCLUDED_CSV = "3_excluded.csv"
+EXPORT_STEM = "venues"
+
+
+# Characters a shell of any flavour treats as syntax. A city or list name is
+# free text, and the commands built from it are run verbatim by agents and
+# pasted by people, so none of these may survive into one.
+_SHELL_SYNTAX = re.compile(r'["`$;&|<>%^!\x00-\x1f\x7f]')
+
+
+def arg_text(value: str) -> str:
+    """A user string with every shell metacharacter removed, for a command.
+
+    Removed rather than escaped: escaping differs between PowerShell, cmd and
+    POSIX shells, and the same command is shown to all three.
+    """
+    # A trailing backslash would escape the closing quote.
+    return _SHELL_SYNTAX.sub("", value).strip().rstrip("\\")
+
+
+def cli_arg(value: str) -> str:
+    """A user string as one double-quoted command-line argument."""
+    return '"' + arg_text(value) + '"'
 
 
 def ensure_dirs() -> None:

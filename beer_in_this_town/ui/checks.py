@@ -20,7 +20,8 @@ and reports success, and the first thing the user learns about their Untappd
 login is `search_login_required`, a hundred requests into a run.
 
 Nothing in this module writes to an account, and nothing here can start `pin`
-or `notes`. The dashboard's whole scope is getting a user connected.
+or `notes`. The dashboard gets a user connected and then walks them through
+the rest of the flow by explaining it (see `flow.py`), never by running it.
 """
 from __future__ import annotations
 
@@ -178,14 +179,14 @@ def _untappd_check(s: Settings, proven: VerifyResult | None) -> Check:
     # machine should say "not connected", not "cannot tell".
     if not s.profile_dir.exists():
         return Check("untappd", "Untappd account", ATTENTION,
-                     "Not connected. Signed out, search stops at 5 results.",
+                     "Not connected. Enrich reads venue pages as you.",
                      fix="Sign in to untappd.com in the same Chrome window.",
                      action="connect")
 
     cookie = profile_has_untappd_session(s.profile_dir)
     if cookie is False:
         return Check("untappd", "Untappd account", ATTENTION,
-                     "Not connected. Signed out, search stops at 5 results.",
+                     "Not connected. Enrich reads venue pages as you.",
                      fix="Sign in to untappd.com in the same Chrome window.",
                      action="connect")
     if cookie is None:
@@ -195,6 +196,30 @@ def _untappd_check(s: Settings, proven: VerifyResult | None) -> Check:
     return Check("untappd", "Untappd account", UNKNOWN,
                  "Session found, but not tested yet.",
                  fix="Test it — one request settles it.", action="verify")
+
+
+def _emulator_check(result: dict | None) -> Check:
+    """The last emulator check this session, as one row.
+
+    Run on request (a job), never on a page poll: it shells out to adb, and
+    doing that every second would be a busy loop against the emulator.
+    """
+    label = "Android emulator"
+    if result is None:
+        return Check("emulator", label, UNKNOWN, "Not checked yet.",
+                     fix="Press Check again once BlueStacks is running.",
+                     action="emulator")
+    if result.get("ready"):
+        return Check("emulator", label, OK, "BlueStacks, adb and Untappd "
+                     "are ready.", verified=True)
+    failing = [c for c in result.get("checks", []) if not c.get("ok")]
+    if not failing:
+        return Check("emulator", label, UNKNOWN,
+                     result.get("error") or "The check did not finish.",
+                     fix="Check again.", action="emulator")
+    first = failing[0]
+    return Check("emulator", label, ATTENTION, first.get("detail", ""),
+                 fix=first.get("remedy", ""), action="emulator")
 
 
 def _keys_check(s: Settings) -> tuple[Check, ...]:
@@ -234,18 +259,27 @@ REFERENCE: dict[str, tuple[tuple[tuple[str, str], ...], str]] = {
     "google": (
         (("Your Google account", "https://myaccount.google.com/"),
          ("Create an account", "https://accounts.google.com/signup")),
-        "The Google session is what lets this save places into one of your "
-        "Maps lists and upload a map layer. Collecting the venue data needs "
-        "none of it — so a failure here costs you the map, not the data.",
+        "Google is the destination: your map ends up as a saved list in "
+        "Google Maps, and `pin` / `notes` save into it through this Chrome "
+        "profile. Sweeping and building the venue files need none of it — "
+        "so a failure here costs you the list, not the data.",
     ),
     "untappd": (
         (("Sign in to Untappd", "https://untappd.com/login"),
          ("Create an account", "https://untappd.com/signup")),
-        "Untappd shows a signed-out visitor only 5 search results. This is "
-        "the one that quietly ruins a run: the scrape finishes, reports "
-        "success, and hands you five venues instead of a hundred — with the "
-        "diff, the baseline and the map all built on top of them. It also "
-        "fills the YOU column, which of these you have already checked into.",
+        "The website session is what `enrich` uses to read each venue's "
+        "Untappd page: check-ins, rating and the page's own coordinates. "
+        "It is separate from the sign-in inside the app on the emulator, "
+        "and both are needed.",
+    ),
+    "emulator": (
+        (("Download BlueStacks", "https://www.bluestacks.com/download.html"),
+         ("Download platform-tools",
+          "https://developer.android.com/tools/releases/platform-tools")),
+        "The venue list comes from the Untappd Android app's map, read on "
+        "an emulator over adb. Untappd's web search matches names, not "
+        "places, so it is no longer used. The sweep is calibrated for a "
+        "900x1600 portrait screen.",
     ),
     "geocoding": (
         (("Geocoding pricing",
@@ -291,6 +325,7 @@ def collect(s: Settings,
     rows = (
         _chrome_check(),
         _playwright_check(),
+        _emulator_check(proven.get("emulator")),
         _google_check(s, proven.get("google")),
         _untappd_check(s, proven.get("untappd")),
         *_keys_check(s),
@@ -317,27 +352,22 @@ def ready(checks: tuple[Check, ...]) -> bool:
 
 
 # What the city actually controls, for the step that asks for it. Every line
-# here is a mechanical consequence of the query, not advice about what makes a
+# here is a mechanical consequence of the name, not advice about what makes a
 # nice night out -- the second kind ages badly and nobody can check it.
-SEARCH_NOTES = (
-    ("It goes straight to Untappd's venue search",
-     "The search is already limited to venues, so “london” is the "
-     "whole query. “bars in london” searches for a venue with "
-     "those words in its name."),
-    ("A place name, at the size you want the map",
-     "“berlin” and “kreuzberg” are both fine and give "
-     "you different maps. A query with few matching venues finishes early "
-     "and collects fewer than the 100 asked for — that is the query "
-     "running out, not a failure."),
-    ("It names the comparison for next time",
-     "Each run is diffed against the last one with the same query, so "
-     "“london” and “London” share a history but "
-     "“London, UK” starts a fresh one, where the first diff "
-     "reports every venue as new."),
-    ("It names the map",
-     "“london” becomes “London Bars”, which is the "
-     "Google Maps list `pin` would later save into. Create that list first, "
-     "with that exact name, if you plan to use it."),
+CITY_NOTES = (
+    ("It names the folder",
+     "“Tel Aviv” writes to data/tel-aviv/. Every stage reads the "
+     "file the one before it wrote there, so keep the same spelling for "
+     "every command."),
+    ("The sweep finds it on the app's map",
+     "The sweep centres the Untappd app's map on this place by name and "
+     "covers it. A city and a district both work and give different maps. "
+     "If the name is not found, --here centres on the emulator's own "
+     "location instead."),
+    ("It suggests the list name",
+     "“tel aviv” suggests a Google Maps list called “Tel Aviv "
+     "Bars”. You can call the list anything; you type its name into the "
+     "pin command yourself, on the last step."),
 )
 
 
@@ -362,8 +392,16 @@ class NextStep:
     notes: tuple[tuple[str, str], ...] = ()
 
 
-def next_step(rows: tuple[Check, ...]) -> NextStep:
-    """What to do now. Ordered by what blocks what."""
+def next_step(rows: tuple[Check, ...], intent: dict | None = None,
+              venues_ready: bool = False, swept: bool = False) -> NextStep:
+    """What to do now. Ordered by what blocks what.
+
+    `intent` is the city the person chose; `swept` and `venues_ready` say the
+    sweep and `filter` have written their files. All three come from disk, so
+    a restarted dashboard lands where the person left off -- and once the
+    sweep is done the emulator is no longer needed, so an unchecked one stops
+    sending the person back to step 2.
+    """
     by_key = {c.key: c for c in rows}
 
     if by_key["chrome"].state == ATTENTION:
@@ -377,6 +415,16 @@ def next_step(rows: tuple[Check, ...]) -> NextStep:
             "playwright", "Install the browser tooling",
             'Run pip install -e ".[browser]" in the project folder, then '
             "reload this page.",
+        )
+
+    emulator = by_key.get("emulator")
+    if emulator is not None and emulator.state != OK and not swept:
+        return NextStep(
+            "emulator", "Set up the Android emulator",
+            "The venues come from the Untappd app's map, running on "
+            "BlueStacks on this computer. Work down the list below — it is "
+            "a one-time setup — then press Check again.",
+            cta="Check again", action="emulator",
         )
 
     accounts = (by_key["google"], by_key["untappd"])
@@ -401,27 +449,43 @@ def next_step(rows: tuple[Check, ...]) -> NextStep:
             cta="Test both accounts", action="verify",
         )
 
+    if not intent:
+        return NextStep(
+            "city", "Choose your city",
+            "Type the city you want the map of and press Use this city. "
+            "Your agent picks it up from here too, and the next step shows "
+            "the commands for it.",
+            notes=CITY_NOTES,
+        )
+
+    city = intent.get("query", "your city")
+    if not venues_ready:
+        return NextStep(
+            "build", f"Build the map of {city}",
+            "Four commands, run in order from a terminal in the project "
+            "folder. Each one shows here as done, with a count, as soon as "
+            "its file appears.",
+        )
+
     return NextStep(
-        "run", "Name your city",
-        "Both accounts are working. Type the city you want, then either press "
-        "Use this city — your agent will pick it up — or copy the command and "
-        "run it yourself. Either way the run happens in your terminal, where "
-        "you can watch it and stop it.",
+        "maps", "Put it in Google Maps",
+        f"The venues for {city} are ready. Create a saved list in Google "
+        f"Maps, then save them into it with pin — three first, to check.",
         done=True,
-        notes=SEARCH_NOTES,
     )
 
 
-# Three steps, and the grouping is the simplification. The panel has six rows
-# because six things can be wrong; a person setting this up for the first time
-# has three questions, in this order: can this machine do it, are my accounts
-# connected, and what city do I want. `next_step` already picks the one thing
-# to do -- this says which of the three it belongs to, so the page can show a
-# position instead of a list.
+# Six steps, in the order a stranger meets them. The panel has more rows
+# because more things can be wrong; the stepper answers "where am I", and
+# `next_step` already picks the one thing to do -- this says which stage it
+# belongs to, so the page can show a position instead of a list.
 WIZARD = (
     ("ready", "Ready", ("chrome", "playwright")),
+    ("emulator", "Emulator", ("emulator",)),
     ("accounts", "Accounts", ("connect", "verify")),
-    ("city", "City", ("run",)),
+    ("city", "City", ("city",)),
+    ("build", "Build", ("build",)),
+    ("maps", "Google Maps", ("maps",)),
 )
 
 
@@ -438,7 +502,7 @@ class Stage:
 
 
 def wizard(step: NextStep) -> tuple[Stage, ...]:
-    """The three stages, with the current one marked.
+    """The stages, with the current one marked.
 
     Derived from `next_step` rather than computed separately: two functions
     deciding where the user is, from the same rows, is two chances to

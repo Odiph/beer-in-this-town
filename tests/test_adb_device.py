@@ -114,22 +114,22 @@ def test_it_satisfies_the_sweep_protocol():
 
 LOCATION = """
 Location Providers:
-    network: Location[network 32.075318,34.808611 acc=1 et=+24s381ms alt=4.0]
-    gps: Location[gps 32.075318,34.808611 acc=1 et=+14h43m51s825ms alt=0.0]
-    passive: Location[gps 32.075318,34.808611 acc=1 et=+14h43m51s825ms]
+    network: Location[network 32.080900,34.780600 acc=1 et=+24s381ms alt=4.0]
+    gps: Location[gps 32.080900,34.780600 acc=1 et=+14h43m51s825ms alt=0.0]
+    passive: Location[gps 32.080900,34.780600 acc=1 et=+14h43m51s825ms]
 """
 
 
 def test_location_reads_the_gps_fix():
     dev = AdbDevice("x", run=FakeRunner({"dumpsys location": LOCATION}))
-    assert dev.location() == pytest.approx((32.075318, 34.808611))
+    assert dev.location() == pytest.approx((32.080900, 34.780600))
 
 
 def test_location_prefers_gps_over_network():
     out = ("    network: Location[network 1.0,2.0 acc=900]\n"
-           "    gps: Location[gps 32.075318,34.808611 acc=1]\n")
+           "    gps: Location[gps 32.080900,34.780600 acc=1]\n")
     dev = AdbDevice("x", run=FakeRunner({"dumpsys location": out}))
-    assert dev.location() == pytest.approx((32.075318, 34.808611))
+    assert dev.location() == pytest.approx((32.080900, 34.780600))
 
 
 def test_location_falls_back_to_network_when_there_is_no_gps_fix():

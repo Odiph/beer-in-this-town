@@ -35,7 +35,7 @@ _FOCUS = re.compile(r"mCurrentFocus=\S+\s+\S+\s+(?P<pkg>[^/\s}]+)")
 
 DEFAULT_TIMEOUT_S = 120.0
 
-# `    gps: Location[gps 32.075318,34.808611 acc=1 ...]`
+# `    gps: Location[gps 32.080900,34.780600 acc=1 ...]`
 _FIX = re.compile(
     r"^\s*(?P<provider>gps|network):\s*Location\[\S+\s+"
     r"(?P<lat>-?\d+\.\d+),(?P<lng>-?\d+\.\d+)", re.MULTILINE)
