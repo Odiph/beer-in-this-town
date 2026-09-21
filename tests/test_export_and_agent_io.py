@@ -224,9 +224,7 @@ def test_next_actions_never_carries_a_write_or_a_comment(tmp_path, monkeypatch):
     account write by the contract itself.
     """
     from beer_in_this_town import state
-    from beer_in_this_town.config import Settings
-
-    from beer_in_this_town.config import stage_path
+    from beer_in_this_town.config import Settings, stage_path
 
     for name in ("1_sweep.csv", "2_enriched.csv", "3_venues.csv"):
         path = stage_path("london", name)

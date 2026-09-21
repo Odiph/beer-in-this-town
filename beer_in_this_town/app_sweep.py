@@ -62,7 +62,7 @@ from .app_map import (
     pins_in,
     require_map_screen,
 )
-from .config import STATE_DIR, scope_slug
+from .config import STATE_DIR, city_slug
 
 if TYPE_CHECKING:
     # `app_geo` imports this module for `Cell` and the screen geometry, so a
@@ -352,7 +352,7 @@ def journal_path(city: str) -> Path:
     before it: an unscoped journal would let a Haifa sweep resume into a Tel
     Aviv corpus.
     """
-    return STATE_DIR / f"swept_{scope_slug(city)}.json"
+    return STATE_DIR / f"swept_{city_slug(city)}.json"
 
 
 def load_journal(city: str) -> SweepResult:

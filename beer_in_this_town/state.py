@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .app_sweep import journal_path as sweep_journal_path
 from .config import (
     ENRICHED_CSV,
     EXCLUDED_CSV,
@@ -108,7 +109,7 @@ def _sweep_stage(city: str) -> dict[str, Any]:
     if not stage["done"]:
         # An interrupted sweep leaves its journal, and the next sweep resumes
         # from it. Say so, or a half-swept city reads as never started.
-        journal = _read_json(STATE_DIR / f"swept_{scope_slug(city)}.json")
+        journal = _read_json(sweep_journal_path(city))
         found = len(journal.get("venues", []) or [])
         if found:
             stage["detail"] = (f"in progress: {found} venue(s) in the sweep "

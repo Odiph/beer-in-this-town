@@ -15,57 +15,8 @@ from beer_in_this_town.parsers import (
     assert_corpus_quality,
     extract_coords,
     parse_count,
-    parse_search_page,
     parse_venue_stats,
 )
-
-SEARCH_HTML = """
-<div class="beer-item">
-  <p class="name"><a href="/v/american-taproom-waterloo/7480946">American Taproom - Waterloo</a>
-    <span class="verified small">Verified</span></p>
-  <p class="style">American Restaurant, Beer Bar, Dive Bar, Bar</p>
-  <p class="style">261 Waterloo St, #01-23</p>
-  <p class="style">Singapore, Singapore</p>
-</div>
-<div class="beer-item">
-  <p class="name"><a href="/v/welcome-ren-min/4875014">Welcome Ren Min</a></p>
-  <p class="style">Beer Garden, Beer Bar</p>
-  <p class="style">1 Kadayanallur Street</p>
-  <p class="style">Singapore, Singapore</p>
-</div>
-"""
-
-# Not every card carries all three style lines. Reading them positionally means
-# a missing category silently shifts the address into the category column and
-# the city into the address column -- a whole CSV of plausible, wrong data.
-SEARCH_HTML_SPARSE = """
-<div class="beer-item">
-  <p class="name"><a href="/v/no-category/111">No Category</a></p>
-  <p class="style">42 Somewhere Road</p>
-  <p class="style">Singapore, Singapore</p>
-</div>
-<div class="beer-item">
-  <p class="name"><a href="/v/no-address/222">No Address</a></p>
-  <p class="style">Beer Bar</p>
-  <p class="style">Singapore, Singapore</p>
-</div>
-<div class="beer-item">
-  <p class="name"><a href="/v/city-only/333">City Only</a></p>
-  <p class="style">Singapore, Singapore</p>
-</div>
-<div class="beer-item">
-  <p class="name"><a href="/v/bare/444">Bare</a></p>
-</div>
-<div class="beer-item">
-  <p class="name"><a href="/v/no-location/555">No Location</a></p>
-  <p class="style">Beer Bar</p>
-  <p class="style">42 Somewhere Road</p>
-</div>
-<div class="beer-item">
-  <p class="name"><a href="/v/address-only/666">Address Only</a></p>
-  <p class="style">42 Somewhere Road</p>
-</div>
-"""
 
 VENUE_HTML = """
 <div class="stats">
@@ -80,107 +31,14 @@ VENUE_HTML = """
 
 @pytest.fixture
 def refs() -> list[VenueRef]:
-    return parse_search_page(SEARCH_HTML)
+    return [VenueRef(venue_id="7480946", slug="american-taproom-waterloo",
+                     name="American Taproom - Waterloo", category=None,
+                     address=None, city="Singapore, Singapore")]
 
 
 @pytest.fixture
 def venue(refs: list[VenueRef]) -> Venue:
     return parse_venue_stats(VENUE_HTML, refs[0])
-
-
-# --- search results -------------------------------------------------------
-@pytest.mark.unit
-def test_search_finds_every_venue(refs):
-    assert len(refs) == 2
-
-
-@pytest.mark.unit
-def test_search_extracts_identity(refs):
-    assert refs[0].venue_id == "7480946"
-    assert refs[0].slug == "american-taproom-waterloo"
-    assert refs[0].name == "American Taproom - Waterloo"
-    assert refs[0].url == "https://untappd.com/v/american-taproom-waterloo/7480946"
-
-
-@pytest.mark.unit
-def test_search_extracts_style_fields(refs):
-    assert refs[0].category.startswith("American Restaurant")
-    assert refs[0].address == "261 Waterloo St, #01-23"
-    assert refs[0].city == "Singapore, Singapore"
-
-
-@pytest.fixture
-def sparse():
-    return {r.slug: r for r in parse_search_page(SEARCH_HTML_SPARSE)}
-
-
-@pytest.mark.unit
-def test_missing_category_does_not_shift_the_address_up(sparse):
-    # The regression: read positionally, this card reported
-    # category="42 Somewhere Road" and address="Singapore, Singapore".
-    r = sparse["no-category"]
-    assert r.category is None
-    assert r.address == "42 Somewhere Road"
-    assert r.city == "Singapore, Singapore"
-
-
-@pytest.mark.unit
-def test_missing_address_does_not_shift_the_city_up(sparse):
-    r = sparse["no-address"]
-    assert r.category == "Beer Bar"
-    assert r.address is None
-    assert r.city == "Singapore, Singapore"
-
-
-@pytest.mark.unit
-def test_a_lone_style_line_is_left_unassigned(sparse):
-    """"Beer Bar" and "Singapore, Singapore" are the same shape.
-
-    Nothing distinguishes a category from a location on a one-line card, so
-    nothing is assigned. Filing it as the city would put venue types in the
-    city column of every unlocated venue.
-    """
-    r = sparse["city-only"]
-    assert (r.category, r.address, r.city) == (None, None, None)
-
-
-@pytest.mark.unit
-def test_a_card_with_no_location_line_does_not_invent_one(sparse):
-    """The last line is only the location line if it looks like one.
-
-    Assuming it unconditionally files a street address as the venue's city --
-    and city is not cosmetic: places_from_csv falls back to it when there is
-    no address.
-    """
-    r = sparse["no-location"]
-    assert r.category == "Beer Bar"
-    assert r.address == "42 Somewhere Road"
-    assert r.city is None
-
-
-@pytest.mark.unit
-def test_a_lone_address_is_recognised_by_its_number(sparse):
-    r = sparse["address-only"]
-    assert (r.category, r.address, r.city) == (None, "42 Somewhere Road", None)
-
-
-@pytest.mark.unit
-def test_card_with_no_style_lines_is_still_parsed(sparse):
-    r = sparse["bare"]
-    assert r.name == "Bare"
-    assert (r.category, r.address, r.city) == (None, None, None)
-
-
-@pytest.mark.unit
-def test_search_raises_when_markup_changes():
-    with pytest.raises(ParseError):
-        parse_search_page("<div>nothing recognisable</div>")
-
-
-@pytest.mark.unit
-def test_search_lenient_mode_returns_empty_instead_of_raising():
-    # Used when probing pagination, where an empty page is a valid answer.
-    assert parse_search_page("<div>nothing</div>", strict=False) == []
 
 
 # --- venue stats ----------------------------------------------------------

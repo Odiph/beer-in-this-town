@@ -14,7 +14,6 @@ CACHE_DIR = ROOT / "cache"
 DEBUG_DIR = ROOT / "debug"
 
 BASE = "https://untappd.com"
-SEARCH_URL = f"{BASE}/search"
 
 # A real Chrome UA. Chrome has frozen the minor/build/patch fields at 0.0.0
 # since v107, so the major version is the only part that varies.
@@ -142,31 +141,36 @@ def scope_slug(value: str) -> str:
 
 
 def city_slug(city: str) -> str:
-    """The directory name a city's stage files live under: "Tel Aviv" -> tel-aviv.
+    """The directory a city's stage files live in: `Tel Aviv` -> `tel-aviv`.
 
-    The same sanitising as every other per-city file, so a sweep journal and
-    the stage files of one city can never disagree about which city it is.
+    Same filesystem safety as `scope_slug`. A city written in a script that
+    has no ASCII form (`תל אביב`) keeps its own letters rather than collapsing
+    to the shared fallback, which would put every such city in one folder.
     """
-    return scope_slug(city)
+    slug = scope_slug(city)
+    if slug != SCOPE_FALLBACK:
+        return slug
+    native = re.sub(r"[\W_]+", "-", unicodedata.normalize("NFKC", city)
+                    .casefold()).strip("-")
+    return native or SCOPE_FALLBACK
+
+
+def stage_path(city: str, name: str) -> Path:
+    """`data/<slug>/<name>` -- where one step of the flow reads or writes.
+
+    `DATA_DIR` is read at call time so a redirected data directory (tests, a
+    relocated install) is honoured.
+    """
+    return DATA_DIR / city_slug(city) / name
 
 
 # The file each stage writes, under data/<slug>/. Each stage reads the one
-# before it, so these names are the pipeline's only coupling -- they live here
-# rather than in each command so the commands cannot drift apart.
+# before it, so these names are the pipeline's only coupling.
 SWEEP_CSV = "1_sweep.csv"
 ENRICHED_CSV = "2_enriched.csv"
 VENUES_CSV = "3_venues.csv"
 EXCLUDED_CSV = "3_excluded.csv"
 EXPORT_STEM = "venues"
-
-
-def stage_path(city: str, name: str) -> Path:
-    """Where a stage file for `city` lives: data/<slug>/<name>.
-
-    Reads `DATA_DIR` at call time, not import time, so the test sandbox (which
-    redirects module constants) reaches it too.
-    """
-    return DATA_DIR / city_slug(city) / name
 
 
 def cli_arg(value: str) -> str:
