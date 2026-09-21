@@ -10,8 +10,8 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 The source and the destination both changed. Venues now come from a sweep of
 the Untappd Android app's map, which is geographic, instead of Untappd's web
-search, which matches names; and they go into a Google Maps saved list instead
-of a My Maps layer. The flow is one command per stage, documented step by step
+search, which matches names; and they go into a Google Maps saved list (see
+Removed). The flow is one command per stage, documented step by step
 for a person in `docs/FLOW.md` and for a coding agent in `AGENTS.md`.
 
 ### Added
@@ -30,12 +30,22 @@ for a person in `docs/FLOW.md` and for a coding agent in `AGENTS.md`.
   - `filter` keeps the beer venues and writes the rest to `3_excluded.csv`
     with a reason each. `3_venues.csv` is what `pin` and `notes` read.
   - `export` writes `venues.kml`, `venues.gpx` and `venues.geojson`.
-- **Emulator checks** in `doctor` -- `adb` on `PATH`, a device connected, the
-  Untappd app installed, a 900x1600 screen -- each with a remedy a stranger
-  can follow. `status` reports `blocked_on: "emulator"` until they pass, and
-  per-city stage progress.
+- **Emulator checks** in `doctor` -- `adb_on_path`, `device_connected`,
+  `untappd_installed` (`com.untappdllc.app`), `screen_size` (900x1600) --
+  each with a remedy a stranger can follow, reported as `data.emulator`
+  (a list of `{name, ok, detail, remedy}`) and `data.emulator_ready`.
+  `sweep` runs the same checks first and refuses with `emulator_unavailable`.
+- `status` reports `blocked_on: "emulator"` when a sweep is next and the
+  checks fail, with an empty `next_actions` rather than a `doctor` that
+  would loop. `blocked_on` precedence is `sign_in`, then `choose_city`, then
+  `emulator`. `sweep` is offered only after `verify` has passed.
 - New error codes: `emulator_unavailable`, `calibration_failed`,
-  `city_not_found`, `no_location_control`, `stage_input_missing`.
+  `city_not_found`, `stage_input_missing`. `--here` without the
+  map's Reset location control is `app_screen_unexpected`.
+- Commands built from a city or list name strip shell metacharacters
+  (`" ` $ ; & | < > % ^ !` and control characters) instead of escaping them,
+  since the same text is pasted into PowerShell, cmd and POSIX shells. Name
+  the Google Maps list with plain letters, digits and spaces.
 - The setup wizard gained the emulator setup, the app sign-in, a copyable
   command per stage with its live status, and the saved-list and pin-trial
   instructions. It still has no route that can `pin` or write `notes`.
@@ -63,8 +73,17 @@ for a person in `docs/FLOW.md` and for a coding agent in `AGENTS.md`.
   annotated by `notes`, both still human-triggered, trial-first and behind the
   unchanged write guardrails. They are never in `next_actions`; their exact
   command text is in `hints`.
-- `next_actions` only ever offers `status`, `doctor`, `verify`, `sweep`,
-  `enrich`, `filter`, `export`, and `ui --detach` for a sign-in.
+- **Envelope `schema_version` is now `"2.0"`** (breaking): a command was
+  removed, and `status`'s `data.stages` changed meaning. It is now per city
+  -- `sweep`, `enrich`, `filter`, `export`, `pin`, `notes`, each with `done`,
+  `count` and `detail`, the collection stages also with `stale` and `path` --
+  alongside the new `data.city`, `data.city_dir`, `data.next_stage` and
+  `data.emulator`.
+- `next_actions` only ever offers `status`, `verify`, `sweep`, `enrich`,
+  `filter`, `export`, `ui --detach` (for a sign-in or a city choice), and
+  `score` after `label`.
+- `filter` applies `classify.craft_beer_decision`: category vocabulary,
+  `looks_private` excluded, closures only flagged.
 - The README's prerequisites are honest: BlueStacks, adb and both accounts are
   required, not optional. "Where the lines are" gained a row for automating
   the Untappd app, and states plainly that it and `pin`/`notes` are against
@@ -73,14 +92,18 @@ for a person in `docs/FLOW.md` and for a coding agent in `AGENTS.md`.
 ### Fixed
 - **Namesakes in enrichment.** A common name's far-away namesakes could fill
   the two page fetches allowed per venue, so the right page was never opened
-  (Tel Aviv: `Mike's Place`, `Django`, `Oscar Wilde`). The lookup is now
-  qualified by the city. <!-- verify: describe the namesake fix as stream A2 implemented it. -->
+  (Tel Aviv: `Mike's Place`, `Django`, `Oscar Wilde`). Search results are
+  now ranked by the location line on each result card before any page is
+  fetched: cards naming the city first, cards with no location next, cards
+  naming another place last. When no card names the city, one
+  city-qualified search (`Mike's Place Tel Aviv`) is tried before a fetch is
+  spent.
 - **CI test selection.** CI ran `-m unit`, which skipped every test that was
   never marked -- 187 of 647. It now runs `-m "not integration"`.
 
 The entries below were written during the 0.2.0 cycle, before the flow above
-replaced `run`, and describe the tool as it was at the time. Where they
-mention `run`, web search or My Maps, those are gone.
+replaced the old collection command, and describe the tool as it was at the
+time. Anything they mention that is listed under Removed above is gone.
 
 
 ### Added

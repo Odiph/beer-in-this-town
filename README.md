@@ -19,7 +19,6 @@ people keep going back to.
 It is an open-source tool, built to be followed by a stranger and to be driven
 by a coding agent: one command per step, every command speaks JSON, and
 `status` always says what to do next.
-<!-- verify: re-capture docs/setup-signin.jpg / setup-wizard.gif once stream B's wizard lands; the old ones show the v0.1 wizard and are no longer referenced here. -->
 
 ## How it works
 
