@@ -24,7 +24,9 @@ as a header afterwards.
 
 Scope is the fifth protection and the strongest one: there are no routes here
 that write to a Google account. `pin` and `notes` are not reachable from this
-server, so no combination of the above failing can cause one.
+server, so no combination of the above failing can cause one. The page shows
+their commands for a person to copy; it cannot run them. Nor can it drive the
+emulator: its one emulator action is a read-only adb check.
 
 Stdlib only -- no Flask, no FastAPI. A dashboard that ships five transitive
 dependencies to draw six rows is a worse trade than a hundred lines of
@@ -46,7 +48,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from ..config import ROOT, STATE_DIR, Settings
-from . import checks
+from . import checks, flow
 from .actions import ACTIONS
 from .jobs import Runner
 
@@ -257,12 +259,21 @@ def make_handler(board: Dashboard):
                         ok=bool(raw["ok"]), detail=raw.get("detail", ""),
                         evidence=raw.get("evidence", ""),
                     )
+            # The emulator check is kept as the plain rows it produced:
+            # the page shows each one, not a summary of them.
+            emu = result.get("emulator")
+            if isinstance(emu, dict) and "ready" in emu:
+                board.proven["emulator"] = emu
             return result
 
         def _state(self) -> dict:
             rows = checks.collect(board.settings, board.proven)
             job = board.runner.current
-            step = checks.next_step(rows)
+            intent = _intent()
+            city = intent.get("query") if intent else None
+            step = checks.next_step(rows, intent=intent,
+                                    venues_ready=flow.venues_ready(city),
+                                    swept=flow.swept(city))
             return {
                 "ok": True,
                 "stages": [g.to_row() for g in checks.wizard(step)],
@@ -271,9 +282,20 @@ def make_handler(board: Dashboard):
                     "cta": step.cta, "action": step.action, "done": step.done,
                     "notes": [{"heading": h, "body": b} for h, b in step.notes],
                 },
-                "defaults": {"query": board.settings.query,
-                             "count": board.settings.target_count},
-                "intent": _intent(),
+                "intent": intent,
+                # What each stage's view needs beyond the one directive, so
+                # a person can go back to any step and still see its
+                # instructions and commands.
+                "cards": {
+                    "emulator": flow.emulator_card(
+                        board.proven.get("emulator")),
+                    "accounts": {"why": list(flow.ACCOUNT_WHY)},
+                    "city": {"notes": [{"heading": h, "body": b}
+                                       for h, b in checks.CITY_NOTES]},
+                    "build": flow.build_card(city),
+                    "maps": flow.maps_card(
+                        city, intent.get("map_title") if intent else None),
+                },
                 "checks": [c.to_row() for c in rows],
                 "ready": checks.ready(rows),
                 "blocking": [c.key for c in checks.blocking(rows)],
