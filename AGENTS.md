@@ -310,7 +310,7 @@ yourself are `adb connect` and `adb devices`.
 | `stage_input_missing` | The previous stage's file is not there | Run the command the `remedy` names (for `filter`, that is `enrich`). |
 | `bad_format` | `export --format` named an unknown format | Use a comma-separated subset of `kml,gpx,geojson`. |
 | `no_city` | A stage with no city, and none chosen | **Ask the human.** There is no default — choosing a city for someone chooses what they get. |
-| `not_signed_in` | An account is signed out — from `verify`, `pin` or `notes` | **Stop and ask the human.** Requires their password; you cannot do this. `data.accounts` says which one and how it was established. |
+| `not_signed_in` | An account is signed out — from `verify`, `pin` or `notes`; or from `enrich`, which refuses without an Untappd session and stops at the first venue page that says "Log In to view Venue Stats" | **Stop and ask the human.** Requires their password; you cannot do this. `data.accounts` (from `verify`) says which one. `enrich` writes nothing when it stops this way. |
 | `verify_unavailable` | The account check itself could not run | Not a signed-out account — usually a missing browser. Fix what the message names. Do **not** report this as "signed out". |
 | `port_unavailable` | `ui --detach` could not start the dashboard | Another process holds the port, or the interpreter could not be spawned. Retry with `--port` set to something else. |
 | `no_list` | `pin`/`notes` with no `--list`, and no list name remembered from `sweep --title` or the dashboard | **Ask the human.** Always pass `--list` with the exact name they gave you; this writes into a real Maps list and a guessed name is a guess about where. |

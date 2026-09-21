@@ -582,7 +582,7 @@ Every command prints one JSON envelope with `--json`. On failure it carries
 | `stage_input_missing` | The previous stage's file is not there | Run the command the remedy names (for example `enrich` before `filter`), or pass `--in PATH`. |
 | `bad_format` | `--format` named something other than `kml`, `gpx`, `geojson` | Fix the list. |
 | `no_city` | No city given and none chosen in the dashboard | Pass `--city`, or choose one in `beertown ui`. |
-| `not_signed_in` | Google or Untappd is signed out in the tool's profile | Sign in again (step 3), then `beertown verify --json`. |
+| `not_signed_in` | Google or Untappd is signed out in the tool's profile. `enrich` also stops with it: signed out, Untappd hides the stats on every venue page that is not verified (measured: 4 of 7 in Tel Aviv), so it refuses rather than write a map without numbers | Sign in again (step 3), then `beertown verify --json`, then re-run the same command. |
 | `verify_unavailable` | The account check could not run | Usually no Chrome. Fix what the message says; you are not necessarily signed out. |
 | `robots_disallow` | Untappd's robots.txt disallows the venue pages `enrich` reads | Nothing was fetched. Stop; there is no flag to override it. |
 | `rate_limited` | The 600-an-hour read budget is spent, or Untappd answered with repeated 429s | Wait, then re-run the same command; finished work is cached. |
