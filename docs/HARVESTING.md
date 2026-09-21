@@ -293,7 +293,11 @@ though, and the overshoot scales with duration:
 | 1600 ms | +300 px | +286 px | 0.95 |
 
 **Do not trust a constant.** Pan, dump, measure the mean displacement of
-pins present in both dumps, and correct. That is closed-loop, costs two
+pins present in both dumps, and correct. The loop is closed: a pan landing
+more than `PAN_TOLERANCE_PX` (25 px) off target gets a corrective pan, since
+the error was previously measured and then ignored, and accumulated across a
+sweep to shift every later cell. Smaller drift is left alone -- correcting it
+costs more than the ~34 px cell overlap already absorbs. That is closed-loop, costs two
 dumps, and self-calibrates across zoom levels and devices.
 
 Two things absorb a swipe and leave the map still, both found the hard way:
@@ -390,8 +394,11 @@ tuning problem rather than a structural one.
 
 ## 12. Open questions
 
-1. **Tune the filter pass.** ~90 s per cell is mostly settle time. The panel
-   is local (no network), so its settles can be far shorter than a search's.
+1. ~~Tune the filter pass.~~ **Done.** The panel is local -- opening it,
+   ticking a row, scrolling it -- so those steps use
+   `PANEL_SETTLE_MIN_S`/`MAX_S` (0.4-0.9 s) instead of a search's 5-8 s.
+   `SHOW RESULTS` issues a query and keeps the full settle. The ~90 s per
+   cell was almost entirely waiting.
 2. ~~City name → which cells.~~ **Mostly answered.** The app does the
    city→viewport step: searching a city centres and zooms to it, and that
    viewport *is* the root cell. `app_geo.cell_for_viewport` turns it into a

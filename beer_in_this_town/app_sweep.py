@@ -149,6 +149,20 @@ CELL_OVERLAP = 0.15
 SETTLE_MIN_S = 5.0
 SETTLE_MAX_S = 8.0
 
+# The category panel is local: opening it, ticking a row and scrolling it
+# involve no network, so they do not need a search's patience. Measured, the
+# filter pass at full settles cost ~90 s per cell and was almost entirely
+# waiting. `SHOW RESULTS` is the exception -- it issues a query -- and keeps
+# the full settle.
+PANEL_SETTLE_MIN_S = 0.4
+PANEL_SETTLE_MAX_S = 0.9
+
+# How far a pan may land from where it was aimed before it is corrected.
+# The fling overshoots by up to 27%, and `pin_displacement` was measuring
+# that error without anyone acting on it. Below this, correcting costs more
+# than the drift; the cells overlap by ~34 px, which absorbs it.
+PAN_TOLERANCE_PX = 25.0
+
 
 @runtime_checkable
 class Device(Protocol):
@@ -406,10 +420,13 @@ def apply_drinking_filter(device: Device,
     down until the rows stop changing. Returns the categories it ended up
     keeping, so a caller can record what the corpus was filtered to.
     """
+    panel_lo = min(PANEL_SETTLE_MIN_S, settle_min_s)
+    panel_hi = min(PANEL_SETTLE_MAX_S, settle_max_s)
+
     device.tap(*FILTERS_BUTTON)
-    _settle(settle_min_s, settle_max_s)
+    _settle(panel_lo, panel_hi)
     device.tap(*CATEGORY_ROW)
-    _settle(settle_min_s, settle_max_s)
+    _settle(panel_lo, panel_hi)
 
     kept: set[str] = set()
     seen: set[str] = set()
@@ -420,7 +437,7 @@ def apply_drinking_filter(device: Device,
         taps = plan_category_taps(cats, xml)
         for tap in taps:
             device.tap(tap.x, tap.y)
-            _settle(settle_min_s / 2, settle_max_s / 2)
+            _settle(panel_lo, panel_hi)
 
         fresh = set(cats) - seen
         seen.update(cats)
@@ -428,10 +445,11 @@ def apply_drinking_filter(device: Device,
             break
         # Reach the rows below the fold.
         device.swipe(450, 1200, 450, 700, PAN_MS // 2)
-        _settle(settle_min_s, settle_max_s)
+        _settle(panel_lo, panel_hi)
 
     device.tap(*APPLY_BUTTON)
-    _settle(settle_min_s, settle_max_s)
+    _settle(panel_lo, panel_hi)
+    # This one issues a query, so it gets a search's patience.
     device.tap(*SHOW_RESULTS_BUTTON)
     _settle(settle_min_s, settle_max_s)
 
@@ -561,6 +579,18 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
                         "every later cell would re-harvest the same rectangle.")
                 continue
             result._consecutive_dead_pans = 0
+
+            # Close the loop. The fling overshoots by up to 27%, and that
+            # error was being measured and then ignored, so it accumulated
+            # across a sweep and shifted every later cell off its target.
+            if (moved_x is not None and moved_y is not None
+                    and shared >= MIN_SHARED_FOR_PAN_CHECK):
+                err_x, err_y = dx - moved_x, dy - moved_y
+                if abs(err_x) > PAN_TOLERANCE_PX or abs(err_y) > PAN_TOLERANCE_PX:
+                    log.info("Pan landed (%.0f,%.0f) px off target; correcting.",
+                             err_x, err_y)
+                    _pan(device, int(err_x), int(err_y), after)
+                    _settle(settle_min_s, settle_max_s)
 
         # The child re-searches on entry, so nothing is needed here.
         sweep(device, cell, max_depth=max_depth, verify_pans=verify_pans,

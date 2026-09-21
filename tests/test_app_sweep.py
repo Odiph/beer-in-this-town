@@ -35,11 +35,11 @@ CHROME = """
 """
 
 
-def dump_with(names, offset=0):
+def dump_with(names, offset=0, yoff=0):
     pins = "".join(
         f'<node class="android.view.View" content-desc="{n}." '
-        f'bounds="[{100 + offset + i * 7},{200 + i * 9}]'
-        f'[{154 + offset + i * 7},{262 + i * 9}]"/>'
+        f'bounds="[{100 + offset + i * 7},{200 + yoff + i * 9}]'
+        f'[{154 + offset + i * 7},{262 + yoff + i * 9}]"/>'
         for i, n in enumerate(names))
     return f"<?xml version='1.0'?><hierarchy>{CHROME}{pins}</hierarchy>"
 
@@ -476,3 +476,37 @@ def test_the_pan_step_is_short_of_a_quarter():
     step_y = int((MAP_BOTTOM - MAP_TOP) // 4 * (1 - CELL_OVERLAP))
     assert step_x < SCREEN_WIDTH // 4
     assert step_y < (MAP_BOTTOM - MAP_TOP) // 4
+
+
+def test_a_pan_that_lands_off_target_is_corrected():
+    """The fling overshoots by up to 27%, and that error was measured and
+    then ignored -- so it accumulated across a sweep and shifted every later
+    cell off its target."""
+    full = dump_with([f"v{i}" for i in range(58)])
+    short = dump_with([f"v{i}" for i in range(58)], offset=-60)   # asked ~191
+    dev = FakeDevice([full, short] + [dump_with(["x"])] * 40)
+    sweep(dev, CELL, settle_max_s=0, max_depth=1, verify_pans=True)
+    swipes = [a for a in dev.actions if a.startswith("swipe")]
+    assert len(swipes) > 4          # four cells plus at least one correction
+
+
+def test_a_pan_within_tolerance_is_left_alone():
+    """Correcting a small drift costs more than the drift, and the cells
+    overlap by ~34 px, which absorbs it."""
+    from beer_in_this_town.app_sweep import (
+        CELL_OVERLAP,
+        MAP_BOTTOM,
+        MAP_TOP,
+        SCREEN_WIDTH,
+    )
+
+    step_x = int(SCREEN_WIDTH // 4 * (1 - CELL_OVERLAP))
+    step_y = int((MAP_BOTTOM - MAP_TOP) // 4 * (1 - CELL_OVERLAP))
+    full = dump_with([f"v{i}" for i in range(58)])
+    # Both axes must land close; a fixture that moves only x reads as a
+    # 281 px shortfall in y and correctly triggers a correction.
+    close = dump_with([f"v{i}" for i in range(58)],
+                      offset=-step_x - 5, yoff=-step_y - 5)
+    dev = FakeDevice([full, close] + [dump_with(["x"])] * 40)
+    sweep(dev, CELL, settle_max_s=0, max_depth=1, verify_pans=True)
+    assert len([a for a in dev.actions if a.startswith("swipe")]) == 4
