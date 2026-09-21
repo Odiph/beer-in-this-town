@@ -261,3 +261,18 @@ def test_the_later_stages_find_the_chosen_city_too(stage, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["error"]["code"] == "stage_input_missing", payload["error"]
     assert 'london' in payload["error"]["remedy"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("cmd", ["pin", "notes"])
+def test_a_write_needs_a_list_the_person_named(cmd, tmp_path, capsys):
+    """The dashboard suggests "<City> Bars"; a write must not fall back to
+    that suggestion, or `no_list` can never fire and the write goes to a
+    list nobody typed."""
+    from beer_in_this_town import cli
+
+    record_intent("london")
+    csv_path = tmp_path / "3_venues.csv"
+    csv_path.write_text("name,address\nA,B\n", encoding="utf-8")
+    assert cli.main([cmd, "--csv", str(csv_path), "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "no_list"
