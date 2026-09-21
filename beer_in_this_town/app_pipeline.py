@@ -37,11 +37,15 @@ from .app_calibrate import Calibration, calibrate
 from .app_export import to_venues
 from .app_geo import CITY_ZOOM_M_PER_PX, Camera, Scale
 from .app_sweep import (
+    JOURNAL_MAX_AGE_H,
     Device,
     SweepResult,
     _settle,
+    discard_journal,
     ensure_map_screen,
     journal_path,
+    load_finished,
+    mark_complete,
     search_city,
     sweep,
 )
@@ -136,7 +140,8 @@ def census(device: Device, city: str, s: Settings, *, here: bool = False,
            = geocode_place,
            known_near: Callable = nearby_venues,
            settle_min_s: float | None = None,
-           settle_max_s: float | None = None) -> Census:
+           settle_max_s: float | None = None,
+           fresh: bool = False) -> Census:
     """Sweep `city` from the app and return calibrated rows.
 
     Raises `CityNotFound`, `NoLocationControl`, `CalibrationFailed`,
@@ -149,23 +154,38 @@ def census(device: Device, city: str, s: Settings, *, here: bool = False,
     lo = settle.get("settle_min_s", 5.0)
     hi = settle.get("settle_max_s", 8.0)
 
-    if here:
-        ensure_map_screen(device, **settle)
-        centre = centre_on_device(device, lo, hi)
-        source = "gps"
+    if fresh:
+        discard_journal(city)
     else:
-        # Geocode before touching the device: a city the geocoder cannot
-        # place would otherwise cost a whole sweep before it failed.
-        centre = locate_city(city, s)
-        if centre is None:
-            raise CityNotFound(f"The geocoder has no match for {city!r}.")
-        search_city(device, city, **settle)
-        source = "geocoder"
+        discard_journal(city, only_if_older_than_h=JOURNAL_MAX_AGE_H)
+    finished = load_finished(city)
+    if finished is not None:
+        # Every cell was already walked; only the steps after it failed.
+        log.info("A complete sweep of %s from the last %.0fh has %d venue(s); "
+                 "placing it without sweeping again (--fresh to re-sweep).",
+                 city, JOURNAL_MAX_AGE_H, len(finished.result.venues))
+        result, centre = finished.result, finished.centre
+        source = finished.centre_source
+    else:
+        if here:
+            ensure_map_screen(device, **settle)
+            centre = centre_on_device(device, lo, hi)
+            source = "gps"
+        else:
+            # Geocode before touching the device: a city the geocoder cannot
+            # place would otherwise cost a whole sweep before it failed.
+            centre = locate_city(city, s)
+            if centre is None:
+                raise CityNotFound(f"The geocoder has no match for {city!r}.")
+            search_city(device, city, **settle)
+            source = "geocoder"
 
-    camera = Camera(centre=centre, scale=Scale(m_per_px=CITY_ZOOM_M_PER_PX))
-    result = sweep(device, camera.viewport(), max_depth=max_depth,
-                   min_depth=min_depth, verify_pans=True, city=city,
-                   filter_drinking=True, camera=camera, **settle)
+        camera = Camera(centre=centre,
+                        scale=Scale(m_per_px=CITY_ZOOM_M_PER_PX))
+        result = sweep(device, camera.viewport(), max_depth=max_depth,
+                       min_depth=min_depth, verify_pans=True, city=city,
+                       filter_drinking=True, camera=camera, **settle)
+        mark_complete(city, result, centre, source)
 
     radius = osm_radius_km(result.venues, centre)
     known = [(o.name, o.lat, o.lng) for o in known_near(centre, radius, s)]

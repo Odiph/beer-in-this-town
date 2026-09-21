@@ -805,7 +805,7 @@ def cmd_score(s: Settings, labels_path: str) -> Envelope:
 
 def cmd_sweep(s: Settings, *, here: bool, min_depth: int, max_depth: int,
               formats: tuple[str, ...], device=None,
-              emulator=None) -> Envelope:
+              emulator=None, fresh: bool = False) -> Envelope:
     """Find a city's venues from the Untappd app's map, on an emulator.
 
     This is the collection step, and the only one: the app's map is a real
@@ -830,7 +830,7 @@ def cmd_sweep(s: Settings, *, here: bool, min_depth: int, max_depth: int,
     ensure_dirs()
     device = device or AdbDevice(serial=s.adb_serial)
     c = census(device, s.query, s, here=here, min_depth=min_depth,
-               max_depth=max_depth)
+               max_depth=max_depth, fresh=fresh)
     csv_path, written = write_census(c, s.query, s.map_title, formats)
     record_run(query=s.query, map_title=s.map_title, csv_path=csv_path)
     return census_envelope(c, s.query, s.map_title, csv_path, written)
@@ -1105,6 +1105,10 @@ def build_parser() -> argparse.ArgumentParser:
     sw.add_argument("--title", default=None,
                     help='the Google Maps list name the results are meant for, '
                          'e.g. "London Bars"')
+    sw.add_argument("--fresh", action="store_true",
+                    help="sweep again even if a complete sweep of this city "
+                         "from the last 12h exists (a re-run otherwise only "
+                         "re-does the placement step)")
     sw.add_argument("--here", action="store_true",
                     help="centre on the emulator's own GPS fix (tap Reset "
                          "location) instead of searching the city by name")
@@ -1362,7 +1366,8 @@ def main(argv: list[str] | None = None) -> int:
                 )), as_json)
                 return 1
             env = cmd_sweep(s, here=args.here, min_depth=args.min_depth,
-                            max_depth=args.max_depth, formats=formats)
+                            max_depth=args.max_depth, formats=formats,
+                            fresh=args.fresh)
         elif args.cmd == "notes":
             env = cmd_notes(s, args.csv, args.list_name, args.limit,
                             # NOT `or None`: "" is the caller switching the
