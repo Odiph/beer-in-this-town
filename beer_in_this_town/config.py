@@ -141,6 +141,45 @@ def scope_slug(value: str) -> str:
     return slug or SCOPE_FALLBACK
 
 
+def city_slug(city: str) -> str:
+    """The directory name a city's stage files live under: "Tel Aviv" -> tel-aviv.
+
+    The same sanitising as every other per-city file, so a sweep journal and
+    the stage files of one city can never disagree about which city it is.
+    """
+    return scope_slug(city)
+
+
+# The file each stage writes, under data/<slug>/. Each stage reads the one
+# before it, so these names are the pipeline's only coupling -- they live here
+# rather than in each command so the commands cannot drift apart.
+SWEEP_CSV = "1_sweep.csv"
+ENRICHED_CSV = "2_enriched.csv"
+VENUES_CSV = "3_venues.csv"
+EXCLUDED_CSV = "3_excluded.csv"
+EXPORT_STEM = "venues"
+
+
+def stage_path(city: str, name: str) -> Path:
+    """Where a stage file for `city` lives: data/<slug>/<name>.
+
+    Reads `DATA_DIR` at call time, not import time, so the test sandbox (which
+    redirects module constants) reaches it too.
+    """
+    return DATA_DIR / city_slug(city) / name
+
+
+def cli_arg(value: str) -> str:
+    """A user string as one double-quoted command-line argument.
+
+    Commands built from a city or list name are handed to an agent to run
+    verbatim, so a stray quote in the name must not be able to end the
+    argument and start another. Quotes are dropped rather than escaped:
+    escaping differs between PowerShell, cmd and POSIX shells.
+    """
+    return '"' + value.replace('"', "").replace("`", "") + '"'
+
+
 def ensure_dirs() -> None:
     for d in (DATA_DIR, STATE_DIR, CACHE_DIR, DEBUG_DIR):
         d.mkdir(parents=True, exist_ok=True)
