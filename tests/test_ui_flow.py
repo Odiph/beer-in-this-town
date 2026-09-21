@@ -159,7 +159,7 @@ def test_the_emulator_instructions_cover_every_manual_setting():
     card = flow.emulator_card(None)
     text = " ".join(s["title"] + " " + s["body"] + " " + s.get("cmd", "")
                     for s in card["steps"])
-    for needed in ("BlueStacks 5", "900 x 1600", "Portrait",
+    for needed in ("BlueStacks 5", "900 x 1600", "1600 x 900", "portrait",
                    "Android Debug Bridge", "adb connect 127.0.0.1:5555",
                    "Play Store", "Sign in to Untappd"):
         assert needed in text, f"the setup never mentions {needed!r}"
