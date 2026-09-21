@@ -19,10 +19,9 @@ from .. import config
 
 log = logging.getLogger(__name__)
 
-# `config.city_slug` is the contract's name for this; until it exists,
-# `scope_slug` is the same rule (lowercase, non-alnum -> "-") that the state
-# journals already use, so the folder name here matches theirs.
-city_slug = getattr(config, "city_slug", config.scope_slug)
+# One folder rule for the CLI and the dashboard, or they look in different
+# places for the same city.
+city_slug = config.city_slug
 
 CLI = "beertown"
 PIN_BUDGET_PER_DAY = 100
