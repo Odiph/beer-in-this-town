@@ -110,7 +110,8 @@ def test_the_census_is_asked_for_the_depths_it_was_given(monkeypatch):
     monkeypatch.setattr(cli, "census", fake_census)
     cli.cmd_sweep(Settings(query="x"), here=True, min_depth=2, max_depth=4,
                   formats=(), device=object(), emulator=ready)
-    assert fake_census.kw == {"here": True, "min_depth": 2, "max_depth": 4}
+    assert fake_census.kw == {"here": True, "min_depth": 2, "max_depth": 4,
+                              "fresh": False}
 
 
 def test_an_emulator_failure_reaches_the_envelope_via_main(monkeypatch, capsys):

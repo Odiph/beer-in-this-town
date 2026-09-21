@@ -402,6 +402,76 @@ def save_journal(city: str, result: SweepResult) -> None:
         json.dumps(payload, indent=1, ensure_ascii=False), encoding="utf-8")
 
 
+# How long a journal stays worth resuming or reusing. Past it, a sweep of the
+# same city starts over: the map has moved on, and a journal that never
+# expired carried last week's venues into this week's corpus.
+JOURNAL_MAX_AGE_H = 12.0
+
+
+@dataclass(frozen=True)
+class FinishedSweep:
+    """A sweep that walked every cell, and where its map was centred."""
+
+    result: SweepResult
+    centre: tuple[float, float]
+    centre_source: str
+
+
+def mark_complete(city: str, result: SweepResult,
+                  centre: tuple[float, float], centre_source: str) -> None:
+    """Record that every cell was walked.
+
+    The steps after the sweep can fail on their own -- Overpass sheds load
+    with a 504 as a matter of course. Measured 2026-09-22: a complete Tel Aviv
+    sweep failed at placement, and the re-run walked every cell again,
+    because a resumed journal re-walks cells by design. With this mark, the
+    re-run places the finished sweep instead.
+    """
+    save_journal(city, result)
+    path = journal_path(city)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(complete=True, centre=list(centre),
+                   centre_source=centre_source)
+    path.write_text(json.dumps(payload, indent=1, ensure_ascii=False),
+                    encoding="utf-8")
+
+
+def _journal_age_h(path: Path) -> float:
+    return (time.time() - path.stat().st_mtime) / 3600
+
+
+def load_finished(city: str,
+                  max_age_h: float = JOURNAL_MAX_AGE_H) -> FinishedSweep | None:
+    """A complete, recent sweep of `city`, or None."""
+    path = journal_path(city)
+    try:
+        if _journal_age_h(path) > max_age_h:
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    centre = raw.get("centre")
+    if not raw.get("complete") or not centre or len(centre) != 2:
+        return None
+    return FinishedSweep(result=load_journal(city),
+                         centre=(float(centre[0]), float(centre[1])),
+                         centre_source=str(raw.get("centre_source", "")))
+
+
+def discard_journal(city: str, *, only_if_older_than_h: float | None = None
+                    ) -> bool:
+    """Forget a sweep of `city`, always or only once it is stale."""
+    path = journal_path(city)
+    try:
+        if (only_if_older_than_h is not None
+                and _journal_age_h(path) <= only_if_older_than_h):
+            return False
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def ensure_map_screen(device: Device, relaunch: bool = True,
                       settle_min_s: float = SETTLE_MIN_S,
                       settle_max_s: float = SETTLE_MAX_S) -> None:
