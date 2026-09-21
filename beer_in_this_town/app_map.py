@@ -48,6 +48,10 @@ from dataclasses import dataclass
 # Measured: two independent Tel Aviv searches both returned exactly 58 unique
 # pins; Haifa returned 37. Treat >= this as "there is more here than you were
 # shown" rather than as a count.
+#
+# It is a **threshold, not a hard ceiling**: a live sweep saw cells return 59
+# and 60. So the comparison is `>=`, and a count a little above this is
+# normal rather than a sign something is wrong.
 RESULT_SET_CAP = 58
 
 # Nodes on the map that carry a `content-desc` and are not venues. Without
