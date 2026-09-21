@@ -190,6 +190,18 @@ def test_a_pan_starts_away_from_the_markers():
     assert (x - 450) ** 2 + (y - 850) ** 2 > 200 ** 2
 
 
+def test_a_pan_never_starts_on_the_venue_card():
+    """The card overlays the bottom of the map and looks like part of it.
+    A swipe starting there drags the card while the map stays exactly still --
+    found live twice, as a pan of (-225,-331) px that moved the map by (0,0)
+    across 58 shared pins."""
+    from beer_in_this_town.app_sweep import CARD_TOP, _clear_origin
+
+    for dx, dy in ((-225, -331), (225, 331), (-225, 331), (225, -331)):
+        _x, y = _clear_origin([], dx, dy)
+        assert y < CARD_TOP
+
+
 def test_a_pan_origin_leaves_room_for_the_gesture():
     """An origin near the edge would drag the finger off the map area."""
     from beer_in_this_town.app_sweep import (

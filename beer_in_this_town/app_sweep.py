@@ -67,6 +67,13 @@ MAP_TOP = 192
 MAP_BOTTOM = 1516
 SCREEN_WIDTH = 900
 
+# The selected-venue card overlays the bottom of the map, from here down to
+# the tab bar. It looks like map and is not: a swipe that starts on it drags
+# the card, the map stays exactly still, and `DeadPan` stops the sweep. Found
+# twice live before the cause was understood -- a pan of (-225,-331) px moved
+# the map by precisely (0,0) across 58 shared pins.
+CARD_TOP = 1242
+
 # `Refresh search`, found by content-desc in the live app. Kept as a constant
 # so a layout change is one edit rather than a hunt through the sweep.
 REFRESH_DESC = "Refresh search"
@@ -177,14 +184,15 @@ def _refresh(device: Device) -> None:
 def _clear_origin(pins: list[Pin], dx: int, dy: int) -> tuple[int, int]:
     """Somewhere to start a pan that is not on top of a marker.
 
-    Dragging a pin does not move the map -- found live, when a pan of
-    (225,331) px moved the map by (-2,0) and `DeadPan` stopped the sweep. The
-    candidates are spread across the map area, and whichever is furthest from
-    every pin wins. The chosen point also has to leave room for the gesture
-    without running off the map.
+    Two things absorb a swipe and leave the map still, both found live by
+    `DeadPan`: a marker under the finger, and the venue card overlaying the
+    bottom of the screen. Candidates are spread across the map area above the
+    card, and whichever is furthest from every pin wins. The chosen point
+    also has to leave room for the gesture without running off the map.
     """
     lo_x, hi_x = 80, SCREEN_WIDTH - 80
-    lo_y, hi_y = MAP_TOP + 80, MAP_BOTTOM - 80
+    # Stay above the venue card: it is not map, however much it looks like it.
+    lo_y, hi_y = MAP_TOP + 80, CARD_TOP - 60
     candidates = [
         (x, y)
         for x in range(lo_x, hi_x + 1, 100)
