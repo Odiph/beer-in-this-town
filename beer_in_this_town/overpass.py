@@ -51,6 +51,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from . import PROJECT_URL, __version__
 from .config import STATE_DIR, Settings
 from .geo import haversine_km
 
@@ -72,7 +73,7 @@ QUERY_TIMEOUT_S = 90
 # like the browser whose session it carries -- on untappd.com that is
 # consistency, here it would be a lie told to a volunteer-run endpoint whose
 # usage policy asks who is calling.
-USER_AGENT = "beer-in-this-town/0.1.0 (+https://github.com/Odiph/beer-in-this-town)"
+USER_AGENT = f"beer-in-this-town/{__version__} (+{PROJECT_URL})"
 
 # What counts as a drinking place. `shop=alcohol` earns its place: a bottle
 # shop with Untappd check-ins is exactly the kind of venue `q="<city>"` never
