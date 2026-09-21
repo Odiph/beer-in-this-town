@@ -276,7 +276,7 @@ def test_hints_are_prose_and_stay_out_of_next_actions():
 
 @pytest.mark.unit
 @pytest.mark.parametrize("remedy,promoted", [
-    ("python -m beer_in_this_town enrich --city "Tel Aviv" --json", True),
+    ('python -m beer_in_this_town enrich --city "Tel Aviv" --json', True),
     ("python -m beer_in_this_town status --json", True),
     ("python -m beer_in_this_town bootstrap", False),
     ('python -m beer_in_this_town pin --csv "x" --json', False),
