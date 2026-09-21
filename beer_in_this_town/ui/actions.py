@@ -186,7 +186,7 @@ def verify_accounts(s: Settings, say: Say, mark: Mark) -> dict:
 
 
 def check_selectors(s: Settings, say: Say, mark: Mark) -> dict:
-    """Two requests: is the tool still able to read Untappd's pages?
+    """One request: is the tool still able to read Untappd's venue pages?
 
     Separate from the accounts, and worth its own button, because it fails for
     a completely different reason -- the site changed -- and the fix is a code
@@ -194,14 +194,13 @@ def check_selectors(s: Settings, say: Say, mark: Mark) -> dict:
     """
     from ..cli import cmd_selfcheck
 
-    say("Checking the venue page and the search page.")
-    say("Two paced requests. The gap between them is deliberate — a fixed, "
-        "fast cadence is what makes a client look like a script.", aside=True)
+    say("Checking a known venue page.")
+    say("One paced request. Venue pages are what enrichment reads.",
+        aside=True)
 
-    env = cmd_selfcheck(s, "american-taproom-waterloo", "7480946",
-                        probe_search=True)
+    env = cmd_selfcheck(s, "american-taproom-waterloo", "7480946")
     if env.ok:
-        say("Both pages parsed. Selectors are alive.")
+        say("The page parsed. Selectors are alive.")
     else:
         say(f"Failed: {env.error.message if env.error else 'unknown'}")
         say("This one is not something you can fix in a browser — it means "

@@ -19,7 +19,7 @@ import csv
 import pytest
 
 from beer_in_this_town import cli, places
-from beer_in_this_town.cli import build_parser, cmd_closures, cmd_run
+from beer_in_this_town.cli import build_parser, cmd_closures
 from beer_in_this_town.config import Settings
 from beer_in_this_town.export import write_csv
 from beer_in_this_town.models import Venue, VenueRef
@@ -92,27 +92,12 @@ def test_no_key_fails_loudly_rather_than_no_opping(corpus):
     assert env.error.code == "places_key_missing"
 
 
-@pytest.mark.unit
-def test_run_checks_the_key_before_it_scrapes_anything(monkeypatch):
-    """A hundred requests, then "no key", is the wrong order to find out."""
-    scraped = []
-    monkeypatch.setattr(cli, "collect_venue_refs",
-                        lambda *a, **kw: scraped.append(1) or [])
-
-    env = cmd_run(Settings(), upload=False, force_browser=False,
-                  skip_robots=True, check_closed=True)
-
-    assert env.ok is False
-    assert env.error.code == "places_key_missing"
-    assert scraped == [], "run scraped before checking it could do the job"
-
-
 # --- what it does to the data --------------------------------------------
 
 @pytest.mark.unit
 def test_closed_venues_are_flagged_and_kept(corpus, monkeypatch):
     """Flagging is the capability. Dropping would be a decision, and it is
-    the user's -- `run` uploads to My Maps, so a silent drop is invisible."""
+    the user's -- a silent drop is invisible downstream."""
     def shut(venues, s):
         return [v.with_business_status("CLOSED_PERMANENTLY") if v.ref.venue_id == "2"
                 else v.with_business_status("OPERATIONAL") for v in venues]
@@ -200,11 +185,11 @@ def test_closures_is_a_real_subcommand_with_a_limit(corpus):
 
 
 @pytest.mark.unit
-def test_run_takes_check_closed_and_defaults_to_off(corpus):
-    """Off by default: `run` uploads to My Maps, so a new stage does not get
-    to change what lands there without being asked."""
-    assert build_parser().parse_args(["run"]).check_closed is False
-    assert build_parser().parse_args(["run", "--check-closed"]).check_closed is True
+def test_run_is_gone():
+    """`run` (web search by name) was removed in 0.2.0; the closure check is
+    its own command and nothing else runs it implicitly."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run"])
 
 
 @pytest.mark.unit

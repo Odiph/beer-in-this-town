@@ -1,14 +1,23 @@
-"""Search pagination + venue detail fetching.
+"""Untappd venue pages: fetching them, and finding the page for one name.
 
-The Show More mechanism is the one part of Untappd that cannot be verified
-without hitting the live site, so this module probes rather than assumes: it
-tries a set of offset-style query parameters, checks whether each yields
-genuinely new venue IDs, and falls back to driving a real browser if none work.
+Collecting a *city* from Untappd's web search is gone. That search matches
+venue names, not places -- a Tel Aviv search returned a grill in Encino and a
+kitchen in Miami Beach -- so the city now comes from the app's map (`sweep`).
+
+What stays is what enrichment needs:
+
+- `fetch_venues` / `fetch_venue`: read venue pages through the paced client.
+- `VenueLookup`: look up ONE swept name and return candidate venue refs. The
+  join in `resolve.py` accepts a candidate only when its page's own
+  coordinates land near the swept pin, so a name match alone never decides
+  anything. Search is client-rendered (Algolia), so this drives the
+  browser; anonymous search stops at five results, which is plenty for one
+  name.
 """
 from __future__ import annotations
 
 import logging
-import re
+import random
 from collections.abc import Callable
 from urllib.parse import urlencode
 
@@ -20,127 +29,14 @@ from .http_client import (
     TransportUnavailable,
 )
 from .models import Venue, VenueRef
-from .parsers import (
-    ClientRenderedSearch,
-    ParseError,
-    parse_search_page,
-    parse_venue_stats,
-)
-
-# Shared with the account verifier rather than written twice: two lists
-# of markers for one question is two things to keep in step, and the
-# one that drifts is whichever nobody is looking at.
-from .ui.checks import _UNTAPPD_SIGNED_IN
+from .parsers import parse_search_page, parse_venue_stats
 
 log = logging.getLogger(__name__)
 
-# Candidate pagination params, most likely first.
-PAGINATION_PARAMS = ("offset", "start", "page")
-PAGE_SIZE_GUESS = 25
-
-
-# Anonymous Algolia search returns five results and then swaps Show More for a
-# sign-in wall. Match the container id and the copy: either alone is enough.
-LOGIN_GATE_RE = re.compile(
-    r"algolia-login-gate|please sign in to view more", re.IGNORECASE
-)
-
-
-def signed_in(html: str) -> bool:
-    """Does this page show a signed-in session?
-
-    The difference between "Untappd stopped us" and "there were only 14
-    venues". Both produce a short result set; only one is a problem, and only
-    one has a remedy the user can act on.
-    """
-    return any(marker in html for marker in _UNTAPPD_SIGNED_IN)
-
-
-class PaginationUnsupported(RuntimeError):
-    """None of the HTTP pagination schemes produced new results."""
-
-
-class SearchLoginRequired(RuntimeError):
-    """Search stopped early at Untappd's sign-in wall, not at the last result."""
-
-
-def assert_not_login_gated(
-    refs: list[VenueRef], html: str, target_count: int
-) -> None:
-    """Refuse a result set that a sign-in wall cut short.
-
-    Five venues out of a requested hundred is a stopped run, and returning it
-    quietly writes a five-row CSV, reports ok, and lets every downstream number
-    be wrong by a factor of twenty. A short set is only trustworthy when
-    nothing was blocking the way.
-    """
-    if len(refs) >= target_count or not LOGIN_GATE_RE.search(html):
-        return
-    if signed_in(html):
-        # The gate markup is on the page and we are demonstrably signed in,
-        # so it is not a wall -- Untappd renders it when the results simply
-        # run out. Raising here told a signed-in user to sign in, which is
-        # the worst kind of error: confident, actionable, and impossible to
-        # act on. A narrow query legitimately returns few venues.
-        log.info(
-            "Search returned %d of %d requested. The page carries login-gate "
-            "markup, but this session is signed in -- treating it as the "
-            "query running out of venues rather than a wall.",
-            len(refs), target_count,
-        )
-        return
-    raise SearchLoginRequired(
-        f"Search stopped at {len(refs)} of {target_count} requested venues "
-        f"because Untappd replaced Show More with a sign-in wall. Anonymous "
-        f"search is capped at five results."
-    )
-
-
-def _dedupe_extend(acc: dict[str, VenueRef], refs: list[VenueRef]) -> int:
-    before = len(acc)
-    for r in refs:
-        acc.setdefault(r.venue_id, r)
-    return len(acc) - before
-
-
-def search_via_http(client: PoliteClient, s: Settings) -> list[VenueRef]:
-    """Paginate the search endpoint over plain HTTP."""
-    base_params = {"q": s.query, "type": "venues"}
-    first_html = client.get(SEARCH_URL, params=base_params)
-    acc: dict[str, VenueRef] = {}
-    _dedupe_extend(acc, parse_search_page(first_html))
-    log.info("Search page 1: %d venues", len(acc))
-
-    if len(acc) >= s.target_count:
-        return list(acc.values())[: s.target_count]
-
-    page_size = len(acc) or PAGE_SIZE_GUESS
-
-    for param in PAGINATION_PARAMS:
-        probe_value = page_size if param != "page" else 2
-        probe = client.get(
-            SEARCH_URL, params={**base_params, param: probe_value}, xhr=True
-        )
-        gained = _dedupe_extend(acc, parse_search_page(probe, strict=False))
-        if gained == 0:
-            log.debug("Pagination param %r produced no new venues; trying next", param)
-            continue
-
-        log.info("Pagination via %r works (+%d venues)", param, gained)
-        step = 2 if param == "page" else 2 * page_size
-        stalls = 0
-        while len(acc) < s.target_count and stalls < 2:
-            html = client.get(SEARCH_URL, params={**base_params, param: step}, xhr=True)
-            gained = _dedupe_extend(acc, parse_search_page(html, strict=False))
-            log.info("offset %s=%s -> %d total venues", param, step, len(acc))
-            stalls = stalls + 1 if gained == 0 else 0
-            step += 1 if param == "page" else page_size
-        return list(acc.values())[: s.target_count]
-
-    raise PaginationUnsupported(
-        "No offset-style query parameter yielded new search results. "
-        "Falling back to browser-driven Show More."
-    )
+# How many search cards one name lookup keeps. `resolve` fetches at most two
+# pages per name anyway; five is what an anonymous search returns.
+LOOKUP_RESULTS = 5
+RESULTS_TIMEOUT_MS = 20_000
 
 
 def search_url_for(query: str) -> str:
@@ -149,95 +45,83 @@ def search_url_for(query: str) -> str:
     urlencode, not an f-string. Interpolating the query raw meant an `&` in it
     started a new parameter and a `#` turned the rest into a fragment -- so
     "rock & roll" searched for "rock ", returned results, and gave no sign
-    anything was wrong. The HTTP path has always passed `params=`; this is the
-    path that actually runs now that search is client-rendered.
+    anything was wrong.
     """
     return f"{SEARCH_URL}?{urlencode({'q': query, 'type': 'venues'})}"
 
 
-def search_via_browser(s: Settings) -> list[VenueRef]:
-    """Fallback: drive real Chrome and click Show More until we have enough."""
-    from playwright.sync_api import TimeoutError as PWTimeout
-    from playwright.sync_api import sync_playwright
+class VenueLookup:
+    """Name -> candidate venue refs, through one reused browser session.
 
-    url = search_url_for(s.query)
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir=str(s.profile_dir),
-            channel="chrome",
-            headless=False,  # headless Chrome is far more likely to be challenged
-            user_agent=s.user_agent,
-            viewport={"width": 1280, "height": 1000},
-        )
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(url, wait_until="domcontentloaded")
+    Use as a context manager; the instance is the `search` callable
+    `resolve.enrich` takes. One browser for the whole pass rather than one
+    per name, and a jittered pause between lookups at the same pacing as
+    every other read -- a fixed, fast cadence is what reads as a script.
 
-        # Results are rendered client-side (Algolia injects them into
-        # #algolia-hits), so they do not exist at domcontentloaded. Counting
-        # straight away sees zero items and concludes the page is empty.
+    `page` may be injected (anything with goto / wait_for_selector /
+    wait_for_timeout / content) so the parsing and pacing are testable
+    without a browser.
+    """
+
+    def __init__(self, s: Settings, results: int = LOOKUP_RESULTS,
+                 page=None, rng: random.Random | None = None) -> None:
+        self.s = s
+        self.results = results
+        self._page = page
+        self._rng = rng or random.Random()
+        self._pw = None
+        self._ctx = None
+        self._lookups = 0
+
+    def __enter__(self) -> VenueLookup:
+        if self._page is None:
+            from playwright.sync_api import sync_playwright
+
+            self._pw = sync_playwright().start()
+            self._ctx = self._pw.chromium.launch_persistent_context(
+                user_data_dir=str(self.s.profile_dir),
+                channel="chrome",
+                headless=False,  # headless Chrome is far more likely to be challenged
+                user_agent=self.s.user_agent,
+                viewport={"width": 1280, "height": 1000},
+            )
+            self._page = (self._ctx.pages[0] if self._ctx.pages
+                          else self._ctx.new_page())
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._ctx is not None:
+            self._ctx.close()
+        if self._pw is not None:
+            self._pw.stop()
+        self._ctx = self._pw = None
+
+    def _pause(self) -> None:
+        gap = self._rng.uniform(self.s.min_delay_s, self.s.max_delay_s)
+        self._page.wait_for_timeout(int(gap * 1000))
+
+    def __call__(self, name: str) -> list[VenueRef]:
+        if self._page is None:
+            raise RuntimeError("VenueLookup must be used as a context manager.")
+        if self._lookups:
+            self._pause()
+        self._lookups += 1
+        self._page.goto(search_url_for(name), wait_until="domcontentloaded")
+        # Results are rendered client-side, so they do not exist at
+        # domcontentloaded. A name with no match never renders any, which is
+        # an answer ("no results"), not an error.
         try:
-            page.wait_for_selector(".beer-item", timeout=30_000)
-        except PWTimeout:
-            log.warning(
-                "No .beer-item appeared within 30s -- the query may genuinely "
-                "have no results, or the search markup changed again."
-            )
-
-        # Show More has carried several class names over the years; match on the
-        # accessible name, which is stable.
-        more = page.get_by_role("link", name="Show More").or_(
-            page.get_by_role("button", name="Show More")
-        )
-        for _ in range(40):  # hard ceiling: 40 clicks ~= 1000 venues
-            count = page.locator(".beer-item").count()
-            if count >= s.target_count:
-                break
-            if more.count() == 0 or not more.first.is_visible():
-                log.info("No Show More control left; stopping at %d venues", count)
-                break
-            more.first.click()
-            # Wait for the item count to actually grow -- the auto-waiting that
-            # synthetic CDP clicks lack.
-            page.wait_for_function(
-                "n => document.querySelectorAll('.beer-item').length > n",
-                arg=count, timeout=15_000,
-            )
-            page.wait_for_timeout(int(s.min_delay_s * 1000))  # stay polite
-
-        html = page.content()
-        ctx.close()
-
-    refs = parse_search_page(html)
-    log.info("Browser search collected %d venues", len(refs))
-    assert_not_login_gated(refs, html, s.target_count)
-    return refs[: s.target_count]
+            self._page.wait_for_selector(".beer-item",
+                                         timeout=RESULTS_TIMEOUT_MS)
+        except Exception:  # noqa: BLE001 -- playwright's TimeoutError
+            log.info("No search results rendered for %r.", name)
+        refs = parse_search_page(self._page.content(), strict=False)
+        return refs[: self.results]
 
 
-def collect_venue_refs(
-    client: PoliteClient, s: Settings, force_browser: bool = False
-) -> list[VenueRef]:
-    if force_browser:
-        return search_via_browser(s)
-    try:
-        return search_via_http(client, s)
-    except PaginationUnsupported as exc:
-        log.warning("%s", exc)
-        return search_via_browser(s)
-    except ClientRenderedSearch as exc:
-        # The routine case since Untappd moved search to Algolia: the HTTP
-        # response is the container and nothing else. Expected, so it is not a
-        # warning -- it is what the browser path exists for.
-        log.info("%s Falling back to the browser path.", exc)
-        return search_via_browser(s)
-    except ParseError as exc:
-        # Something else about the search page stopped parsing. The browser
-        # re-parses with the same strict selectors, so this is an attempt, not
-        # a workaround; if the markup really changed it fails there too.
-        log.warning(
-            "Search page did not parse (%s). Trying the browser path, which "
-            "applies the same strict selectors.", exc,
-        )
-        return search_via_browser(s)
+def fetch_venue(client: PoliteClient, ref: VenueRef) -> Venue:
+    """One venue page, parsed. Raises on failure; `resolve` records it."""
+    return parse_venue_stats(client.get(ref.url), ref)
 
 
 def fetch_venues(
@@ -252,18 +136,12 @@ def fetch_venues(
         if progress:
             progress(i, len(refs), ref)
         try:
-            html = client.get(ref.url)
-            out.append(parse_venue_stats(html, ref))
+            out.append(fetch_venue(client, ref))
         except (RateLimitTripped, BudgetExceeded, TransportUnavailable):
             # These are deliberate stops, not per-venue failures. Swallowing
             # them meant a run that hit a 429 wall kept firing one real request
             # per remaining venue into an active rate-limit -- the exact
             # behaviour PoliteClient exists to prevent.
-            #
-            # TransportUnavailable belongs here for the same reason and was
-            # missed: it is a plain RuntimeError, so the broad handler below
-            # caught it and the trip added to the client never reached the
-            # caller. The run still slept its way through every venue.
             log.error("Rate limit reached at venue %d/%d -- aborting the run.",
                       i, len(refs))
             raise
