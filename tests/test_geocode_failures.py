@@ -96,3 +96,29 @@ def test_nothing_to_do_is_never_an_error(offline):
     """No work means no verdict about the geocoder's health."""
     located = _venue("1", "Ghost Whale").with_coords(51.5, -0.1, "embedded")
     assert geocode_missing([located], Settings()) == [located]
+
+
+@pytest.mark.unit
+def test_nominatim_is_paced_even_when_the_lookup_fails(tmp_path, monkeypatch):
+    """The pause sat after the call inside the try, so a 429 skipped it.
+
+    Consecutive failures then hit OSM back-to-back -- at exactly the moment
+    their usage policy matters most, and the comment citing that policy was
+    right above the line that was being skipped.
+    """
+    slept: list[float] = []
+    monkeypatch.setattr(geocode, "GEOCACHE", tmp_path / "geocache.json")
+    monkeypatch.setattr(geocode.time, "sleep", slept.append)
+    monkeypatch.setattr(geocode.httpx, "Client", lambda **kw: _NullClient())
+
+    calls = {"n": 0}
+
+    def sometimes(client, query, email):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TimeoutError("slow")
+        return (51.5, -0.1)
+
+    monkeypatch.setattr(geocode, "_nominatim", sometimes)
+    geocode_missing([_venue("1", "Bad"), _venue("2", "Good")], Settings())
+    assert len(slept) == 2, "both lookups must be paced, not just the one that worked"

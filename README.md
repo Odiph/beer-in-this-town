@@ -8,12 +8,24 @@
 
 ![demo](docs/demo.gif)
 
-Scrapes Untappd venue listings for a city, pulls each venue's **Venue Stats**
-(total / unique / monthly check-ins), and exports a CSV plus a KML you can
-import into Google Maps.
+Reads Untappd's public venue listings for a city, collects each venue's
+**Venue Stats** (total / unique / monthly check-ins), and exports a CSV plus a
+map file you can import into Google My Maps, Organic Maps or OsmAnd.
 
 Designed to be **driven by a coding agent**: every command speaks JSON, reports
 its own state, and tells you what to run next. It works fine as a plain CLI too.
+
+`run --no-upload` reads public pages, writes files to `data/` and touches no
+account of yours — and with `--format gpx` you get pins on your everyday map
+without a Google account being involved at all.
+
+Note the flag: **`run` uploads to Google My Maps by default**, which drives a
+real Chrome session on your Google profile and creates a new map each time.
+That is a supported bulk import rather than anything Google's terms object to,
+but it is not nothing, so pass `--no-upload` if you only want the files. The
+two commands that write into a saved *list* — `pin` and `notes` — are separate,
+opt-in, never run on their own, and spelled out in
+[Where the lines are](#where-the-lines-are).
 
 ```bash
 beertown status --json      # where am I, what is next
@@ -60,7 +72,7 @@ the workarounds ranked.
 | | Required for | Notes |
 |---|---|---|
 | **Python 3.11 or 3.12** | everything | CI tests both, on Linux and Windows. |
-| **Google Chrome or Chromium** | `bootstrap`, `pin`, `notes` | Found automatically on `PATH`, or at the standard Windows / macOS / Linux install paths. `run` scrapes over plain HTTP, but falls back to driving Chrome if Untappd's pagination changes. |
+| **Google Chrome or Chromium** | `bootstrap`, `pin`, `notes` | Found automatically on `PATH`, or at the standard Windows / macOS / Linux install paths. `run` reads over plain HTTP, and falls back to driving Chrome when Untappd renders results client-side. |
 | **An Untappd account** | optional | Everything public works signed out; without a session the **YOU** column is empty and `bootstrap` warns you. |
 | **A Google account** | `pin`, `notes` only | You also create the saved list by hand first — these commands never create one. |
 
@@ -213,6 +225,35 @@ The date tracks **when the data was captured**, not when the note was written,
 so re-running does not rewrite every note with a new date. A note that already
 matches is skipped.
 
+## Checking the venue filters
+
+Untappd's listings include things you probably do not want on a beer map: a
+café someone logged a bottle in, a bar that closed in 2019 but kept its
+check-in history, occasionally somebody's flat.
+
+Judging those needs thresholds, and a threshold nobody has checked is a guess
+with a number attached. So the rules live in `classify.py`, they are **not**
+applied to your data, and two commands exist to find out how right they are
+before they ever are:
+
+```bash
+beertown label --csv data/venues_singapore_2026-09-20.csv --json
+# fill in the two columns, then:
+beertown score --labels data/labels_venues_singapore_2026-09-20.csv --json
+```
+
+`label` samples a fixed quota from each bucket rather than sampling at random,
+because the cases worth measuring are the rare ones — a random hundred rows
+would contain two or three of them. `score` divides that back out, so the rates
+it reports still describe the whole dataset.
+
+It reports the two kinds of mistake separately, because they do not cost the
+same: a private address kept on the map is a different problem from one good
+bar dropped that you add back from a visible list. Both come with the actual
+rows attached, grouped, so you can read the failures rather than count them.
+
+About 125 rows, two questions each, once.
+
 ## Where the lines are
 
 This project touches two services that both say no to some of it. Rather than
@@ -220,7 +261,7 @@ scatter that across a dozen paragraphs, here it is in one place.
 
 | Surface | Status |
 |---|---|
-| Scraping Untappd (`run`, `selfcheck`) | **Against Untappd's ToS**, which prohibits automated access. |
+| Reading Untappd venue pages (`run`, `selfcheck`) | **Against Untappd's ToS**, which prohibits automated access. |
 | KML → Google My Maps (`run`) | **Supported.** A documented bulk-import feature. No line crossed. |
 | Driving the Maps UI (`pin`, `notes`) | **Against Google's ToS** — "do not access the Services through automated means". |
 | GPX / GeoJSON → Organic Maps, OsmAnd (`run`) | **Supported.** A documented import, on your everyday map, with no account involved. |
@@ -254,9 +295,11 @@ legal advice. You are responsible for your own use of it.
 | `doctor` | Dependencies, session, geocoder | no |
 | `bootstrap` | One-time login (opens a real Chrome) | reads |
 | `selfcheck` | Two requests: are the venue *and search* selectors alive | no |
-| `run` | Scrape → CSV + KML + diff | no |
+| `run` | Collect → CSV + map files + diff | no |
 | `pin` | Save into a Google Maps list | **writes** |
 | `notes` | Write stats into each place's note | **writes** |
+| `label` | Emit a sample to check the venue filters by hand | no |
+| `score` | Report how accurate those filters actually are | no |
 
 ## Agent-driven use
 
@@ -287,8 +330,13 @@ Claude Code skill.
 ## Politeness and failing loudly
 
 Single connection, no concurrency, 2.0–4.5s jittered delay, 600 requests/hour
-cap, 12h disk cache, and a deliberate abort after three consecutive throttle
-responses. ~100 venues ≈ 6 minutes. None of which makes scraping permitted —
+cap **persisted to disk**, 12h disk cache, and a deliberate abort after three
+consecutive throttle responses or three consecutive transport failures.
+
+The pacing numbers have floors: they can be raised but not lowered, because a
+guardrail you can switch off with a flag is a suggestion. The hourly ceiling
+and the circuit breaker are persisted for the same reason the write budget is
+— restarting the process must not hand back a fresh allowance. ~100 venues ≈ 6 minutes. None of which makes automated access permitted —
 see [Where the lines are](#where-the-lines-are).
 
 Each of those is a defence rather than a preference, and every one is
@@ -331,7 +379,8 @@ missing, then annotates whatever is already pinned, and both halves trim
 themselves to the remaining budget. Run it nightly and the backlog drains on
 its own; once everything is done it exits in seconds having done nothing.
 
-`run_weekly.ps1` re-scrapes on a weekly timer, so the numbers stay current.
+`run_weekly.ps1` refreshes the data on a weekly timer, so the numbers stay
+current.
 
 **[docs/scheduling.md](docs/scheduling.md)** has both, for Windows Task
 Scheduler and for cron.

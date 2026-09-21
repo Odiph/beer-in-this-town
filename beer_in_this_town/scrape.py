@@ -12,7 +12,12 @@ import re
 from collections.abc import Callable
 
 from .config import SEARCH_URL, Settings
-from .http_client import BudgetExceeded, PoliteClient, RateLimitTripped
+from .http_client import (
+    BudgetExceeded,
+    PoliteClient,
+    RateLimitTripped,
+    TransportUnavailable,
+)
 from .models import Venue, VenueRef
 from .parsers import (
     ClientRenderedSearch,
@@ -208,11 +213,16 @@ def fetch_venues(
         try:
             html = client.get(ref.url)
             out.append(parse_venue_stats(html, ref))
-        except (RateLimitTripped, BudgetExceeded):
+        except (RateLimitTripped, BudgetExceeded, TransportUnavailable):
             # These are deliberate stops, not per-venue failures. Swallowing
             # them meant a run that hit a 429 wall kept firing one real request
             # per remaining venue into an active rate-limit -- the exact
             # behaviour PoliteClient exists to prevent.
+            #
+            # TransportUnavailable belongs here for the same reason and was
+            # missed: it is a plain RuntimeError, so the broad handler below
+            # caught it and the trip added to the client never reached the
+            # caller. The run still slept its way through every venue.
             log.error("Rate limit reached at venue %d/%d -- aborting the run.",
                       i, len(refs))
             raise
