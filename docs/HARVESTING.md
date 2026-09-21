@@ -391,8 +391,26 @@ tuning problem rather than a structural one.
    coverage report claims. `centre_from_known_points` solves it from pins
    whose coordinates are known.
 
-   Still open: how to get those known points on the *first* sweep of a new
-   city, before any venue has been scraped.
+   **Answered: the device GPS is the calibration point.** `dumpsys location`
+   reports the emulator's fix, and the map's `Reset location` control
+   recentres on it. Measured after doing so: the solved centre lands **24 m**
+   from the GPS, and using the GPS *directly* as the centre gives venue
+   coordinates accurate to **32 m median, 108 m worst**. No corpus, no
+   geocoder, no network.
+
+   Getting there required fixing a systematic error: the camera does **not**
+   look at the geometric centre of the map view. Two independent measurements
+   (GPS after `Reset location`, and a city search against the geocoded
+   centroid) were both off by ~1060-1085 m in the same direction. That is
+   ~104 px at 10.2 m/px. Moving the assumed centre *down* doubled the error
+   to 2127 m, which settled the sign: the camera looks ~104 px **above** the
+   middle, at `MAP_CENTRE_Y = 750`.
+
+   Three paths were researched. The app exposes **no** coordinates in its
+   dump (only `My Location` and `Reset location` controls, and the blue dot
+   is not a node), so that path is dead. Geocoding harvested addresses would
+   work but needs a network round trip per venue. The GPS path needs
+   neither.
 3. **City name → which cells.** Currently a `Cell` is passed in by hand. What
    decides the bounding box for "Tel Aviv", and the starting zoom?
 4. **The coordinate transform** is fitted at one zoom in one city.

@@ -22,6 +22,7 @@ import pytest
 
 from beer_in_this_town.app_geo import (
     CITY_ZOOM_M_PER_PX,
+    MAP_CENTRE_Y,
     Scale,
     cell_for_viewport,
     scale_from_known_points,
@@ -61,9 +62,19 @@ def test_refitting_needs_two_separated_points():
 
 # --- pixels to ground -----------------------------------------------------
 
-def test_the_centre_pixel_is_the_centre_of_the_map():
+def test_the_camera_centre_is_not_the_geometric_centre_of_the_view():
+    """Measured twice independently: solving the centre from known pins put
+    it 1060 m south of the device GPS after `Reset location`, and 1085 m
+    south of the geocoded centroid after a city search. Same size, same
+    direction -- a property of the view, not of either reference.
+
+    1060 m at 10.2 m/px is ~104 px. Moving the centre *down* doubled the
+    error to 2127 m, which confirmed the magnitude and settled the sign: the
+    camera looks ~104 px **above** the middle of the view bounds. With
+    y=750 the solved centre lands 24 m from the device GPS."""
+    assert MAP_CENTRE_Y < (192 + 1516) / 2
     scale = Scale(m_per_px=10.2)
-    lat, lng = to_latlng(Pin("x", 450, 854), TLV, scale)
+    lat, lng = to_latlng(Pin("x", 450, MAP_CENTRE_Y), TLV, scale)
     assert lat == pytest.approx(TLV[0], abs=1e-6)
     assert lng == pytest.approx(TLV[1], abs=1e-6)
 
@@ -72,15 +83,15 @@ def test_moving_right_increases_longitude_and_down_decreases_latitude():
     """Screen y grows downward while latitude grows northward. Getting this
     backwards puts every venue in the wrong hemisphere of the city."""
     scale = Scale(m_per_px=10.2)
-    east = to_latlng(Pin("e", 550, 854), TLV, scale)
-    south = to_latlng(Pin("s", 450, 954), TLV, scale)
+    east = to_latlng(Pin("e", 550, MAP_CENTRE_Y), TLV, scale)
+    south = to_latlng(Pin("s", 450, MAP_CENTRE_Y + 100), TLV, scale)
     assert east[1] > TLV[1]
     assert south[0] < TLV[0]
 
 
 def test_a_hundred_pixels_is_about_a_kilometre():
     scale = Scale(m_per_px=10.2)
-    lat, _lng = to_latlng(Pin("s", 450, 854 + 100), TLV, scale)
+    lat, _lng = to_latlng(Pin("s", 450, MAP_CENTRE_Y + 100), TLV, scale)
     metres = (TLV[0] - lat) * 110_540
     assert metres == pytest.approx(1020, abs=60)
 

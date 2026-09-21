@@ -43,6 +43,10 @@ _M_PER_DEG_LAT = 110_540.0
 _M_PER_DEG_LNG_EQUATOR = 111_320.0
 
 
+def _map_centre() -> tuple[float, float]:
+    return SCREEN_WIDTH / 2, MAP_CENTRE_Y
+
+
 @dataclass(frozen=True)
 class Scale:
     """How much ground one screen pixel covers, at one zoom level."""
@@ -57,8 +61,16 @@ class Scale:
         return pixels * self.m_per_px / metres
 
 
-def _map_centre() -> tuple[float, float]:
-    return SCREEN_WIDTH / 2, (MAP_TOP + MAP_BOTTOM) / 2
+# The camera's centre is NOT the geometric centre of the map view.
+#
+# Measured twice, independently: solving the centre from known pins put it
+# 1060 m south of the device GPS after `Reset location`, and 1085 m south of
+# the geocoded centroid after a city search. Same size, same direction, so it
+# is a property of the view and not of either reference. 1060 m at 10.2 m/px
+# is ~104 px. Setting it *below* the geometric middle doubled the error to
+# 2127 m, which confirmed the magnitude and inverted the sign: the camera
+# looks ~104 px *above* the middle of the view bounds, at y ~= 750.
+MAP_CENTRE_Y = 750
 
 
 def to_latlng(pin: Pin, centre: tuple[float, float], scale: Scale
