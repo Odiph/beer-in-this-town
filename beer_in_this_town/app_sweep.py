@@ -62,7 +62,7 @@ from .app_map import (
     pins_in,
     require_map_screen,
 )
-from .config import STATE_DIR, scope_slug
+from .config import STATE_DIR, city_slug
 
 if TYPE_CHECKING:
     # `app_geo` imports this module for `Cell` and the screen geometry, so a
@@ -352,7 +352,7 @@ def journal_path(city: str) -> Path:
     before it: an unscoped journal would let a Haifa sweep resume into a Tel
     Aviv corpus.
     """
-    return STATE_DIR / f"swept_{scope_slug(city)}.json"
+    return STATE_DIR / f"swept_{city_slug(city)}.json"
 
 
 def load_journal(city: str) -> SweepResult:
@@ -531,15 +531,19 @@ def _harvest_screen(device: Device) -> list[Pin]:
 
 
 def sweep(device: Device, cell: Cell, max_depth: int = 3,
-          min_depth: int = 0,
+          min_depth: int = 1,
           verify_pans: bool = False, city: str | None = None,
-          filter_drinking: bool = False,
+          filter_drinking: bool = True,
           camera: Camera | None = None,
           settle_min_s: float = SETTLE_MIN_S,
           settle_max_s: float = SETTLE_MAX_S,
           _depth: int = 0,
           _result: SweepResult | None = None) -> SweepResult:
     """Harvest `cell`, subdividing wherever the result set was truncated.
+
+    The defaults are the measured ones (docs/HARVESTING.md): one forced
+    split, never deeper than 3, and the drinking-category filter on. A caller
+    that wants the raw, unfiltered map has to say so.
 
     `max_depth` bounds the recursion. A dense centre can stay at the cap
     however far it is divided, and the sweep must stop and *say* it stopped

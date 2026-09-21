@@ -32,7 +32,11 @@ def test_constants_resolved_at_import_are_redirected(module, attr, sandbox_state
 @pytest.mark.unit
 def test_the_directories_themselves_are_redirected(sandbox_state):
     assert state.STATE_DIR.is_relative_to(sandbox_state)
-    assert state.DATA_DIR.is_relative_to(sandbox_state)
+    from beer_in_this_town import config
+
+    assert config.DATA_DIR.is_relative_to(sandbox_state)
+    assert config.stage_path("london", "1_sweep.csv").is_relative_to(
+        sandbox_state)
 
 
 @pytest.mark.unit

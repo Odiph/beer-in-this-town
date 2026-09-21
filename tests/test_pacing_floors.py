@@ -37,16 +37,21 @@ def test_write_pacing_can_still_be_raised(cmd):
 
 
 @pytest.mark.unit
-def test_read_pacing_cannot_be_lowered_below_the_default():
-    with pytest.raises(SystemExit):
-        _parse(["run", "--delay", "0.05"])
+def test_the_read_floor_refuses_a_lower_delay():
+    """`--delay` left with `run`; the floor it used is what any read-side
+    pacing flag must go through, so it is tested directly."""
+    import argparse
 
+    from beer_in_this_town.cli import at_least
+    from beer_in_this_town.config import Settings
 
-@pytest.mark.unit
-def test_a_zero_delay_is_rejected_rather_than_quietly_ignored():
-    """`--delay 0` was ignored because 0 is falsy -- it looked accepted."""
-    with pytest.raises(SystemExit):
-        _parse(["run", "--delay", "0"])
+    floor = Settings().min_delay_s
+    parse = at_least(floor, "--delay")
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse(str(floor / 2))
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse("0")          # 0 used to be ignored because it is falsy
+    assert parse(str(floor * 2)) == floor * 2
 
 
 @pytest.mark.unit

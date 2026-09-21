@@ -45,7 +45,7 @@ from .app_sweep import (
     search_city,
     sweep,
 )
-from .config import DATA_DIR, Settings
+from .config import SWEEP_CSV, Settings, cli_arg, stage_path
 from .export import write_csv, write_geojson, write_gpx, write_kml
 from .geo import haversine_km
 from .geocode import geocode_place
@@ -176,11 +176,18 @@ def census(device: Device, city: str, s: Settings, *, here: bool = False,
                   centre_source=source, osm_radius_km=radius)
 
 
-def write_census(c: Census, city: str, stamp: str, title: str,
-                 formats: tuple[str, ...]) -> tuple[Path, dict[str, str]]:
-    """The CSV always; map files only when asked for."""
-    base = DATA_DIR / f"venues_{city}_{stamp}_sweep"
-    csv_path = write_csv(c.venues, base.with_suffix(".csv"))
+def write_census(c: Census, city: str, title: str,
+                 formats: tuple[str, ...] = ()) -> tuple[Path, dict[str, str]]:
+    """data/<slug>/1_sweep.csv always; 1_sweep.<fmt> only when asked for.
+
+    A re-run overwrites: the stage file is the sweep's current answer for the
+    city, and the journal (not this file) is what carries a sweep across an
+    interruption.
+    """
+    csv_target = stage_path(city, SWEEP_CSV)
+    csv_target.parent.mkdir(parents=True, exist_ok=True)
+    csv_path = write_csv(c.venues, csv_target)
+    base = csv_target.with_suffix("")
     written: dict[str, str] = {}
     if "kml" in formats:
         written["kml"] = str(write_kml(c.venues, base.with_suffix(".kml"), title))
@@ -240,12 +247,14 @@ def census_envelope(c: Census, city: str, list_name: str, csv_path: Path,
             "journal": str(journal_path(city)),
         },
         warnings=warnings,
-        next_actions=[],
+        next_actions=[
+            f'python -m beer_in_this_town enrich --city {cli_arg(city)} --json'],
         hints=[
-            f'To put these on Google Maps, a human can save them into a saved '
-            f'list they created by hand: pin --csv "{csv_path}" --list '
-            f'"{list_name}" --limit 3 --json, then the rest without --limit. '
-            f"It writes to the Google account and automates a UI Google's "
-            f"terms do not permit, so it is never started unasked.",
+            "Next the swept names are matched to their Untappd venue pages "
+            "(enrich), filtered to beer venues (filter) and exported (export). "
+            "None of them touches an account.",
+            *([f'The results are meant for the Google Maps list "{list_name}". '
+               f"Create it by hand first (Saved -> New list)."]
+              if list_name else []),
         ],
     )

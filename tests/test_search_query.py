@@ -1,52 +1,8 @@
-"""The search URL has to carry the query the user actually typed.
-
-The browser path built it with an f-string, so a query containing `&` started
-a new parameter and one containing `#` turned the rest into a fragment. Both
-searched for something shorter than what was asked for, returned results, and
-gave no sign anything was wrong -- the failure mode this project keeps calling
-out: confidently wrong beats absent, in the wrong direction.
-
-That path is not a corner case. Untappd moved search to Algolia, so the HTTP
-path raises `ClientRenderedSearch` and the browser path is what runs.
-
-No network.
+"""What the wizard's city step tells a person. No network.
 """
 from __future__ import annotations
 
-from urllib.parse import parse_qs, urlparse
-
 import pytest
-
-from beer_in_this_town.config import SEARCH_URL
-from beer_in_this_town.scrape import search_url_for
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("query", [
-    "london",
-    "new york",
-    "rock & roll",          # the & used to start a new parameter
-    "café #1",         # the # used to start a fragment
-    "st. john's",
-    "são paulo",
-    "a+b",                  # + is a space once encoded
-    "100% brewing",         # a bare % is not a valid escape
-])
-def test_the_query_survives_the_url(query):
-    url = search_url_for(query)
-    parsed = urlparse(url)
-    params = parse_qs(parsed.query)
-
-    assert parsed.fragment == "", "part of the query became a fragment"
-    assert params["q"] == [query], "the query changed on its way into the URL"
-    assert params["type"] == ["venues"]
-
-
-@pytest.mark.unit
-def test_it_is_still_untappds_venue_search():
-    url = search_url_for("london")
-    assert url.startswith(SEARCH_URL + "?")
-
 
 # --- what the wizard tells a person about the query ----------------------
 
