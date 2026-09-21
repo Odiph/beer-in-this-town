@@ -41,6 +41,16 @@ class ParseError(RuntimeError):
     """The page did not look the way we require it to look."""
 
 
+class StatsLoginRequired(ParseError):
+    """The venue page hides its stats behind "Log In to view Venue Stats".
+
+    Measured 2026-09-22 against a signed-out session: verified venues still
+    show their numbers, every other page shows the login prompt in place of
+    them. That is an account problem, not a layout change, and treating it as
+    one reported most of a city as `fetch_failed` inside an `ok: true` run.
+    """
+
+
 def dump_debug(name: str, html: str) -> None:
     DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     path = DEBUG_DIR / f"{name}.html"
@@ -88,6 +98,13 @@ def parse_count(text: str) -> int | None:
 
 def parse_venue_stats(html: str, ref: VenueRef) -> Venue:
     soup = BeautifulSoup(html, "lxml")
+
+    gate = soup.select_one('.stats a[href*="/login"]')
+    if gate is not None and "view venue stats" in soup.select_one(
+            ".stats").get_text(" ", strip=True).lower():
+        raise StatsLoginRequired(
+            f"venue {ref.venue_id}: Untappd shows its stats only to a "
+            f"signed-in user")
 
     try:
         stats_block = require_one(soup, ".stats", ctx=f"venue:{ref.venue_id}")
