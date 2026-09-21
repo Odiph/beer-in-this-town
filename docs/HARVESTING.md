@@ -375,8 +375,24 @@ tuning problem rather than a structural one.
 
 1. **Tune the filter pass.** ~90 s per cell is mostly settle time. The panel
    is local (no network), so its settles can be far shorter than a search's.
-2. **City name → which cells.** A `Cell` is currently a hand-written bounding
-   box. What decides the box for "Tel Aviv", and the starting zoom?
+2. ~~City name → which cells.~~ **Mostly answered.** The app does the
+   city→viewport step: searching a city centres and zooms to it, and that
+   viewport *is* the root cell. `app_geo.cell_for_viewport` turns it into a
+   real rectangle, so `Cell.quarters()` now means something on the ground
+   rather than in pixels.
+
+   **But the centre must be derived, never assumed.** Measured: after
+   searching `"Tel Aviv"`, every known pin sat an almost identical **1085 m**
+   from where the geocoded centroid predicted, while the scale refitted to
+   exactly the expected 10.20 m/px. The app centres on its own idea of the
+   place, not on Nominatim's. A constant offset is the kindest error
+   available -- invisible in the venue list, consistent enough to look
+   correct, and it would put every cell boundary a kilometre from where the
+   coverage report claims. `centre_from_known_points` solves it from pins
+   whose coordinates are known.
+
+   Still open: how to get those known points on the *first* sweep of a new
+   city, before any venue has been scraped.
 3. **City name → which cells.** Currently a `Cell` is passed in by hand. What
    decides the bounding box for "Tel Aviv", and the starting zoom?
 4. **The coordinate transform** is fitted at one zoom in one city.
