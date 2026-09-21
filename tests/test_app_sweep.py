@@ -397,3 +397,31 @@ def test_an_unreadable_journal_starts_fresh_rather_than_crashing(tmp_path, monke
     monkeypatch.setattr(app_sweep, "STATE_DIR", tmp_path)
     app_sweep.journal_path("Tel Aviv").write_text("{ broken", encoding="utf-8")
     assert app_sweep.load_journal("Tel Aviv").venues == []
+
+
+def test_a_filtered_sweep_refilters_every_cell():
+    """`Refresh search` clears the category filter -- measured: 9 categories
+    checked before it, all 17 after. A sweep that filtered once and then
+    refreshed per cell came back entirely unfiltered, with parks and hotels
+    in the output and zero new venues."""
+    from beer_in_this_town import app_sweep
+
+    panel = ("<?xml version='1.0'?><hierarchy>"
+             '<node class="android.widget.TextView" text="Filter by Category"'
+             ' bounds="[132,58][370,99]"/>'
+             '<node class="android.widget.CheckBox" content-desc="Bar, 6, "'
+             ' checked="true" bounds="[0,254][900,336]"/></hierarchy>')
+    # One panel dump per pass: the driver re-reads after scrolling.
+    dev = FakeDevice([panel, panel, dump_with(["Lauter"])])
+    sweep(dev, CELL, settle_max_s=0, filter_drinking=True)
+    taps = [a for a in dev.actions if a.startswith("tap")]
+    assert f"tap({app_sweep.FILTERS_BUTTON[0]},{app_sweep.FILTERS_BUTTON[1]})" in taps
+
+
+def test_an_unfiltered_sweep_still_just_refreshes():
+    from beer_in_this_town import app_sweep
+
+    dev = FakeDevice([dump_with(["Lauter"])])
+    sweep(dev, CELL, settle_max_s=0)
+    taps = [a for a in dev.actions if a.startswith("tap")]
+    assert taps == [f"tap({app_sweep.REFRESH_BUTTON[0]},{app_sweep.REFRESH_BUTTON[1]})"]
