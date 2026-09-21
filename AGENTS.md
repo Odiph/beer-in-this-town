@@ -74,6 +74,10 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `labels_unusable` | An answer is outside the accepted vocabulary, or the sheet lost its `_stratum`/`_stratum_size` columns | The message names the row and cell. Answers are `y` / `n` / `?`; a blank means unanswered. |
 | `notes_failed` | The notes pass failed | Re-run; progress resumes. |
 | `interrupted` | Ctrl-C | Re-run the same command; progress is journalled. |
+| `overpass_unavailable` | OpenStreetMap's Overpass endpoint is throttled, down or unreachable | Not per-venue. Wait and re-run, or set `OVERPASS_URL` to a mirror. Overpass is volunteer-run and sheds load under pressure; a 504 is normal. Nothing was written. |
+| `adb_unavailable` | The emulator could not be reached, or `adb` returned nothing usable | Check the emulator is running and `adb devices` lists it. Never read an empty result as an empty city. |
+| `app_screen_unexpected` | The Untappd app was not showing the screen the step needed | Open the app on Discover -> View Map and re-run. Progress is journalled per city, so the sweep resumes rather than restarting. |
+| `app_pan_failed` | Gestures stopped reaching the map, three cells in a row | A marker, a dialog or the venue card is absorbing the swipe. Bring the map to the front, dismiss anything over it, re-run. **Do not** lower the pacing to compensate. |
 | `unexpected_error` | Unhandled | Re-run with `-v` for a traceback. |
 
 ## Rules for agents
