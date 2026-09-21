@@ -154,7 +154,14 @@ def test_status_reports_the_city_that_actually_ran(state_dir, tmp_path, monkeypa
 
     actions = " ".join(state.next_actions(inspected, s))
     assert "Singapore" not in actions, actions
-    assert "London Bars" in actions
+
+    # The list name now rides in hints, not next_actions: pin writes to the
+    # account, and anything an agent is told to run verbatim must be safe.
+    advice = " ".join(state.hints(inspected, s))
+    assert "Singapore" not in advice, advice
+    assert "London Bars" in advice
+    assert not any(a.lstrip().startswith("#") for a in state.next_actions(inspected, s))
+    assert not any("pin " in a for a in state.next_actions(inspected, s))
 
 
 @pytest.mark.unit

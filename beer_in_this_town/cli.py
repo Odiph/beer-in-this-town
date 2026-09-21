@@ -9,20 +9,25 @@ without parsing tracebacks.
   python -m beer_in_this_town doctor --json      # are the preconditions met
   python -m beer_in_this_town bootstrap          # one-time interactive login
   python -m beer_in_this_town selfcheck --json   # 1 request: are selectors alive
-  python -m beer_in_this_town run --json         # scrape -> CSV + KML + diff
+  python -m beer_in_this_town run --no-upload --json  # collect -> CSV + maps
   python -m beer_in_this_town pin  --json        # save into a Google Maps list
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import time
 from dataclasses import replace
 from pathlib import Path
 
+from .adb_device import AdbUnavailable
 from .agent_io import Envelope, Problem, emit, fail, log_to_stderr
-from .config import DATA_DIR, Settings, ensure_dirs
+from .app_categories import CategoryPanelError
+from .app_map import WrongScreen
+from .app_sweep import DeadPan
+from .config import DATA_DIR, SEARCH_URL, Settings, ensure_dirs
 from .export import (
     commit_run,
     diff_against_previous,
@@ -39,20 +44,115 @@ from .http_client import (
     BudgetExceeded,
     PoliteClient,
     RateLimitTripped,
+    TransportUnavailable,
+)
+from .measure import (
+    DEFAULT_QUOTA,
+    LabelsUnusable,
+    PartialStratum,
+    read_sheet,
+    score_labels,
+    stratified_sample,
+    venues_from_csv,
+    write_sheet,
 )
 from .models import VenueRef
 from .mymaps_upload import manual_instructions, upload_kml
 from .notes import MAX_GAP_S as NOTES_MAX_GAP
 from .notes import MIN_GAP_S as NOTES_MIN_GAP
 from .notes import add_notes, notes_from_csv
-from .parsers import ParseError, assert_corpus_quality, parse_venue_stats
+from .overpass import OverpassUnavailable
+from .parsers import (
+    ClientRenderedSearch,
+    ParseError,
+    assert_corpus_quality,
+    parse_search_page,
+    parse_venue_stats,
+)
 from .pin_to_list import MAX_GAP_S as PIN_MAX_GAP
 from .pin_to_list import MIN_GAP_S as PIN_MIN_GAP
-from .pin_to_list import pin_places, places_from_csv
+from .pin_to_list import (
+    AmbiguousList,
+    pin_places,
+    places_from_csv,
+    region_from_csv,
+)
+from .places import PlacesUnavailable, resolve_closures
+from .places import counts as closure_counts
 from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
-from .state import inspect_state, next_actions, record_run
+from .state import (
+    blocked_on,
+    hints,
+    inspect_state,
+    next_actions,
+    record_run,
+    record_verification,
+)
+from .ui.server import DEFAULT_PORT as UI_DEFAULT_PORT
 
 log = logging.getLogger("beer_in_this_town")
+
+
+class EnvelopeParser(argparse.ArgumentParser):
+    """An argparse parser that still honours the envelope contract.
+
+    argparse writes usage to stderr and exits 2, so a rejected flag produced
+    no envelope at all -- and the contract says every invocation prints
+    exactly one. An agent got an unparseable blob and no `error.code` to
+    branch on, which for a rejected *pacing* flag is the worst case: the
+    remedy is to stop, and a caller with nothing to read may simply retry.
+    """
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        as_json = "--json" in sys.argv
+        emit(fail(
+            _requested_command(),
+            Problem(
+                code="bad_arguments",
+                message=message,
+                remedy=f"Fix the argument and re-run. "
+                       f"`{self.prog} --help` lists the valid ones.",
+            ),
+        ), as_json)
+        raise SystemExit(2)
+
+
+def _requested_command() -> str:
+    """The subcommand from argv, for an envelope built before parsing finished."""
+    return next((a for a in sys.argv[1:] if a in _SUBCOMMANDS),
+                "beer-in-this-town")
+
+
+def at_least(floor: float, what: str):
+    """An argparse type that refuses to go below a floor.
+
+    The pacing numbers are account-safety guardrails, and AGENTS.md rule 4
+    says not to lower them. Prose is not a guardrail: every other protection
+    in this project fails closed, and these could be switched off with a flag
+    by anyone -- or any agent -- who had not read the rule.
+
+    Raising them is always allowed. A throttled user is explicitly told to.
+    """
+    def parse(raw: str) -> float:
+        value = float(raw)
+        if value < floor:
+            raise argparse.ArgumentTypeError(
+                f"{what} must be at least {floor:g}s. It paces requests so "
+                f"this does not look like a script; lowering it is what gets "
+                f"an account flagged. Raise it if you are being throttled."
+            )
+        return value
+    return parse
+
+
+def check_pacing(min_gap: float, max_gap: float) -> None:
+    """Refuse a range that is not a range."""
+    if max_gap < min_gap:
+        raise ValueError(
+            f"--max-gap ({max_gap:g}s) is below --min-gap ({min_gap:g}s). "
+            f"The gap is drawn from that range, so an inverted one paces on "
+            f"nonsense."
+        )
 
 
 MAP_FORMATS = ("kml", "geojson", "gpx")
@@ -88,11 +188,73 @@ def setup_logging(verbose: bool, as_json: bool) -> None:
 # --------------------------------------------------------------------------
 def cmd_status(s: Settings) -> Envelope:
     state = inspect_state(s)
+    # Additive field, so no schema bump -- AGENTS.md says `data` gains keys
+    # without one. It tells an empty `next_actions` that means "finished"
+    # apart from one that means "waiting for a person".
+    state = {**state, "blocked_on": blocked_on(state)}
     return Envelope(
         command="status",
         ok=True,
         data=state,
         next_actions=next_actions(state, s),
+        hints=hints(state, s),
+    )
+
+
+def cmd_verify(s: Settings) -> Envelope:
+    """Test both accounts for real. Read-only, terminates, agent-safe.
+
+    The dashboard blocks on a person, which is right for a sign-in and wrong
+    for everything else: an agent still needs to know whether the sign-in
+    took, and had no way to ask. This is that question, with an envelope.
+
+    It opens a headless browser and makes one request. It writes nothing,
+    touches no saved list, and always returns.
+    """
+    from .ui.checks import verify_google, verify_untappd
+
+    results = {}
+    for name, verifier in (("google", verify_google),
+                           ("untappd", verify_untappd)):
+        r = verifier(s)
+        results[name] = {"ok": r.ok, "ran": r.ran, "detail": r.detail,
+                         "evidence": r.evidence}
+
+    failed = [k for k, v in results.items() if not v["ok"]]
+    unran_now = [k for k, v in results.items() if not v["ran"]]
+    # Record only a real verdict. A probe that could not run has established
+    # nothing, and writing it would let "the browser is broken" masquerade as
+    # "the accounts are signed out" for the next twelve hours.
+    if not unran_now:
+        record_verification(results, ok=not failed)
+    # A probe that could not run is not a signed-out account, and the two
+    # want opposite remedies. Never collapse them -- see VerifyResult.ran.
+    unran = unran_now
+
+    if unran:
+        return fail("verify", Problem(
+            code="verify_unavailable",
+            message="Could not test " + " and ".join(unran) + ": "
+                    + "; ".join(results[k]["evidence"] for k in unran),
+            remedy="This is not a signed-out account -- the check itself "
+                   "could not run. Fix what the message names (usually a "
+                   "missing browser) and re-run.",
+        ), accounts=results)
+
+    if failed:
+        return fail("verify", Problem(
+            code="not_signed_in",
+            message="Signed out of " + " and ".join(failed) + ".",
+            remedy="Ask the human to run `beertown ui` and sign in; it needs "
+                   "a password, so an agent cannot do it. Signed out of "
+                   "Untappd, search stops at 5 results and a run would build "
+                   "a five-venue corpus.",
+        ), accounts=results)
+
+    return Envelope(
+        command="verify", ok=True,
+        data={"accounts": results, "verified": True},
+        next_actions=["python -m beer_in_this_town status --json"],
     )
 
 
@@ -120,10 +282,24 @@ def cmd_doctor(s: Settings) -> Envelope:
             "-- pip install -e \".[browser]\""
         )
 
-    data["session_file"] = "present" if s.storage_state.exists() else "missing"
+    # "present", not "logged in". The file existing says a login happened
+    # once, not that the account still works -- and reporting the stronger
+    # claim is how a dead session reaches a hundred-request run. `beertown
+    # ui` is what actually tests them.
+    data["session_file"] = ("present (untested)"
+                            if s.storage_state.exists() else "missing")
     data["profile_dir"] = "present" if s.profile_dir.exists() else "missing"
+    notes: list[str] = []
     if not s.storage_state.exists():
-        problems.append("no saved session -- run: python -m beer_in_this_town bootstrap")
+        problems.append("no saved session -- run: beertown ui")
+    else:
+        # A note, not a problem: an untested session is not a broken one, and
+        # making `doctor` permanently red would train everyone to ignore it.
+        notes.append(
+            "The saved session has not been tested. Run `beertown ui` to "
+            "check both accounts actually work -- a cookie on disk is not a "
+            "working login, and a dead one only shows up mid-run."
+        )
 
     data["geocoder"] = "google" if s.google_geocoding_key else "nominatim (free, 1 req/s)"
 
@@ -132,6 +308,7 @@ def cmd_doctor(s: Settings) -> Envelope:
         ok=not problems,
         data=data,
         warnings=problems,
+        hints=notes,
         next_actions=["python -m beer_in_this_town status --json"],
     )
 
@@ -269,14 +446,40 @@ def _capture_session(s: Settings, sync_playwright) -> Envelope:
     )
 
 
-def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
-    """Cheap pre-flight: one venue page, full shape assertion."""
+def _probe_search(client, s: Settings) -> str:
+    """Is the search page one of the two shapes we know how to handle?
+
+    Either it carries `.beer-item` rows (server-rendered) or an `#algolia-hits`
+    container the browser path can fill (client-rendered). Anything else is a
+    stale selector, and saying so is the entire reason this probe exists:
+    search moved to Algolia, every `run` broke, and `selfcheck` stayed green
+    for the duration because venue detail pages were never affected.
+
+    Deliberately says nothing about how many results came back. Anonymous
+    search is capped at five by Untappd's login gate, so a count assertion
+    would fail on a healthy signed-out install.
+    """
+    html = client.get(SEARCH_URL, params={"q": s.query, "type": "venues"},
+                      use_cache=False)
+    try:
+        parse_search_page(html)
+    except ClientRenderedSearch:
+        return "client-rendered"
+    return "server-rendered"
+
+
+def cmd_selfcheck(s: Settings, slug: str, venue_id: str,
+                  probe_search: bool = True) -> Envelope:
+    """Cheap pre-flight: one venue page and one search page, shape asserted."""
     ref = VenueRef(venue_id=venue_id, slug=slug, name="selfcheck",
                    category=None, address=None, city=None)
+    search_shape = "not checked"
     try:
         with PoliteClient(s) as client:
             html = client.get(ref.url, use_cache=False)
             venue = parse_venue_stats(html, ref)
+            if probe_search:
+                search_shape = _probe_search(client, s)
     except ParseError as exc:
         return fail("selfcheck", Problem(
             code="selectors_stale",
@@ -302,15 +505,321 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
         command="selfcheck",
         ok=True,
         data={"url": ref.url, "total": venue.total, "unique": venue.unique,
-              "monthly": venue.monthly, "coords_embedded": venue.has_coords},
-        next_actions=["python -m beer_in_this_town run --json"],
+              "monthly": venue.monthly, "coords_embedded": venue.has_coords,
+              "search": search_shape},
+        next_actions=["python -m beer_in_this_town run --no-upload --json"],
+    )
+
+
+# Asked for, and not possible. Shared by `closures` and `run --check-closed`
+# so the two cannot answer differently about the same missing key.
+#
+# The stage no-ops when nobody asked for it -- that is #20's rule. But a
+# command invoked explicitly, or a flag passed deliberately, is somebody
+# asking, and quietly doing nothing in reply is how a user concludes that
+# every venue is open.
+_NO_KEY = Problem(
+    code="places_key_missing",
+    message="GOOGLE_PLACES_KEY is not set, so no closure check can run.",
+    remedy="Set GOOGLE_PLACES_KEY to a key with the Places API enabled and "
+           "billing on, then re-run. It is deliberately separate from "
+           "GOOGLE_GEOCODING_KEY: different SKU, and sending addresses to "
+           "Places is a choice worth making on its own.",
+)
+
+_PLACES_REMEDY = (
+    "Check GOOGLE_PLACES_KEY, that the Places API (New) is enabled on that "
+    "project, and that billing is on. This is not per-venue -- nothing was "
+    "written."
+)
+
+
+def cmd_closures(s: Settings, csv_path: str, out: str | None,
+                 limit: int | None) -> Envelope:
+    """Ask Google Places whether the venues in a CSV still trade.
+
+    Read-only as far as the user's account goes: this touches Places, never
+    Maps. It writes a new CSV rather than editing the one it was given, so a
+    corpus that took a hundred requests to build is never overwritten by a
+    stage that costs money and can fail halfway.
+    """
+    source = Path(csv_path)
+    if not source.exists():
+        return fail("closures", Problem(
+            code="csv_missing",
+            message=f"No such CSV: {source}",
+            remedy="Run `run` first, or pass --csv with a path that exists.",
+        ))
+
+    if not s.google_places_key:
+        return fail("closures", _NO_KEY)
+
+    venues = venues_from_csv(source)
+    if not venues:
+        return fail("closures", Problem(
+            code="csv_missing",
+            message=f"{source.name} carried no venue rows.",
+            remedy="Check the file is one this project wrote, then re-run.",
+        ))
+
+    # A trial before the bulk, for the same reason `pin` has one: this is the
+    # billed path, and finding out the query shape is wrong on venue 3 costs
+    # less than finding out on venue 300.
+    checked = venues[:limit] if limit else venues
+    try:
+        resolved = resolve_closures(checked, s)
+    except PlacesUnavailable as exc:
+        return fail("closures", Problem(
+            code="places_unavailable",
+            message=str(exc),
+            remedy=_PLACES_REMEDY,
+        ), venues_read=len(venues))
+
+    # The rows not checked keep whatever status they already carried, so a
+    # --limit run produces a complete CSV rather than a truncated one.
+    merged = resolved + venues[len(checked):]
+    target = Path(out) if out else DATA_DIR / f"checked_{source.stem}.csv"
+    write_csv(merged, target)
+
+    closed = [v for v in merged if v.is_closed]
+    warnings = []
+    if limit and limit < len(venues):
+        warnings.append(
+            f"Trial run: {len(checked)} of {len(venues)} venues were checked. "
+            f"The rest were copied through unchanged."
+        )
+    unmatched = [v for v in resolved if v.business_status == "unmatched"]
+    if unmatched:
+        warnings.append(
+            f"{len(unmatched)} venue(s) had no Places match and are recorded "
+            f"as unmatched, NOT as closed. A failed lookup means the place "
+            f"closed, was renamed, is too new, or Places simply lacks it -- "
+            f"and those want opposite outcomes, so none is chosen."
+        )
+
+    return Envelope(
+        command="closures",
+        ok=True,
+        data={
+            "csv": str(target),
+            "venues": len(merged),
+            "checked": len(checked),
+            "closed": len(closed),
+            "by_status": closure_counts(merged),
+        },
+        warnings=warnings,
+        next_actions=[],
+        hints=[
+            f'Closed venues are flagged in "{target}", not removed. Nothing '
+            f'downstream drops them on its own: deciding what to do with a '
+            f'venue Google calls shut is yours.',
+            *([f"Flagged closed: {', '.join(v.ref.name for v in closed[:5])}"
+               + (f" (+{len(closed) - 5} more)" if len(closed) > 5 else "")]
+              if closed else []),
+        ],
+    )
+
+
+def cmd_ui(s: Settings, port: int, open_browser: bool,
+           detach: bool = False) -> Envelope:
+    """Serve the setup dashboard on localhost.
+
+    `--detach` starts it in its own process and returns immediately, which is
+    what makes it something an agent can open for a user. Without it this
+    blocks, and the envelope is printed on the way out.
+    """
+    from .ui import serve, serve_detached
+
+    if detach:
+        try:
+            rec = serve_detached(s, port=port)
+        except (RuntimeError, OSError) as exc:
+            # OSError as well: `Popen` raises it when the interpreter cannot
+            # be spawned at all, and RuntimeError-only sent that to
+            # `unexpected_error`, whose remedy is "re-run with -v" -- advice
+            # that cannot help a process that will not start.
+            return fail("ui", Problem(
+                code="port_unavailable",
+                message=str(exc),
+                remedy=f"Pass --port with a number other than {port}, or stop "
+                       f"whatever is already listening on it.",
+            ))
+        return Envelope(
+            command="ui", ok=True,
+            data={"url": rec["url"], "pid": rec["pid"], "port": rec["port"],
+                  "started": rec["started"]},
+            hints=[
+                ("Opened the setup dashboard." if rec["started"]
+                 else "A dashboard was already running for this checkout.")
+                + f" Send the user to {rec['url']} — it walks them through "
+                  f"signing in. The link carries the key for that session.",
+                "Signing in needs their password, so it is theirs to do. When "
+                "they say they are done, run `verify --json` to check it took.",
+            ],
+            next_actions=[],
+        )
+
+    try:
+        url = serve(s, port=port, open_browser=open_browser)
+    except OSError as exc:
+        return fail("ui", Problem(
+            code="port_unavailable",
+            message=f"Could not bind port {port}: {exc}",
+            remedy="Something is already using it. Pass --port with another "
+                   "number, or stop the other dashboard.",
+        ))
+    return Envelope(
+        command="ui", ok=True, data={"url": url},
+        hints=["The dashboard connects and tests accounts. It cannot pin or "
+               "write notes -- those have no route on that server."],
+    )
+
+
+def cmd_label(s: Settings, csv_path: str, out: str | None,
+              quota: int, seed: int) -> Envelope:
+    """Emit a labelling sheet: a stratified sample for a human to judge.
+
+    Reads only what `run` already wrote. No network, no browser, no account.
+    """
+    source = Path(csv_path)
+    if not source.exists():
+        return fail("label", Problem(
+            code="csv_missing",
+            message=f"No such CSV: {source}",
+            remedy="Run `run` first, or pass --csv with a path that exists.",
+        ))
+
+    venues = venues_from_csv(source)
+    if not venues:
+        return fail("label", Problem(
+            code="csv_missing",
+            message=f"{source.name} carried no venue rows.",
+            remedy="Check the file is one this project wrote, then re-run.",
+        ))
+
+    sheet = stratified_sample(venues, quota=quota, seed=seed)
+    target = Path(out) if out else DATA_DIR / f"labels_{source.stem}.csv"
+    write_sheet(sheet, target)
+
+    warnings = []
+    # An early `run` -- and the seed CSV -- carried no category column at all.
+    # Every venue is then "unsettled" by definition, so a labeller would spend
+    # 45 minutes answering true_kind against a classifier that never had an
+    # opinion to be wrong about. Say so before they start, not after.
+    if not any(v.ref.category for v in venues):
+        warnings.append(
+            "No venue in this CSV has a category, so every kind prediction is "
+            "'unsettled' and the venue-kind measurement will say nothing. The "
+            "closure and private-space measurements are unaffected. Re-scrape "
+            "with a current `run` to measure kind."
+        )
+    thin = [b for b, n in sheet.counts_by_stratum().items() if n < quota]
+    if thin:
+        warnings.append(
+            f"{len(thin)} bucket(s) held fewer venues than the quota and were "
+            f"taken whole: {', '.join(sorted(thin))}"
+        )
+
+    return Envelope(
+        command="label",
+        ok=True,
+        data={
+            "sheet": str(target),
+            "rows": len(sheet.rows),
+            "venues": len(venues),
+            "buckets": sheet.counts_by_stratum(),
+            "bucket_population": sheet.stratum_sizes,
+        },
+        warnings=warnings,
+        next_actions=[
+            f'python -m beer_in_this_town score --labels "{target}" --json',
+        ],
+        hints=[
+            f'Fill in is_public, is_open and true_kind in "{target}" first.',
+            "Answer every row: picking which ones to fill in breaks the "
+            "weighting. y / n / ? are the accepted answers, and ? is a real "
+            "one -- it is recorded as an abstention rather than guessed into "
+            "a verdict.",
+            "A model must not fill these in. The point is a human judgement "
+            "to check the classifier against; a model labelling its own "
+            "classifier's output measures nothing.",
+        ],
+    )
+
+
+def cmd_score(s: Settings, labels_path: str) -> Envelope:
+    """Report how wrong the candidate classifier is, by direction."""
+    source = Path(labels_path)
+    if not source.exists():
+        return fail("score", Problem(
+            code="csv_missing",
+            message=f"No such labelling sheet: {source}",
+            remedy="Generate one first: python -m beer_in_this_town label "
+                   "--csv data/venues_<city>_<date>.csv --json",
+        ))
+
+    try:
+        rows, sizes = read_sheet(source)
+    except ValueError as exc:
+        return fail("score", Problem(
+            code="labels_unusable",
+            message=str(exc),
+            remedy="Re-generate the sheet with `label` and copy your answers "
+                   "into it.",
+        ))
+
+    try:
+        report = score_labels(rows, sizes)
+    except LabelsUnusable as exc:
+        # A value outside the vocabulary. Guessing at it is how a typo becomes
+        # a verdict, so the row and the cell are named instead.
+        return fail("score", Problem(
+            code="labels_unusable",
+            message=str(exc),
+            remedy="Fix that cell and re-run. Answers are y, n or ? (or yes / "
+                   "no); true_kind must be one of the kinds `label` predicts.",
+        ))
+    except PartialStratum as exc:
+        return fail("score", Problem(
+            code="labels_incomplete",
+            message=str(exc),
+            remedy="Label at least a few rows in every bucket. The rare "
+                   "buckets are the ones the measurement exists for.",
+        ))
+
+    # The rows behind each rate, grouped, so the failures can be read rather
+    # than counted. A rate says how bad; only the rows say why.
+    disagreements = report.pop("disagreements")
+    dump = DATA_DIR / f"disagreements_{source.stem}.json"
+    dump.write_text(json.dumps(disagreements, indent=1), encoding="utf-8")
+
+    return Envelope(
+        command="score",
+        ok=True,
+        data={**report, "disagreements": str(dump),
+              "disagreement_counts": {k: len(v) for k, v in disagreements.items()}},
+        warnings=report.get("warnings", []),
+        next_actions=[],
+        hints=[
+            f"Read {dump} before changing any threshold: a rate says how bad, "
+            f"only the rows say why.",
+            "The thresholds live in beer_in_this_town/classify.py.",
+        ],
     )
 
 
 def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
-            skip_robots: bool, formats: tuple[str, ...] = ("kml",)) -> Envelope:
+            skip_robots: bool, formats: tuple[str, ...] = ("kml",),
+            check_closed: bool = False) -> Envelope:
     ensure_dirs()
     stamp = today_stamp()
+
+    # Before a single request. A run that scrapes a hundred venues and only
+    # then discovers it cannot do the thing it was asked to do has wasted the
+    # expensive part -- and the expensive part is the one with an account
+    # attached.
+    if check_closed and not s.google_places_key:
+        return fail("run", _NO_KEY)
 
     with PoliteClient(s) as client:
         if s.respect_robots and not skip_robots and client.robots_disallows_scraping():
@@ -375,6 +884,19 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
                    "blocking this client. Nothing was written.",
         ), venues_scraped=len(venues))
 
+    if check_closed:
+        try:
+            venues = resolve_closures(venues, s)
+        except PlacesUnavailable as exc:
+            # Same posture as the corpus gate and the geocoder above: nothing
+            # has been written, and a corpus half-annotated by a key that died
+            # partway looks finished while being partly unasked.
+            return fail("run", Problem(
+                code="places_unavailable",
+                message=str(exc),
+                remedy=_PLACES_REMEDY,
+            ), venues_scraped=len(venues))
+
     csv_path = write_csv(venues, DATA_DIR / f"venues_{s.query}_{stamp}.csv")
 
     base = DATA_DIR / f"venues_{s.query}_{stamp}"
@@ -400,6 +922,14 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
             f"Asked for {s.target_count} venues and got {len(venues)}. Either "
             f"the query has no more, or search paging stopped early -- check "
             f"the log for where it stopped before trusting the totals."
+        )
+    closed = [v for v in venues if v.is_closed]
+    if closed:
+        warnings.append(
+            f"{len(closed)} venue(s) are flagged closed by Google Places and "
+            f"are still exported and still in the KML: "
+            f"{', '.join(v.ref.name for v in closed[:5])}. Nothing drops them "
+            f"automatically -- read the business_status column and decide."
         )
     without_coords = [v.ref.name for v in venues if not v.has_coords]
     if without_coords:
@@ -427,16 +957,40 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
             "csv": str(csv_path),
             "kml": written.get("kml"),
             "maps": written,
+            "closed": len(closed),
+            "by_status": closure_counts(venues) if check_closed else None,
             "new_since_last_run": len(diff["new"]),
             "changed": len(diff["changed"]),
             "my_maps_url": map_url,
         },
         warnings=warnings,
-        next_actions=[
-            f'python -m beer_in_this_town pin --csv "{csv_path}" '
-            f'--list "{s.map_title}" --limit 3 --json'
+        next_actions=[],
+        hints=[
+            f'The data is in "{csv_path}". To put it on a Google Maps saved '
+            f'list a human can run: pin --csv "{csv_path}" --list '
+            f'"{s.map_title}" --limit 3 --json. That writes to the account, so '
+            f'it is never started unasked; the map files above need nothing.'
         ],
     )
+
+
+def resolve_region(region: str | None, path: Path) -> tuple[str | None, list[str]]:
+    """Work out the region guard, and say so when it cannot be established.
+
+    None means "not specified" -- read it from the data. An explicit "" means
+    the caller switched the guard off deliberately, which is theirs to do.
+    """
+    if region is not None:
+        return (region or None), []
+    found = region_from_csv(path)
+    if found:
+        log.info("Region %r read from the CSV.", found)
+        return found, []
+    return None, [
+        "No city column in this CSV, so no region is appended to the Maps "
+        "lookups. A bare venue name can match a place in another country; "
+        "pass --region to restore that guard."
+    ]
 
 
 def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
@@ -447,10 +1001,11 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
         return fail("pin", Problem(
             code="csv_missing",
             message=f"CSV not found: {path}",
-            remedy="python -m beer_in_this_town run --json",
+            remedy="python -m beer_in_this_town run --no-upload --json",
         ))
 
     places = places_from_csv(path)
+    region, region_warnings = resolve_region(region, path)
     log.info("Read %d place(s) from %s", len(places), path)
 
     try:
@@ -482,6 +1037,15 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
                    "`python -m beer_in_this_town status --json`. Do not delete "
                    "state/rate_ledger.json.",
         ))
+    except AmbiguousList as exc:
+        # Nothing was saved. Resolving this by picking the nearest name is the
+        # wrong-list failure the verification step cannot see afterwards.
+        return fail("pin", Problem(
+            code="list_ambiguous",
+            message=str(exc),
+            remedy="Pass --list with the list's exact name, or rename the "
+                   "lists in Google Maps so the target is unambiguous.",
+        ))
     except RuntimeError as exc:
         text = str(exc)
         code = "not_signed_in" if "Not signed in" in text else "list_missing"
@@ -503,8 +1067,14 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
 
     actions = []
     if failed:
+        # Keep --limit on the retry. Dropping it turned "retry the three that
+        # failed in your trial run" into the bulk run AGENTS.md rule 3
+        # forbids, and a human reading a hint is the one who decides to widen
+        # it.
+        scope = f" --limit {limit}" if limit else ""
         actions.append(
-            f'python -m beer_in_this_town pin --csv "{path}" --list "{list_name}" --json'
+            f'A human can retry the {len(failed)} that failed: pin --csv '
+            f'"{path}" --list "{list_name}"{scope} --json'
         )
 
     return Envelope(
@@ -515,11 +1085,13 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
               "not_found_names": missing[:20],
               "ambiguous_names": ambiguous[:20], "list": list_name},
         warnings=(
-            ([f"{len(missing)} place(s) had no Google Maps match"] if missing else [])
+            region_warnings
+            + ([f"{len(missing)} place(s) had no Google Maps match"] if missing else [])
             + ([f"{len(ambiguous)} place(s) resolved to a different venue "
                 "and were skipped -- check them by hand"] if ambiguous else [])
         ),
-        next_actions=actions,
+        next_actions=[],
+        hints=actions,
     )
 
 
@@ -532,10 +1104,11 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
         return fail("notes", Problem(
             code="csv_missing",
             message=f"CSV not found: {path}",
-            remedy="python -m beer_in_this_town run --json",
+            remedy="python -m beer_in_this_town run --no-upload --json",
         ))
 
     places = notes_from_csv(path)
+    region, region_warnings = resolve_region(region, path)
     log.info("Read %d place(s) with stats from %s", len(places), path)
 
     try:
@@ -561,6 +1134,38 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
             message=str(exc),
             remedy="Wait for the cool-off. Do not retry or delete the ledger.",
         ))
+    except AmbiguousList as exc:
+        return fail("notes", Problem(
+            code="list_ambiguous",
+            message=str(exc),
+            remedy="Pass --list with the list's exact name, or rename the "
+                   "lists in Google Maps so the target is unambiguous.",
+        ))
+    except RuntimeError as exc:
+        # Same split `pin` makes. Without it, a signed-out profile and a
+        # missing list both arrived as notes_failed with a "re-run" remedy,
+        # which is the one thing that cannot help either.
+        message = str(exc)
+        if "Not signed in" in message:
+            return fail("notes", Problem(
+                code="not_signed_in",
+                message=message,
+                remedy="Run `python -m beer_in_this_town bootstrap` yourself "
+                       "and sign in; an agent cannot do this.",
+            ))
+        if "not found in this account" in message:
+            return fail("notes", Problem(
+                code="list_missing",
+                message=message,
+                remedy="Create the list by hand in Google Maps, or pass a "
+                       "--list that exists.",
+            ))
+        return fail("notes", Problem(
+            code="notes_failed",
+            message=message,
+            remedy="Re-run; progress is journalled so completed notes are "
+                   "skipped.",
+        ))
     except Exception as exc:
         return fail("notes", Problem(
             code="notes_failed",
@@ -577,11 +1182,13 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
         data={"written": tally["ok"], "failed": tally["failed"],
               "not_found": tally["not-found"], "ambiguous": tally["ambiguous"],
               "not_in_list": tally["not-in-list"], "list": list_name},
-        warnings=([f"{len(unpinned)} place(s) are not in the list yet; "
-                   "run pin first"] if unpinned else []),
-        next_actions=([f'python -m beer_in_this_town notes --csv "{path}" '
-                       f'--list "{list_name}" --json']
-                      if tally["failed"] else []),
+        warnings=(region_warnings
+                  + ([f"{len(unpinned)} place(s) are not in the list yet; "
+                      "run pin first"] if unpinned else [])),
+        next_actions=[],
+        hints=([f'A human can retry the {tally["failed"]} that failed: notes '
+                f'--csv "{path}" --list "{list_name}" --json']
+               if tally["failed"] else []),
     )
 
 
@@ -600,8 +1207,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="emit one machine-readable envelope on stdout "
                              "(logs go to stderr)")
 
-    p = argparse.ArgumentParser(prog="beer_in_this_town", parents=[common])
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p = EnvelopeParser(prog="beer_in_this_town", parents=[common])
+    # parser_class so a rejected flag on a SUBcommand also emits an
+    # envelope -- that is where the pacing floors live.
+    sub = p.add_subparsers(dest="cmd", required=True,
+                           parser_class=EnvelopeParser)
 
     sub.add_parser("status", parents=[common],
                    help="where the pipeline is up to, and what to run next")
@@ -620,10 +1230,16 @@ def build_parser() -> argparse.ArgumentParser:
                            help="verify selectors still work (1 request)")
     check.add_argument("--slug", default="american-taproom-waterloo")
     check.add_argument("--id", dest="venue_id", default="7480946")
+    check.add_argument("--skip-search", action="store_true",
+                       help="only check the venue page (one request). The "
+                            "search probe is what catches a search outage.")
 
     run = sub.add_parser("run", parents=[common],
                          help="scrape, export, diff, and optionally upload")
-    run.add_argument("--query", default="singapore")
+    run.add_argument("--query", default=None,
+                     help="the city to collect. No default: without one, and "
+                          "without a city named in the dashboard, `run` "
+                          "refuses rather than choosing for you.")
     run.add_argument("--count", type=int, default=100)
     run.add_argument("--title", default=None, help='My Maps title, e.g. "Singapore Bars"')
     run.add_argument("--format", default="kml",
@@ -633,10 +1249,17 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-upload", action="store_true", help="write files only")
     run.add_argument("--browser-search", action="store_true",
                      help="force the Show More click path instead of HTTP pagination")
+    run.add_argument("--check-closed", action="store_true",
+                     help="ask Google Places whether each venue still trades "
+                          "and record it in a business_status column. Needs "
+                          "GOOGLE_PLACES_KEY. Flags; never drops.")
     run.add_argument("--i-read-robots", action="store_true",
                      help="proceed even if robots.txt disallows these paths")
-    run.add_argument("--delay", type=float, default=None,
-                     help="override the minimum inter-request delay in seconds")
+    run.add_argument("--delay", type=at_least(Settings().min_delay_s, "--delay"),
+                     default=None,
+                     help="raise the minimum inter-request delay, in seconds. "
+                          "It cannot be lowered: the pacing is what keeps this "
+                          "from looking like a script.")
 
     pin = sub.add_parser(
         "pin",
@@ -645,14 +1268,18 @@ def build_parser() -> argparse.ArgumentParser:
              "(pins on the everyday map, not a My Maps layer)",
     )
     pin.add_argument("--csv", required=True, help="any CSV this project writes")
-    pin.add_argument("--list", dest="list_name", default="Singapore Bars",
-                     help="exact name of the existing Google Maps list")
+    pin.add_argument("--list", dest="list_name", default=None,
+                     help="exact name of the existing Google Maps list. No "
+                          "default: this writes to your account, and a "
+                          "guessed list name is a guess about where.")
     pin.add_argument("--limit", type=int, default=None,
                      help="only do the first N (use for a small trial run)")
-    pin.add_argument("--min-gap", type=float, default=PIN_MIN_GAP,
+    pin.add_argument("--min-gap", type=at_least(PIN_MIN_GAP, "--min-gap"),
+                     default=PIN_MIN_GAP,
                      help=f"minimum seconds between places "
                           f"(default {PIN_MIN_GAP:.0f})")
-    pin.add_argument("--max-gap", type=float, default=PIN_MAX_GAP,
+    pin.add_argument("--max-gap", type=at_least(PIN_MAX_GAP, "--max-gap"),
+                     default=PIN_MAX_GAP,
                      help=f"maximum seconds between places "
                           f"(default {PIN_MAX_GAP:.0f})")
     notes = sub.add_parser(
@@ -661,34 +1288,177 @@ def build_parser() -> argparse.ArgumentParser:
         help="write Untappd stats into the note on each saved place",
     )
     notes.add_argument("--csv", required=True)
-    notes.add_argument("--list", dest="list_name", default="Singapore Bars")
+    notes.add_argument("--list", dest="list_name", default=None)
     notes.add_argument("--limit", type=int, default=None)
-    notes.add_argument("--min-gap", type=float, default=NOTES_MIN_GAP)
-    notes.add_argument("--max-gap", type=float, default=NOTES_MAX_GAP)
-    notes.add_argument("--region", default="Singapore")
+    notes.add_argument("--min-gap", type=at_least(NOTES_MIN_GAP, "--min-gap"),
+                       default=NOTES_MIN_GAP)
+    notes.add_argument("--max-gap", type=at_least(NOTES_MAX_GAP, "--max-gap"),
+                       default=NOTES_MAX_GAP)
+    notes.add_argument("--region", default=None,
+                       help="as for pin; read from the CSV when not given")
 
-    pin.add_argument("--region", default="Singapore",
+    label = sub.add_parser(
+        "label",
+        parents=[common],
+        help="emit a stratified sample to label by hand, so the venue "
+             "heuristics can be measured rather than guessed at",
+    )
+    label.add_argument("--csv", required=True, help="any CSV this project wrote")
+    label.add_argument("--out", default=None, help="where to write the sheet")
+    label.add_argument("--quota", type=int, default=DEFAULT_QUOTA,
+                       help=f"rows per bucket (default {DEFAULT_QUOTA}). Every "
+                            f"bucket gets the same quota, rare ones included; "
+                            f"scoring divides that back out.")
+    label.add_argument("--seed", type=int, default=0,
+                       help="sampling seed; the same seed regenerates the same "
+                            "sheet")
+
+    sub.add_parser("verify", parents=[common],
+                   help="test that both accounts actually work (headless, "
+                        "read-only, no browser window)")
+
+    ui = sub.add_parser(
+        "ui",
+        parents=[common],
+        help="open the setup dashboard: connect and test your Google and "
+             "Untappd accounts, and watch what the tool is doing",
+    )
+    ui.add_argument("--port", type=int, default=UI_DEFAULT_PORT,
+                    help=f"localhost port (default {UI_DEFAULT_PORT}). Bound "
+                         f"to 127.0.0.1 only.")
+    ui.add_argument("--no-open", action="store_true",
+                    help="do not open a browser; just print the URL")
+    ui.add_argument("--detach", action="store_true",
+                    help="start it in the background and return immediately, "
+                         "instead of blocking. This is the form an agent can "
+                         "run to open the dashboard for a person.")
+
+    closures = sub.add_parser(
+        "closures",
+        parents=[common],
+        help="ask Google Places whether the venues in a CSV still trade "
+             "(flags them; never drops them)",
+    )
+    closures.add_argument("--csv", required=True, help="any CSV this project wrote")
+    closures.add_argument("--out", default=None,
+                          help="where to write the annotated CSV. Defaults to "
+                               "data/checked_<name>.csv -- the input is never "
+                               "overwritten.")
+    closures.add_argument("--limit", type=int, default=None,
+                          help="only check the first N. This is the billed "
+                               "path; trial it before the bulk.")
+
+    score = sub.add_parser(
+        "score",
+        parents=[common],
+        help="report the venue heuristics' error rates from a labelled sheet",
+    )
+    score.add_argument("--labels", required=True,
+                       help="a sheet written by `label`, with answers filled in")
+
+    pin.add_argument("--region", default=None,
                      help="appended to each search so a name cannot match the "
-                          "wrong country; pass '' to disable")
+                          "wrong country. Read from the CSV's city column when "
+                          "not given; pass '' to disable")
     return p
 
 
+# Every subcommand name, so a bare invocation can be told from a mistyped one.
+_SUBCOMMANDS = frozenset({
+    "status", "doctor", "bootstrap", "selfcheck", "run", "pin", "notes",
+    "label", "score", "closures", "ui", "verify",
+})
+
+
+def wants_dashboard(raw: list[str], isatty: bool) -> bool:
+    """Should `beertown` with no subcommand open the dashboard?
+
+    A first-time user types the program's name. Answering that with an
+    argparse error is the worst possible first impression from a tool whose
+    whole first-run story is a dashboard that explains itself -- so a bare
+    invocation opens it.
+
+    Three guards, because `ui` blocks forever and AGENTS.md tells an agent not
+    to run it. Any of them failing falls back to the ordinary envelope error:
+
+      * `--json` asks for the machine contract, and a blocking server is not
+        an envelope. An agent calling `beertown --json` must get its error,
+        not a hung process.
+      * A non-tty means output is piped or captured -- automation, a CI step,
+        a subprocess -- none of which can close a browser window.
+      * Anything that looks like an actual request (a subcommand, a typo, or
+        --help) is still answered as asked. Silently swallowing a mistyped
+        subcommand into the dashboard would hide the typo.
+    """
+    if not isatty:
+        return False
+    for token in raw:
+        if token in ("--json", "-h", "--help"):
+            return False
+        if not token.startswith("-"):
+            return False  # a subcommand, or a typo that deserves its error
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if wants_dashboard(raw, sys.stdout.isatty()):
+        log.info("No command given -- opening the setup dashboard.")
+        raw = [*raw, "ui"]
+    args = build_parser().parse_args(raw)
     # SUPPRESS means the attribute is absent unless the flag was passed.
     as_json = getattr(args, "json", False)
     verbose = getattr(args, "verbose", False)
     setup_logging(verbose, as_json)
     s = Settings.from_env()
 
+    if args.cmd in {"pin", "notes"}:
+        try:
+            check_pacing(args.min_gap, args.max_gap)
+        except ValueError as exc:
+            emit(fail(args.cmd, Problem(
+                code="bad_pacing",
+                message=str(exc),
+                remedy="Pass --min-gap below --max-gap, or omit both and use "
+                       "the defaults, which are chosen to look human.",
+            )), as_json)
+            return 1
+
     if args.cmd in {"run", "pin", "notes"}:
+        # argv, then what the user named in the dashboard, then nothing.
+        # There is no built-in default to fall through to any more: a city
+        # nobody chose is a scrape of somewhere nobody asked for, and a list
+        # name nobody chose is a write to an account.
+        remembered = inspect_state(s)["last_run"]
+        query = getattr(args, "query", None) or remembered.get("query") or ""
+        list_name = (getattr(args, "title", None)
+                     or getattr(args, "list_name", None)
+                     or remembered.get("map_title") or "")
         s = replace(
             s,
-            query=getattr(args, "query", s.query),
+            query=query,
             target_count=getattr(args, "count", s.target_count),
-            map_title=getattr(args, "title", None) or getattr(
-                args, "list_name", s.map_title),
+            map_title=list_name,
         )
+        if args.cmd == "run" and not s.query:
+            emit(fail("run", Problem(
+                code="no_city",
+                message="No city given, and none has been chosen.",
+                remedy='Pass --query "<city>", or name one on the last step '
+                       "of `beertown ui`. There is deliberately no default: "
+                       "choosing a city for someone is choosing what they "
+                       "get.",
+            )), as_json)
+            return 1
+        if args.cmd in {"pin", "notes"} and not s.map_title:
+            emit(fail(args.cmd, Problem(
+                code="no_list",
+                message="No saved list named.",
+                remedy='Pass --list "<exact name>". There is no default, '
+                       "because this writes into a real Google Maps list and "
+                       "a guessed name is a guess about where.",
+            )), as_json)
+            return 1
         if getattr(args, "delay", None):
             s = replace(s, min_delay_s=args.delay, max_delay_s=args.delay * 2.0)
 
@@ -699,8 +1469,20 @@ def main(argv: list[str] | None = None) -> int:
             env = cmd_doctor(s)
         elif args.cmd == "bootstrap":
             env = cmd_bootstrap(s, args.timeout, args.capture)
+        elif args.cmd == "label":
+            env = cmd_label(s, args.csv, args.out, args.quota, args.seed)
+        elif args.cmd == "verify":
+            env = cmd_verify(s)
+        elif args.cmd == "ui":
+            env = cmd_ui(s, args.port, open_browser=not args.no_open,
+                         detach=args.detach)
+        elif args.cmd == "closures":
+            env = cmd_closures(s, args.csv, args.out, args.limit)
+        elif args.cmd == "score":
+            env = cmd_score(s, args.labels)
         elif args.cmd == "selfcheck":
-            env = cmd_selfcheck(s, args.slug, args.venue_id)
+            env = cmd_selfcheck(s, args.slug, args.venue_id,
+                                probe_search=not args.skip_search)
         elif args.cmd == "run":
             try:
                 formats = parse_formats(args.format)
@@ -716,13 +1498,16 @@ def main(argv: list[str] | None = None) -> int:
             env = cmd_run(s, upload=not args.no_upload,
                           force_browser=args.browser_search,
                           skip_robots=args.i_read_robots,
-                          formats=formats)
+                          formats=formats,
+                          check_closed=args.check_closed)
         elif args.cmd == "notes":
             env = cmd_notes(s, args.csv, args.list_name, args.limit,
-                            args.region or None, args.min_gap, args.max_gap)
+                            # NOT `or None`: "" is the caller switching the
+                            # guard off, None is "work it out from the CSV".
+                            args.region, args.min_gap, args.max_gap)
         elif args.cmd == "pin":
             env = cmd_pin(s, args.csv, args.list_name, args.limit,
-                          args.region or None, args.min_gap, args.max_gap)
+                          args.region, args.min_gap, args.max_gap)
         else:  # pragma: no cover -- argparse enforces the choices
             raise SystemExit(f"unknown command {args.cmd}")
     except KeyboardInterrupt:
@@ -747,11 +1532,72 @@ def main(argv: list[str] | None = None) -> int:
             remedy="Another run holds the write budget. Wait for it to finish, "
                    "then re-run; progress is journalled.",
         ))
+    except TransportUnavailable as exc:
+        env = fail(args.cmd, Problem(
+            code="network_unavailable",
+            message=str(exc),
+            remedy="Check connectivity and re-run. Nothing was written; the "
+                   "run stopped rather than sleeping through the backoff "
+                   "ladder once per remaining venue.",
+        ))
     except Tripped as exc:
         env = fail(args.cmd, Problem(
             code="guardrail_tripped",
             message=str(exc),
             remedy="Wait for the cool-off to expire. Do not retry.",
+        ))
+    except PlacesUnavailable as exc:
+        # Both call sites catch this already. The net is here because
+        # `PlacesUnavailable` subclasses RuntimeError and the fall-through
+        # below answers "re-run with -v", which is the one thing that cannot
+        # help a rejected key -- and #20 adds callers to this module.
+        env = fail(args.cmd, Problem(
+            code="places_unavailable",
+            message=str(exc),
+            remedy=_PLACES_REMEDY,
+        ))
+    except OverpassUnavailable as exc:
+        env = fail(args.cmd, Problem(
+            code="overpass_unavailable",
+            message=str(exc),
+            remedy="Overpass is volunteer-run and sheds load; wait and "
+                   "re-run, or set OVERPASS_URL to a mirror such as "
+                   "https://overpass.kumi.systems/api/interpreter. Nothing "
+                   "was written.",
+        ))
+    except AdbUnavailable as exc:
+        env = fail(args.cmd, Problem(
+            code="adb_unavailable",
+            message=str(exc),
+            remedy="Check the emulator is running and `adb devices` lists "
+                   "it. Nothing was written.",
+        ))
+    except DeadPan as exc:
+        env = fail(args.cmd, Problem(
+            code="app_pan_failed",
+            message=str(exc),
+            remedy="Gestures are not reaching the map. Bring the Untappd map "
+                   "to the front, dismiss any dialog, and re-run; progress "
+                   "is journalled, so the sweep resumes.",
+        ))
+    except CategoryPanelError as exc:
+        env = fail(args.cmd, Problem(
+            code="app_screen_unexpected",
+            message=str(exc),
+            remedy="The category filter was not open where it was expected. "
+                   "Re-run; the sweep re-checks the screen before acting.",
+        ))
+    except WrongScreen as exc:
+        # Last of the app handlers, because it is the most general of them.
+        # All five of these subclass RuntimeError, so without these clauses
+        # the fall-through below answers "re-run with -v" -- which is wrong
+        # advice for every one of them. Same reasoning as PlacesUnavailable
+        # above.
+        env = fail(args.cmd, Problem(
+            code="app_screen_unexpected",
+            message=str(exc),
+            remedy="The Untappd app was not showing the map. Open it on "
+                   "Discover -> View Map and re-run; progress is journalled.",
         ))
     except Exception as exc:
         log.error("Run aborted: %s", exc, exc_info=verbose)

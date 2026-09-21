@@ -26,15 +26,24 @@ stderr. Parse stdout; ignore stderr unless debugging.
   "schema_version": "1.0",
   "data": { "venues": 100, "csv": "...", "kml": "..." },
   "warnings": ["4 venue(s) have no coordinates and are not pinned"],
-  "next_actions": ["python -m beer_in_this_town pin --csv \"...\" --limit 3 --json"],
+  "next_actions": ["python -m beer_in_this_town label --csv \"...\" --json"],
+  "hints": ["To build a Google Maps saved list, a human can run: pin --csv ..."],
   "error": null
 }
 ```
 
 - `ok` — did the command achieve its purpose. Exit code matches (`0` / `1`).
 - `next_actions` — **literal runnable commands**, best first. Not hints.
+  Only read-only, safe commands appear here; it never contains `pin`, `notes`
+  or `bootstrap`, and never contains a `#` comment. An **empty list is the end
+  of the loop**, not an error.
+- `hints` — prose for a human: what only a person can decide to do next.
+  Nothing executes this, and an agent must not treat it as a next action.
 - `error` — present only on failure. Always carries `code` and `remedy`.
-- `schema_version` — treat a change as breaking.
+- `schema_version` — treat a change as breaking. **New fields are not a
+  change**: `data`, `warnings`, `hints` and `next_actions` gain keys without a
+  bump, so read them defensively and ignore what you do not recognise. A field
+  being *removed* or *renamed*, or an existing one changing meaning, bumps it.
 
 `--json` works before or after the subcommand.
 
@@ -42,17 +51,33 @@ stderr. Parse stdout; ignore stderr unless debugging.
 
 | `error.code` | Meaning | What to do |
 |---|---|---|
-| `not_signed_in` | Playwright profile has no Google session | **Stop and ask the human.** Requires their password; you cannot do this. |
-| `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off, and `status` will look clear because it does not know about the lock. Do not delete the lock file. |
+| `not_signed_in` | An account is signed out — from `verify`, `pin` or `notes` | **Stop and ask the human.** Requires their password; you cannot do this. `data.accounts` says which one and how it was established. |
+| `no_city` | `run` with no city, and none chosen | **Ask the human.** There is no default — choosing a city for someone chooses what they get. They name one on the last step of `beertown ui`, or you pass `--query`. |
+| `no_list` | `pin`/`notes` with no `--list` | **Ask the human.** No default, because this writes into a real Maps list and a guessed name is a guess about where. |
+| `port_unavailable` | `ui --detach` could not start the dashboard | Another process holds the port, or the interpreter could not be spawned. Retry with `--port` set to something else. |
+| `verify_unavailable` | The account check itself could not run | Not a signed-out account — usually a missing browser. Fix what the message names. Do **not** report this as "signed out". |
+| `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off. `status` reports the lock's age and whether it is stale under `data.write_guardrails.lock`. Do not delete the lock file; an abandoned one is broken automatically after 2h. |
 | `list_missing` | Target saved list does not exist | Ask the human to create it, or pick another `--list`. |
+| `list_ambiguous` | `--list` does not name exactly one list — no list matches it exactly, or several do | **Stop and ask.** Nothing was saved. Do not retry with a nearby name; that is how a place lands in the wrong list. |
 | `robots_disallow` | robots.txt forbids the paths | **Stop and ask.** Do not pass `--i-read-robots` on your own initiative. |
 | `corpus_quality_gate` | <90% of venues parsed cleanly | Read `debug/*.html`, fix selectors in `parsers.py`, re-run. Nothing was written. |
-| `selectors_stale` | `selfcheck` could not parse a known-good page, or neither search path parsed during `run` | Same as above. From `selfcheck` this is the cheap early warning; note it only covers venue detail pages, not search. |
+| `selectors_stale` | `selfcheck` could not parse a known-good venue page or the search page, or neither search path parsed during `run` | Same as above. `selfcheck` is the cheap early warning and covers both surfaces; `data.search` says which shape the search page had. |
 | `search_login_required` | Untappd's sign-in wall cut the search short (anonymous search stops at 5) | Ask the human to sign in to Untappd in the browser profile. `bootstrap` only detects a Google session, so it cannot confirm this one. |
 | `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Not per-venue — check the key and billing, or unset it for Nominatim. Nothing was written. |
+| `places_unavailable` | The Places API is rejected, out of quota, or unreachable | Not per-venue — check `GOOGLE_PLACES_KEY`, that the Places API (New) is enabled, and that billing is on. Nothing was written. |
+| `places_key_missing` | The closure check was asked for with no `GOOGLE_PLACES_KEY` | Ask the human to set one. Do not silently carry on without the check — the venues are unchecked, not open. |
+| `network_unavailable` | Several URLs in a row failed at the transport | Check connectivity, then re-run. The run stopped instead of sleeping through the backoff ladder per venue. |
+| `bad_arguments` | An argument was rejected — most often a pacing value below its floor | **Do not retry with a different number.** The floors are account-safety limits; the message says which one. |
+| `bad_pacing` | `--max-gap` is below `--min-gap` | Pass a real range, or omit both and take the defaults. |
 | `csv_missing` | No input data | Run `run` first. |
+| `labels_incomplete` | A sampled bucket came back with no labels | Ask the human to label a few rows in every bucket. The rare ones are the point. |
+| `labels_unusable` | An answer is outside the accepted vocabulary, or the sheet lost its `_stratum`/`_stratum_size` columns | The message names the row and cell. Answers are `y` / `n` / `?`; a blank means unanswered. |
 | `notes_failed` | The notes pass failed | Re-run; progress resumes. |
 | `interrupted` | Ctrl-C | Re-run the same command; progress is journalled. |
+| `overpass_unavailable` | OpenStreetMap's Overpass endpoint is throttled, down or unreachable | Not per-venue. Wait and re-run, or set `OVERPASS_URL` to a mirror. Overpass is volunteer-run and sheds load under pressure; a 504 is normal. Nothing was written. |
+| `adb_unavailable` | The emulator could not be reached, or `adb` returned nothing usable | Check the emulator is running and `adb devices` lists it. Never read an empty result as an empty city. |
+| `app_screen_unexpected` | The Untappd app was not showing the screen the step needed | Open the app on Discover -> View Map and re-run. Progress is journalled per city, so the sweep resumes rather than restarting. |
+| `app_pan_failed` | Gestures stopped reaching the map, three cells in a row | A marker, a dialog or the venue card is absorbing the swipe. Bring the map to the front, dismiss anything over it, re-run. **Do not** lower the pacing to compensate. |
 | `unexpected_error` | Unhandled | Re-run with `-v` for a traceback. |
 
 ## Rules for agents
@@ -62,10 +87,17 @@ stderr. Parse stdout; ignore stderr unless debugging.
 2. **Never run `pin` without an explicit human instruction.** It automates the
    Google Maps UI, which is against Google's ToS (see README). Default to the
    supported My Maps KML path.
+
+   This used to contradict the loop above, and the loop won: `pin` was listed
+   in `next_actions` and was the only entry that ever emptied it, so following
+   the contract led an agent into the write. It is now in `hints` instead —
+   where nothing is instructed to run it.
 3. **Trial before bulk.** First `pin` run should use `--limit 3`. Report the
    result before doing the rest.
-4. **Do not lower the pacing.** `--min-gap` / `--max-gap` exist to keep the
-   user's account safe. Raise them if throttled; do not lower them.
+4. **Do not lower the pacing.** `--min-gap` / `--max-gap` / `--delay` exist to
+   keep the user's account safe. Raise them if throttled; do not lower them.
+   This is now enforced rather than asked: a value below the default is
+   refused with `bad_arguments`, and the floors are the shipped defaults.
 5. **A failed parse is a real finding.** The quality gate deliberately writes
    nothing when data looks degraded. Do not work around it by lowering
    `parse_strictness` — fix the selector and say what changed.
@@ -79,6 +111,140 @@ trial it with `--limit` first.
 
 It only annotates places already in the target list; anything else is recorded
 as `not-in-list` and left alone. A note that already matches is never rewritten.
+
+Like `pin`, it runs a pre-flight first and reports `not_signed_in` or
+`list_missing` rather than working through a hundred places against a
+signed-out browser.
+
+## The `label` and `score` commands
+
+`classify.py` holds candidate heuristics for venue kind, closed venues and
+private spaces. **None of them are wired into `run`**, and none should be until
+they have been measured. `label` emits a stratified sample for a human to
+judge; `score` reports the error rates by direction.
+
+Both are read-only, offline and touch no account, so an agent may run them
+freely. What an agent must **not** do is fill in the labels: the whole point is
+a human judgement the classifier can be checked against, and a model labelling
+its own classifier's output measures nothing.
+
+Sampling takes a fixed quota per bucket, rare ones included, and `score`
+divides that back out. Two consequences worth knowing:
+
+- Labelling only the easy rows breaks the weighting. `score` refuses a bucket
+  with no labels and warns about thin ones, but cannot detect cherry-picking.
+- Every rate's denominator is the rows that answered **that** question. A blank
+  is not an answer and `?` is not a verdict, so a rate can come back `null`
+  meaning *unknown* — which is not the same as zero errors, and must not be
+  reported as a clean result.
+- A CSV with no `category` column makes every kind prediction `unsettled`, so
+  the kind measurement says nothing. `label` warns when it sees this.
+
+## Setup, when you are the one driving
+
+`status` empties `next_actions` for two different reasons: the work is done,
+or it cannot go on without a person. **`data.blocked_on` tells them apart** --
+`null` means finished, `"sign_in"` means a human has to sign in.
+
+This used to loop. `next_actions` handed back `selfcheck`, nothing selfcheck
+does changes the session, and the loop above ran it forever. An empty list is
+the end of the loop; being blocked on a password is the end.
+
+**`data.logged_in` is a file, not an account.** It means
+`storage_state.json` exists. It was true on a machine whose Google and
+Untappd sessions had both expired, and the first action offered there was
+`run`. So `run` is never offered until a `verify` has actually passed:
+
+| What `status` shows | First action | Why |
+|---|---|---|
+| no session | `ui --detach` (then nothing) | a person must sign in |
+| session, `verification: null` | `verify --json` | a cookie proves nothing |
+| `verification.ok: false` | *(none)* — `blocked_on: "sign_in"` | a person must sign in |
+| `verification.ok: true` | `run ... --no-upload` | now it is known to work |
+
+**There is no default city.** `data.blocked_on` is `"choose_city"` until
+somebody names one, and `run` refuses with `no_city` rather than picking. Do
+not pass a city you inferred from a previous corpus or from the repo — ask.
+
+**The city comes from the user, not from a default.** `data.intent` is what
+they asked for in the dashboard; `data.last_run.query` already resolves
+through it, so the `run` in `next_actions` carries their city without you
+doing anything. When `intent` is null and no run has happened, nobody has chosen one and
+there is nothing to fall back on.
+A real run outranks an intention; the intention is not destroyed by one.
+
+`verify` writes `state/verification.json`, which is what lets the loop
+terminate rather than re-verifying on every pass. It expires after 12 hours,
+because a session that worked this morning can be dead by lunchtime — a
+verdict with no age on it is the same "a cookie means a working account"
+mistake wearing a different hat.
+
+The sequence when `blocked_on` is `"sign_in"`:
+
+1. **Stop looping.** Report it. Do not substitute `run` -- signed out of
+   Untappd, search stops at 5 results and a run builds a five-venue corpus
+   that looks like a finished scrape.
+2. **Open the dashboard** with `ui --detach --json` and give the user
+   `data.url`. Then ask them to sign in: it needs a password, so it is not
+   yours to do.
+3. **Then run `verify --json`** to find out whether it actually took.
+
+## The `verify` command
+
+Tests both accounts for real: a headless Maps load for Google, one request for
+Untappd. Read-only, opens no window, always returns -- safe for an agent, and
+the only way to answer "did the sign-in work" without the dashboard.
+
+Read `ran` before `ok`. `ok: false, ran: true` is a signed-out account.
+`ran: false` means the check could not run at all, which is a different
+problem with the opposite remedy, and reporting it as "signed out" sends the
+human through a login that was never broken.
+
+A cookie on disk is not a working account. `status`'s `logged_in` only means
+`storage_state.json` exists; this is what settles it.
+
+## The `ui` command
+
+Serves a setup dashboard on localhost and **blocks until interrupted**. It is
+for a human at a keyboard: it opens a browser, waits on a sign-in, and has no
+useful envelope until it exits.
+
+A bare `beertown` with no subcommand opens it too -- but only at a terminal,
+and never with `--json` or piped output, so an agent gets the usual
+`bad_arguments` envelope instead of a process that never returns.
+
+Do not run it. An agent that starts it will hang. When a user needs to connect
+or re-connect an account, tell them to run `beertown ui` themselves — the same
+way `bootstrap` is theirs to run.
+
+What it is useful for knowing: it can tell a signed-out Untappd session from a
+working one *before* a run, which is the condition behind
+`search_login_required`. If a run fails that way, that is the thing to suggest.
+
+## The `closures` command
+
+Asks the Google Places API whether each venue in a CSV still trades, and writes
+a `business_status` column into a **new** CSV. `run --check-closed` runs the
+same stage inline and is off by default.
+
+It touches no account and opens no browser, so it is not in the `pin`/`notes`
+category. But it **spends the user's money** — Places Text Search Pro, 5,000
+lookups a month free, then $25.60/1000 — so it is not in the `label`/`score`
+category either, and it is deliberately absent from `next_actions`.
+
+Rules for agents:
+
+1. **Do not run it unasked.** Billing is the user's, and so is the decision to
+   send venue addresses to Google. It is in `hints`, where nothing executes it.
+2. **Trial with `--limit 3` first**, as with `pin`. Report before the bulk.
+3. **`unmatched` is not `closed`.** A venue Places could not find is recorded
+   as `unmatched` and stays visible. Do not report it as closed, do not filter
+   on "not OPERATIONAL", and do not treat a run full of `unmatched` as a
+   finding — that shape usually means the query is wrong, not that a city shut.
+4. **Closed venues are flagged, never dropped.** Removing them is a decision
+   the user makes; `run` uploads to My Maps, so a silent drop is invisible.
+5. `places_key_missing` means stop and ask. It never means carry on unchecked
+   and call the venues open.
 
 ## Idempotency
 
@@ -111,6 +277,11 @@ defeating one still leaves the others:
 | **Circuit breaker** | 3 consecutive failures → stop and start a cool-off. Repeated failure is when a script looks least human. |
 | **Block detection** | Scans every page for CAPTCHA / "unusual traffic" / "not a robot" / forced sign-out. Any hit aborts instantly. Google serves these as HTTP 200, so text is the only signal. |
 | **Cool-off** | 6h, persisted. Applied after any trip or detected block. |
+
+Every one of those survives a restart, and so do the read-side protections:
+the hourly request ceiling and the circuit-breaker count are both on disk. A
+guardrail you can clear by starting the process again is a speed bump, not a
+guardrail.
 
 Rules for agents:
 

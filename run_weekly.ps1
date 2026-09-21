@@ -1,5 +1,5 @@
 # run_weekly.ps1 -- wrapper for Windows Task Scheduler.
-# Logs every run and preserves the exit code so a failed scrape shows as a
+# Logs every run and preserves the exit code so a failed run shows as a
 # failed task rather than a silent no-op.
 $ErrorActionPreference = "Stop"
 $Root    = Split-Path -Parent $MyInvocation.MyCommand.Path

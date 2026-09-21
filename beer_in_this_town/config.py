@@ -51,9 +51,14 @@ class Settings:
     """Immutable settings object. Use `replace(settings, field=value)` to derive."""
 
     # --- what to scrape -------------------------------------------------
-    query: str = "singapore"
+    # No default city, deliberately. A default here does not save anyone a
+    # keystroke -- it silently answers a question only the user can answer,
+    # and the answer it gives is a scrape of somewhere they have never been.
+    # Same reasoning as `logged_in`: a stand-in for a decision reads exactly
+    # like the decision having been made.
+    query: str = ""
     target_count: int = 100
-    map_title: str = "Singapore Bars"
+    map_title: str = ""
 
     # --- session --------------------------------------------------------
     profile_dir: Path = ROOT / "chrome-profile"
@@ -82,6 +87,20 @@ class Settings:
     nominatim_email: str | None = None
     nominatim_delay_s: float = 1.1  # OSM policy: max 1 req/sec
 
+    # --- geographic collection (Overpass / OSM) -------------------------
+    # No key, no billing, no quota -- which is why this is the preferred
+    # provider for "what is near this point" over Places. Overridable because
+    # the public endpoint is volunteer-run and sheds load; a mirror or a
+    # self-hosted instance is a legitimate answer to being throttled.
+    overpass_url: str = "https://overpass-api.de/api/interpreter"
+
+    # --- closure check (#7) ---------------------------------------------
+    # Deliberately a separate key from geocoding: different SKU, and somebody
+    # may reasonably want coordinates without sending addresses to Places for
+    # classification. Absent means the stage does not run -- never that it
+    # runs and guesses.
+    google_places_key: str | None = None
+
     @staticmethod
     def from_env() -> Settings:
         s = Settings()
@@ -89,7 +108,9 @@ class Settings:
             s,
             user_agent=user_agent_for_installed_chrome(),
             google_geocoding_key=os.environ.get("GOOGLE_GEOCODING_KEY") or None,
+            google_places_key=os.environ.get("GOOGLE_PLACES_KEY") or None,
             nominatim_email=os.environ.get("NOMINATIM_EMAIL") or None,
+            overpass_url=os.environ.get("OVERPASS_URL") or s.overpass_url,
         )
 
 

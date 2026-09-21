@@ -109,6 +109,7 @@ def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
                 resolved[v.ref.venue_id] = (lat, lng, "cache")
                 continue
             attempted += 1
+            using_osm = not s.google_geocoding_key
             try:
                 if s.google_geocoding_key:
                     hit = _google(client, s.google_geocoding_key, query)
@@ -116,7 +117,6 @@ def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
                 else:
                     hit = _nominatim(client, query, s.nominatim_email)
                     source = "nominatim"
-                    time.sleep(s.nominatim_delay_s)  # OSM policy: <= 1 req/sec
             except GeocoderUnavailable:
                 # Never per-venue: the next hundred lookups would fail the same
                 # way. Stop instead of dropping a pin a hundred times.
@@ -125,6 +125,14 @@ def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
                 log.error("geocode failed for %r: %s", query, exc)
                 errored += 1
                 continue
+            finally:
+                # OSM policy is at most one request a second, and the pause
+                # used to sit after the call inside the `try`: a timeout or a
+                # 429 skipped it, so consecutive failures hit Nominatim
+                # back-to-back. Being throttled is exactly when pacing stops
+                # being optional.
+                if using_osm:
+                    time.sleep(s.nominatim_delay_s)
             if hit is None:
                 log.warning("no geocode result for %r", query)
                 continue

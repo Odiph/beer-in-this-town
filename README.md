@@ -8,17 +8,32 @@
 
 ![demo](docs/demo.gif)
 
-Scrapes Untappd venue listings for a city, pulls each venue's **Venue Stats**
-(total / unique / monthly check-ins), and exports a CSV plus a KML you can
-import into Google Maps.
+Reads Untappd's public venue listings for a city, collects each venue's
+**Venue Stats** (total / unique / monthly check-ins), and exports a CSV plus a
+map file you can import into Google My Maps, Organic Maps or OsmAnd.
 
 Designed to be **driven by a coding agent**: every command speaks JSON, reports
 its own state, and tells you what to run next. It works fine as a plain CLI too.
 
+`run --no-upload` reads public pages, writes files to `data/` and touches no
+account of yours — and with `--format gpx` you get pins on your everyday map
+without a Google account being involved at all.
+
+Note the flag: **`run` uploads to Google My Maps by default**, which drives a
+real Chrome session on your Google profile and creates a new map each time.
+That is a supported bulk import rather than anything Google's terms object to,
+but it is not nothing, so pass `--no-upload` if you only want the files. The
+two commands that write into a saved *list* — `pin` and `notes` — are separate,
+opt-in, never run on their own, and spelled out in
+[Where the lines are](#where-the-lines-are).
+
 ```bash
+beertown                    # opens the setup wizard, once
 beertown status --json      # where am I, what is next
-beertown run --query singapore --count 100 --json
+beertown run --query lisbon --count 100 --no-upload --json
 ```
+
+![The setup wizard on a machine that has never run it](docs/setup-signin.jpg)
 
 ---
 
@@ -60,7 +75,7 @@ the workarounds ranked.
 | | Required for | Notes |
 |---|---|---|
 | **Python 3.11 or 3.12** | everything | CI tests both, on Linux and Windows. |
-| **Google Chrome or Chromium** | `bootstrap`, `pin`, `notes` | Found automatically on `PATH`, or at the standard Windows / macOS / Linux install paths. `run` scrapes over plain HTTP, but falls back to driving Chrome if Untappd's pagination changes. |
+| **Google Chrome or Chromium** | `bootstrap`, `pin`, `notes` | Found automatically on `PATH`, or at the standard Windows / macOS / Linux install paths. `run` reads over plain HTTP, and falls back to driving Chrome when Untappd renders results client-side. |
 | **An Untappd account** | optional | Everything public works signed out; without a session the **YOU** column is empty and `bootstrap` warns you. |
 | **A Google account** | `pin`, `notes` only | You also create the saved list by hand first — these commands never create one. |
 
@@ -75,6 +90,76 @@ change that:
 |---|---|
 | `GOOGLE_GEOCODING_KEY` | Use Google's geocoder instead of Nominatim — faster, and no 1 req/s ceiling. Addresses are then sent to Google; see [SECURITY.md](SECURITY.md). |
 | `NOMINATIM_EMAIL` | Sent as the contact address OSM's usage policy asks for. Unset, requests identify as `no-contact-set`. |
+| `GOOGLE_PLACES_KEY` | Enables the closure check (`closures`, `run --check-closed`). Separate from the geocoding key on purpose — see [SECURITY.md](SECURITY.md). |
+
+### Is this place still open?
+
+Untappd's venue database is append-only in practice, so a bar that shut in
+2019 keeps its page, its check-in history and its stats — and since `run`
+ranks on those stats, a long-dead venue outranks a good one that opened last
+year. For trip planning that is the failure you find out about on the
+pavement.
+
+```bash
+beertown closures --csv data/venues_london_2026-09-20.csv --limit 3 --json
+beertown closures --csv data/venues_london_2026-09-20.csv --json
+```
+
+That asks the Google Places API for each venue's `businessStatus` and writes
+a `business_status` column into a **new** CSV (`data/checked_<name>.csv`) —
+the input is never overwritten. `run --check-closed` does the same thing
+inline, and is off by default.
+
+Two things worth knowing before you rely on it:
+
+- **Closed venues are flagged, not removed.** Nothing downstream drops them.
+  What to do about a venue Google calls shut is your call, and `run` uploads
+  to My Maps, so a silent deletion would be invisible.
+- **A venue Places cannot find is recorded as `unmatched`, never as closed.**
+  A failed lookup means the place closed, was renamed, is too new, or Places
+  simply lacks it — four cases wanting opposite outcomes, so none is picked.
+  The cost is that a venue which quietly shut and was delisted survives as
+  unknown. That is the better trade: a false closure deletes a real bar from
+  your map.
+
+Cost: `businessStatus` is a Pro field on Text Search, so this bills the
+Places API Text Search Pro SKU — 5,000 lookups a month free, then $25.60 per
+1,000. Results are cached in `state/`, so re-running costs nothing for venues
+already resolved. At a hundred venues a week you will not leave the free
+tier, but billing must be enabled on the key.
+
+## Start here
+
+```bash
+beertown
+```
+
+That's it. With no arguments it opens a wizard on `localhost` — three steps,
+once — that walks you through the setup:
+Chrome, your Google account, your Untappd account. It signs you in, then
+**tests both accounts with a real round-trip** — and only calls them connected
+once that passes.
+
+(`beertown ui` does the same thing explicitly. A bare `beertown` stays out of the way when it would be unhelpful: with `--json`, or when output is piped, you get the normal error envelope rather than a server that blocks forever.)
+
+That distinction is the point. A cookie on disk means a login happened once,
+not that the account works now. Before this, a stale Untappd session announced
+itself as `search_login_required` a hundred requests into a run; the dashboard
+finds it in one.
+
+The last step asks for your city and hands it to whatever is driving — press
+**Use this city** and the next `status` offers a `run` for *your* city rather
+than the built-in default. Or copy the command and run it yourself.
+
+![Naming a city in the last step of the wizard](docs/setup-wizard.gif)
+
+While anything is running, the page narrates what it's doing and why it's
+taking as long as it is — including the pacing waits, which are deliberate.
+
+The dashboard **cannot write to your Google account**. `pin` and `notes` have
+no button there and no route on that server. It binds to `127.0.0.1` only and
+needs the key from the URL the terminal prints; [SECURITY.md](SECURITY.md)
+explains why a local server that can capture a session needs that much care.
 
 ## Install
 
@@ -114,7 +199,7 @@ Your session, journals and rate ledger live in `state/`, `data/` and
 
 ```bash
 beertown doctor --json      # deps, session, geocoder
-beertown selfcheck --json   # 1 request: are the selectors alive
+beertown selfcheck --json   # 2 requests: are the selectors alive
 beertown run --query singapore --count 100 --no-upload --json
 ```
 
@@ -213,6 +298,35 @@ The date tracks **when the data was captured**, not when the note was written,
 so re-running does not rewrite every note with a new date. A note that already
 matches is skipped.
 
+## Checking the venue filters
+
+Untappd's listings include things you probably do not want on a beer map: a
+café someone logged a bottle in, a bar that closed in 2019 but kept its
+check-in history, occasionally somebody's flat.
+
+Judging those needs thresholds, and a threshold nobody has checked is a guess
+with a number attached. So the rules live in `classify.py`, they are **not**
+applied to your data, and two commands exist to find out how right they are
+before they ever are:
+
+```bash
+beertown label --csv data/venues_singapore_2026-09-20.csv --json
+# fill in the two columns, then:
+beertown score --labels data/labels_venues_singapore_2026-09-20.csv --json
+```
+
+`label` samples a fixed quota from each bucket rather than sampling at random,
+because the cases worth measuring are the rare ones — a random hundred rows
+would contain two or three of them. `score` divides that back out, so the rates
+it reports still describe the whole dataset.
+
+It reports the two kinds of mistake separately, because they do not cost the
+same: a private address kept on the map is a different problem from one good
+bar dropped that you add back from a visible list. Both come with the actual
+rows attached, grouped, so you can read the failures rather than count them.
+
+About 125 rows, two questions each, once.
+
 ## Where the lines are
 
 This project touches two services that both say no to some of it. Rather than
@@ -220,7 +334,7 @@ scatter that across a dozen paragraphs, here it is in one place.
 
 | Surface | Status |
 |---|---|
-| Scraping Untappd (`run`, `selfcheck`) | **Against Untappd's ToS**, which prohibits automated access. |
+| Reading Untappd venue pages (`run`, `selfcheck`) | **Against Untappd's ToS**, which prohibits automated access. |
 | KML → Google My Maps (`run`) | **Supported.** A documented bulk-import feature. No line crossed. |
 | Driving the Maps UI (`pin`, `notes`) | **Against Google's ToS** — "do not access the Services through automated means". |
 | GPX / GeoJSON → Organic Maps, OsmAnd (`run`) | **Supported.** A documented import, on your everyday map, with no account involved. |
@@ -253,12 +367,25 @@ legal advice. You are responsible for your own use of it.
 | `status` | Where the pipeline is, what to run next | no |
 | `doctor` | Dependencies, session, geocoder | no |
 | `bootstrap` | One-time login (opens a real Chrome) | reads |
-| `selfcheck` | One request: are the selectors alive | no |
-| `run` | Scrape → CSV + KML + diff | no |
+| `selfcheck` | Two requests: are the venue *and search* selectors alive | no |
+| `ui` | Setup dashboard: connect and test your accounts | reads |
+| `verify` | Test both accounts actually work (no browser window) | reads |
+| `run` | Collect → CSV + map files + diff | no |
+| `closures` | Ask Google Places whether each venue still trades | no |
 | `pin` | Save into a Google Maps list | **writes** |
 | `notes` | Write stats into each place's note | **writes** |
+| `label` | Emit a sample to check the venue filters by hand | no |
+| `score` | Report how accurate those filters actually are | no |
 
 ## Agent-driven use
+
+The setup is agent-driven too. `status` reports `blocked_on: "sign_in"` with an
+empty `next_actions` when it needs a person, and the action it offers first is
+`ui --detach`, which starts the wizard in its own process and returns at once —
+so an agent opens it *for* you rather than telling you to type something. You
+sign in; it runs `verify --json` to find out whether that took. `run` is not
+offered until a verification has actually passed.
+
 
 Every command emits exactly one envelope on stdout:
 
@@ -287,8 +414,13 @@ Claude Code skill.
 ## Politeness and failing loudly
 
 Single connection, no concurrency, 2.0–4.5s jittered delay, 600 requests/hour
-cap, 12h disk cache, and a deliberate abort after three consecutive throttle
-responses. ~100 venues ≈ 6 minutes. None of which makes scraping permitted —
+cap **persisted to disk**, 12h disk cache, and a deliberate abort after three
+consecutive throttle responses or three consecutive transport failures.
+
+The pacing numbers have floors: they can be raised but not lowered, because a
+guardrail you can switch off with a flag is a suggestion. The hourly ceiling
+and the circuit breaker are persisted for the same reason the write budget is
+— restarting the process must not hand back a fresh allowance. ~100 venues ≈ 6 minutes. None of which makes automated access permitted —
 see [Where the lines are](#where-the-lines-are).
 
 Each of those is a defence rather than a preference, and every one is
@@ -331,7 +463,8 @@ missing, then annotates whatever is already pinned, and both halves trim
 themselves to the remaining budget. Run it nightly and the backlog drains on
 its own; once everything is done it exits in seconds having done nothing.
 
-`run_weekly.ps1` re-scrapes on a weekly timer, so the numbers stay current.
+`run_weekly.ps1` refreshes the data on a weekly timer, so the numbers stay
+current.
 
 **[docs/scheduling.md](docs/scheduling.md)** has both, for Windows Task
 Scheduler and for cron.

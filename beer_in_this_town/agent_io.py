@@ -46,6 +46,12 @@ class Envelope:
     data: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     next_actions: list[str] = field(default_factory=list)
+    # Prose for a human: things to do by hand, and things an agent must be
+    # told to do rather than decide to do. `next_actions` promises literal
+    # runnable commands, so a "# do this yourself" line does not belong in it
+    # -- an agent passing argv as a list gets "#" as an argument, and one that
+    # shells out silently no-ops and loops on the same suggestion.
+    hints: list[str] = field(default_factory=list)
     error: Problem | None = None
 
     def to_json(self) -> str:
@@ -67,6 +73,8 @@ def emit(envelope: Envelope, as_json: bool) -> None:
         print(f"  {key}: {value}")
     for warning in envelope.warnings:
         print(f"  ! {warning}")
+    for hint in envelope.hints:
+        print(f"  - {hint}")
     if envelope.error:
         print(f"  error: {envelope.error.message}")
         print(f"  fix:   {envelope.error.remedy}")
@@ -82,8 +90,36 @@ def fail(command: str, problem: Problem, **data: Any) -> Envelope:
         ok=False,
         data=data,
         error=problem,
-        next_actions=[problem.remedy] if problem.remedy.startswith("python") else [],
+        next_actions=_runnable(problem.remedy),
+        hints=[] if _runnable(problem.remedy) else [problem.remedy],
     )
+
+
+# Commands that must never be handed to an agent to run: two write to the
+# user's Google account, and `bootstrap` opens a browser and blocks for up to
+# fifteen minutes waiting for a person.
+_HUMAN_ONLY = ("bootstrap", " pin ", " notes ")
+
+
+def _runnable(remedy: str) -> list[str]:
+    """A remedy, promoted to a next action only if it is safe to execute.
+
+    `fail()` used to promote anything starting with "python", which quietly
+    put `bootstrap`, `pin` and `notes` back into `next_actions` after they had
+    been removed from `status` -- so the contract still steered an agent into
+    the account write, just through a different door. Whatever is not
+    promoted still reaches the caller as a hint.
+    """
+    if not remedy.startswith("python"):
+        return []
+    padded = f" {remedy} "
+    if any(token in padded for token in _HUMAN_ONLY):
+        return []
+    # `run` uploads to My Maps unless told not to, which is not something to
+    # start on an agent's own initiative.
+    if " run " in padded and "--no-upload" not in remedy:
+        return []
+    return [remedy]
 
 
 def log_to_stderr() -> None:
