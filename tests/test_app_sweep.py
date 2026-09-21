@@ -535,3 +535,117 @@ def test_min_depth_does_not_inflate_the_truncated_count():
 def test_min_depth_zero_keeps_the_old_behaviour():
     dev = FakeDevice([dump_with(["a"])])
     assert sweep(dev, CELL, settle_max_s=0).cells_visited == 1
+
+
+# --- venues that know where they are --------------------------------------
+#
+# Without a camera a `Venue` carries the screen pixels of whichever dump
+# happened to produce it, which stop meaning anything the moment the map
+# pans. With one, the conversion happens while that viewport is still the
+# live one.
+
+def test_without_a_camera_a_venue_has_no_coordinates():
+    """No camera must mean no coordinates, never plausible ones.
+
+    A fabricated lat/lng is the failure this whole module exists to avoid:
+    it puts every venue somewhere real-looking and wrong.
+    """
+    dev = FakeDevice([dump_with(["Lauter", "Schnitt"])])
+    result = sweep(dev, CELL, max_depth=0, settle_min_s=0, settle_max_s=0)
+    assert [v.name for v in result.venues] == ["Lauter", "Schnitt"]
+    assert all(v.lat is None and v.lng is None for v in result.venues)
+
+
+def test_a_camera_gives_every_venue_a_coordinate():
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    dev = FakeDevice([dump_with(["Lauter", "Schnitt"])])
+    result = sweep(dev, CELL, max_depth=0, camera=cam,
+                   settle_min_s=0, settle_max_s=0)
+    assert all(v.lat is not None and v.lng is not None for v in result.venues)
+    # Near the searched city, not somewhere plausible on another continent.
+    for v in result.venues:
+        assert abs(v.lat - 32.0853) < 0.2
+        assert abs(v.lng - 34.7818) < 0.2
+
+
+def test_the_camera_follows_the_sweep_as_it_pans():
+    """Two cells must not report the same ground.
+
+    The sweep pans a quarter-viewport between children. If the camera does
+    not move with it, every cell converts its pins against the root centre
+    and the whole city collapses onto one rectangle -- with the right number
+    of venues, and all of them in the wrong place.
+    """
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    start = cam.centre
+    full = [f"V{i}" for i in range(60)]  # at the cap, so it subdivides
+    dev = FakeDevice([dump_with(full), dump_with(["Child"])])
+    sweep(dev, CELL, max_depth=1, camera=cam,
+          settle_min_s=0, settle_max_s=0)
+    assert cam.centre != start, "the camera never moved with the viewport"
+
+
+# --- recovering to the map from a cold start -------------------------------
+#
+# Found live: `launch` resumed the running app on the category filter panel
+# a crashed sweep had left open, and recovery then tapped `VIEW_MAP_ROW`'s
+# remembered coordinate on that panel -- a blind tap on an unknown screen,
+# landing on a checkbox. The fix has two halves: the app really restarts
+# (see test_adb_device), and `View Map` is found, not assumed.
+
+DISCOVER = ("<?xml version='1.0'?><hierarchy>"
+            "<node class='android.widget.TextView' text='Discover' "
+            "bounds='[0,40][300,100]'/>"
+            "<node class='android.widget.TextView' text='View Map' "
+            "bounds='[120,400][400,440]'/>"
+            "</hierarchy>")
+
+FILTER_PANEL = ("<?xml version='1.0'?><hierarchy>"
+                "<node class='android.widget.CheckBox' "
+                "content-desc='Beer Garden, 2, ' bounds='[0,360][900,420]'/>"
+                "</hierarchy>")
+
+
+def test_relaunch_taps_view_map_where_it_actually_is():
+    from beer_in_this_town.app_sweep import ensure_map_screen
+
+    dev = FakeDevice([DISCOVER, dump_with(["Lauter"])],
+                     focus="com.uncube.launcher3")
+    ensure_map_screen(dev, settle_max_s=0)
+    assert "tap(260,420)" in dev.actions, dev.actions
+
+
+def test_relaunch_onto_an_unknown_screen_raises_without_tapping():
+    """No `View Map`, no tap. A guess here lands on whatever is under it."""
+    from beer_in_this_town.app_sweep import ensure_map_screen
+
+    dev = FakeDevice([FILTER_PANEL], focus="com.uncube.launcher3")
+    with pytest.raises(WrongScreen, match="View Map"):
+        ensure_map_screen(dev, settle_max_s=0)
+    assert not any(a.startswith("tap(") for a in dev.actions), dev.actions
+
+
+def test_relaunch_waits_for_a_cold_start_instead_of_giving_up():
+    """Found live: a force-stopped app was still loading when the one dump
+    after relaunch was taken, and recovery refused a screen that became
+    Discover a few seconds later. Waiting is the fix; guessing is not."""
+    from beer_in_this_town.app_sweep import ensure_map_screen
+
+    splash = "<?xml version='1.0'?><hierarchy><node text='' bounds='[0,0][9,9]'/></hierarchy>"
+    dev = FakeDevice([splash, splash, DISCOVER, dump_with(["Lauter"])],
+                     focus="com.uncube.launcher3")
+    ensure_map_screen(dev, settle_max_s=0)
+    assert "tap(260,420)" in dev.actions, dev.actions
+
+
+def test_relaunch_waiting_is_bounded():
+    from beer_in_this_town.app_sweep import RELAUNCH_POLLS, ensure_map_screen
+
+    dev = FakeDevice([FILTER_PANEL], focus="com.uncube.launcher3")
+    with pytest.raises(WrongScreen):
+        ensure_map_screen(dev, settle_max_s=0)
+    assert dev.dumps_served <= RELAUNCH_POLLS + 1

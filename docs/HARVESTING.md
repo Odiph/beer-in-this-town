@@ -437,6 +437,17 @@ tuning problem rather than a structural one.
    neither.
 3. **City name → which cells.** Currently a `Cell` is passed in by hand. What
    decides the bounding box for "Tel Aviv", and the starting zoom?
+
+   **`min_cell_km` is deferred, deliberately.** The right rule is to bound a
+   cell by how much ground it covers, not by how many times it has been
+   divided. `min_depth=1, max_depth=3` is the crude stand-in that ships, and
+   it is the one that took Singapore's recall from 5% to 65%. The scale it
+   would need is now measurable -- the device GPS calibrates it (see 2
+   above) -- so this is a refinement with a known route, not a blocked
+   question. It is parked because 65% recall is limited by things that
+   `min_cell_km` does not touch: one root cell per city undercovers a
+   borough, and the sweep still navigates in pixels while ignoring the
+   `Cell` it is handed.
 4. **The coordinate transform** is fitted at one zoom in one city.
 5. **Pin ordering** beyond the verified block.
 6. **OSM/Overpass is parked** for now; `overpass.py` is built and tested but

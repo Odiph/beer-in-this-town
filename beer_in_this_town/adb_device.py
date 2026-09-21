@@ -35,6 +35,16 @@ _FOCUS = re.compile(r"mCurrentFocus=\S+\s+\S+\s+(?P<pkg>[^/\s}]+)")
 
 DEFAULT_TIMEOUT_S = 120.0
 
+# `    gps: Location[gps 32.075318,34.808611 acc=1 ...]`
+_FIX = re.compile(
+    r"^\s*(?P<provider>gps|network):\s*Location\[\S+\s+"
+    r"(?P<lat>-?\d+\.\d+),(?P<lng>-?\d+\.\d+)", re.MULTILINE)
+
+# What a transiently killed `uiautomator` prints instead of a dump. Seen live:
+# it ended a depth-3 Singapore sweep partway through, with nothing wrong on
+# the device -- the usual cause is two dump instances colliding.
+_KILLED = "Killed"
+
 
 class AdbUnavailable(RuntimeError):
     """An `adb` call failed, or returned something unusable.
@@ -94,14 +104,44 @@ class AdbDevice:
         raise AdbUnavailable("dumpsys window reported no mCurrentFocus")
 
     def dump(self) -> str:
-        """The current screen's accessibility tree, as XML."""
+        """The current screen's accessibility tree, as XML.
+
+        Retries **once**, and only on a killed `uiautomator`, which is
+        transient. A second kill is not transient, and anything else that is
+        not XML is news rather than noise, so both raise.
+        """
         raw = self._adb("exec-out", "uiautomator", "dump", "/dev/tty")
+        if "<?xml" not in raw and raw.strip() == _KILLED:
+            log.warning("uiautomator was killed mid-dump; retrying once.")
+            raw = self._adb("exec-out", "uiautomator", "dump", "/dev/tty")
         start = raw.find("<?xml")
         end = raw.rfind(">")
         if start < 0 or end <= start:
             raise AdbUnavailable(
                 f"uiautomator returned no XML: {raw.strip()[:200]!r}")
         return raw[start:end + 1]
+
+    def location(self) -> tuple[float, float]:
+        """The device's own position fix, as `(lat, lng)`.
+
+        This is what calibrates the sweep's camera: after `Reset location`
+        the map centres on it to within 24 m, with no corpus, geocoder or
+        network. GPS is preferred over the network provider, which is
+        coarser.
+
+        Raises rather than returning a default. A fallback location would
+        calibrate an entire corpus to somewhere real and wrong.
+        """
+        out = self._adb("shell", "dumpsys", "location")
+        fixes = {m.group("provider"): (float(m.group("lat")),
+                                       float(m.group("lng")))
+                 for m in _FIX.finditer(out)}
+        for provider in ("gps", "network"):
+            if provider in fixes:
+                return fixes[provider]
+        raise AdbUnavailable(
+            "dumpsys location reported no location fix. Set one in the "
+            "emulator's location settings; the sweep will not guess one.")
 
     def tap(self, x: int, y: int) -> None:
         self._adb("shell", "input", "tap", str(x), str(y))
@@ -118,10 +158,16 @@ class AdbDevice:
         self._adb("shell", "input", "keyevent", "KEYCODE_ENTER")
 
     def launch(self, package: str) -> None:
-        """Start the app fresh.
+        """Start the app fresh, from its home screen.
+
+        **Stopped first**, because `monkey` on a running app only resumes it
+        on whatever screen it was on. Found live: it brought back a category
+        filter panel a crashed sweep had left open, and the recovery that
+        followed tapped into it believing it was on Discover.
 
         `monkey` is used rather than `am start` because it needs no activity
         name, and the activity has changed between app versions.
         """
+        self._adb("shell", "am", "force-stop", package)
         self._adb("shell", "monkey", "-p", package,
                   "-c", "android.intent.category.LAUNCHER", "1")
