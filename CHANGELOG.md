@@ -6,6 +6,83 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-22
+
+The source and the destination both changed. Venues now come from a sweep of
+the Untappd Android app's map, which is geographic, instead of Untappd's web
+search, which matches names; and they go into a Google Maps saved list instead
+of a My Maps layer. The flow is one command per stage, documented step by step
+for a person in `docs/FLOW.md` and for a coding agent in `AGENTS.md`.
+
+### Added
+- **The flow, one command per stage**, each with a `--json` envelope and each
+  reading the previous stage's file from `--city` (or `--in PATH`), under
+  `data/<slug>/`:
+  - `sweep` reads the Untappd app's map over `adb` on an emulator, splitting
+    the map wherever a search comes back at the ~60-venue cap (`--min-depth 1
+    --max-depth 3` by default, the measured recommendation), with the app's
+    drinking-places filter on, and places every pin by fitting the map's scale
+    against OpenStreetMap. `--here` centres on the emulator's GPS instead of a
+    city search. Writes `1_sweep.csv`; resumes from a per-city journal.
+  - `enrich` matches each swept name to its Untappd venue page, accepting a
+    page only when its published coordinates are within 1 km of the pin.
+    Writes `2_enriched.csv`; unmatched venues stay, with unknown counts.
+  - `filter` keeps the beer venues and writes the rest to `3_excluded.csv`
+    with a reason each. `3_venues.csv` is what `pin` and `notes` read.
+  - `export` writes `venues.kml`, `venues.gpx` and `venues.geojson`.
+- **Emulator checks** in `doctor` -- `adb` on `PATH`, a device connected, the
+  Untappd app installed, a 900x1600 screen -- each with a remedy a stranger
+  can follow. `status` reports `blocked_on: "emulator"` until they pass, and
+  per-city stage progress.
+- New error codes: `emulator_unavailable`, `calibration_failed`,
+  `city_not_found`, `no_location_control`, `stage_input_missing`.
+- The setup wizard gained the emulator setup, the app sign-in, a copyable
+  command per stage with its live status, and the saved-list and pin-trial
+  instructions. It still has no route that can `pin` or write `notes`.
+- `docs/FLOW.md`: the whole flow for a stranger, every manual step included
+  (BlueStacks, the display setting and why, ADB, platform-tools on each OS,
+  sign-ins, the saved list), measured quality numbers, limits, and
+  troubleshooting by error code. `AGENTS.md` gained the matching playbook,
+  with the exact message to give the human at each manual step.
+- `docs/HARVESTING.md`: the research record behind the sweep.
+- OpenStreetMap (ODbL) is credited in the README and the exports.
+
+### Removed
+- **`run`**, and with it **Untappd web search** as a source of venues. It
+  matches venue names, not places: a Tel Aviv run returned 21 venues more than
+  100 km away and missed bars in the centre. Venue *pages* stay; `enrich`
+  reads them. `search_login_required` went with it.
+- **The My Maps upload**, from the CLI and the wizard. The destination is a
+  Google Maps saved list; KML is still exported as a file.
+- `run_weekly.ps1`, `run_catchup.ps1` and `docs/scheduling.md`. Nothing is
+  scheduled any more; each write session is the user's decision.
+- `selfcheck`'s search probe. It checks a venue page only.
+
+### Changed
+- **The destination is a Google Maps saved list**, filled by `pin` and
+  annotated by `notes`, both still human-triggered, trial-first and behind the
+  unchanged write guardrails. They are never in `next_actions`; their exact
+  command text is in `hints`.
+- `next_actions` only ever offers `status`, `doctor`, `verify`, `sweep`,
+  `enrich`, `filter`, `export`, and `ui --detach` for a sign-in.
+- The README's prerequisites are honest: BlueStacks, adb and both accounts are
+  required, not optional. "Where the lines are" gained a row for automating
+  the Untappd app, and states plainly that it and `pin`/`notes` are against
+  the respective terms of service.
+
+### Fixed
+- **Namesakes in enrichment.** A common name's far-away namesakes could fill
+  the two page fetches allowed per venue, so the right page was never opened
+  (Tel Aviv: `Mike's Place`, `Django`, `Oscar Wilde`). The lookup is now
+  qualified by the city. <!-- verify: describe the namesake fix as stream A2 implemented it. -->
+- **CI test selection.** CI ran `-m unit`, which skipped every test that was
+  never marked -- 187 of 647. It now runs `-m "not integration"`.
+
+The entries below were written during the 0.2.0 cycle, before the flow above
+replaced `run`, and describe the tool as it was at the time. Where they
+mention `run`, web search or My Maps, those are gone.
+
+
 ### Added
 - **Removed the default city, and the default list name.** `run` used to
   default to `singapore` and `pin`/`notes` to `"Singapore Bars"`. A default
@@ -365,5 +442,6 @@ position, and a run aborts without writing anything if under 90% of venues
 parse cleanly. Two bugs of exactly the class this guards against were found and
 fixed during development — see the README and the regression tests.
 
-[Unreleased]: https://github.com/Odiph/beer-in-this-town/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Odiph/beer-in-this-town/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Odiph/beer-in-this-town/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Odiph/beer-in-this-town/releases/tag/v0.1.0
