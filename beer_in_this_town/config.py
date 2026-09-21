@@ -13,7 +13,6 @@ STATE_DIR = ROOT / "state"
 CACHE_DIR = ROOT / "cache"
 DEBUG_DIR = ROOT / "debug"
 
-BASE = "https://untappd.com"
 
 # A real Chrome UA. Chrome has frozen the minor/build/patch fields at 0.0.0
 # since v107, so the major version is the only part that varies.
@@ -173,15 +172,25 @@ EXCLUDED_CSV = "3_excluded.csv"
 EXPORT_STEM = "venues"
 
 
-def cli_arg(value: str) -> str:
-    """A user string as one double-quoted command-line argument.
+# Characters a shell of any flavour treats as syntax. A city or list name is
+# free text, and the commands built from it are run verbatim by agents and
+# pasted by people, so none of these may survive into one.
+_SHELL_SYNTAX = re.compile(r'["`$;&|<>%^!\x00-\x1f\x7f]')
 
-    Commands built from a city or list name are handed to an agent to run
-    verbatim, so a stray quote in the name must not be able to end the
-    argument and start another. Quotes are dropped rather than escaped:
-    escaping differs between PowerShell, cmd and POSIX shells.
+
+def arg_text(value: str) -> str:
+    """A user string with every shell metacharacter removed, for a command.
+
+    Removed rather than escaped: escaping differs between PowerShell, cmd and
+    POSIX shells, and the same command is shown to all three.
     """
-    return '"' + value.replace('"', "").replace("`", "") + '"'
+    # A trailing backslash would escape the closing quote.
+    return _SHELL_SYNTAX.sub("", value).strip().rstrip("\\")
+
+
+def cli_arg(value: str) -> str:
+    """A user string as one double-quoted command-line argument."""
+    return '"' + arg_text(value) + '"'
 
 
 def ensure_dirs() -> None:

@@ -847,7 +847,7 @@ const VIEWS = {
     go.appendChild(how);
 
     const fill = () => {
-      const name = (input.value || "").replace(/"/g, "").trim() || card.list_default;
+      const name = (input.value || "").replace(/["`$;&|<>%^!\x00-\x1f\x7f]/g, "").trim() || card.list_default;
       for (const [k, t] of Object.entries(card.templates)) {
         if (blocks[k]) blocks[k].textContent = t.split("{list}").join(name);
       }

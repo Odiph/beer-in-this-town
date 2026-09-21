@@ -32,7 +32,7 @@ from pathlib import Path
 
 from .agent_io import Envelope, Problem, fail
 from .classify import craft_beer_decision
-from .config import Settings, stage_path
+from .config import Settings, cli_arg, stage_path
 from .export import (
     MAP_FORMATS,
     osm_attribution,
@@ -110,7 +110,7 @@ def dispatch(args: argparse.Namespace, s: Settings) -> Envelope | None:
 # --- stage files ----------------------------------------------------------
 
 def _cmd(step: str, city: str) -> str:
-    return f'{PY} {step} --city "{city}" --json'
+    return f'{PY} {step} --city {cli_arg(city)} --json'
 
 
 def _input(command: str, city: str, in_path: str | None, default: str,
@@ -267,7 +267,7 @@ def cmd_filter(s: Settings, city: str, in_path: str | None = None) -> Envelope:
         warnings=warnings,
         next_actions=[_cmd("export", city)],
         hints=[f"Optional, paid (Google Places key): a human can check "
-               f"closures with: {PY} closures --csv \"{venues_csv}\" "
+               f"closures with: {PY} closures --csv {cli_arg(str(venues_csv))} "
                f"--limit 3 --json"],
     )
 
@@ -291,7 +291,7 @@ def cmd_export(s: Settings, city: str, in_path: str | None = None,
     except ValueError as exc:
         return fail("export", Problem(
             code="bad_format", message=str(exc),
-            remedy=f'{PY} export --city "{city}" --format '
+            remedy=f'{PY} export --city {cli_arg(city)} --format '
                    f'{",".join(MAP_FORMATS)} --json',
         ))
     src = _input("export", city, in_path, VENUES_CSV, "filter")
@@ -327,10 +327,10 @@ def cmd_export(s: Settings, city: str, in_path: str | None = None,
             "In Google Maps (a person, by hand): Saved -> New list, and name "
             "it. The tool never creates or guesses a list.",
             f"Then a person can trial-pin 3 places into it: {PY} pin --csv "
-            f"\"{src}\" --list \"<your list name>\" --limit 3 --json -- check "
+            f"{cli_arg(str(src))} --list \"<your list name>\" --limit 3 --json -- check "
             f"them in Google Maps before pinning the rest (100/day budget).",
             f"After pinning, check-in stats go into each place's note with: "
-            f"{PY} notes --csv \"{src}\" --list \"<your list name>\" "
+            f"{PY} notes --csv {cli_arg(str(src))} --list \"<your list name>\" "
             f"--limit 3 --json",
         ],
     )

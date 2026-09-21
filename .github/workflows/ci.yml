@@ -44,4 +44,4 @@ jobs:
         # `status` is read-only and always exists; no other command is assumed.
         run: |
           python -m beer_in_this_town status --json > envelope.json
-          python -c "import json; d=json.load(open('envelope.json')); assert d['schema_version']=='1.0', d; assert isinstance(d['next_actions'], list); assert 'ok' in d; print('envelope ok')"
+          python -c "import json; d=json.load(open('envelope.json')); assert d['schema_version']=='2.0', d; assert isinstance(d['next_actions'], list); assert 'ok' in d; print('envelope ok')"
