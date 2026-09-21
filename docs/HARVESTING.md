@@ -194,6 +194,23 @@ competing.
 Matching is on whole comma-separated phrases, not substrings, which is what
 lets `Hotel Bar` be kept while `Hotel` is dropped.
 
+### Cells overlap, they do not tile
+
+Exact tiling loses venues at the seams, for three measured reasons:
+
+- **The fling is not exact** -- 0.95 to 1.27 depending on swipe duration, and
+  `pin_displacement` measures the error without correcting for it.
+- **A marker straddling the viewport edge may not render.**
+- **Dense markers are drawn displaced** by up to ~100 px.
+
+`CELL_OVERLAP = 0.15` makes children half the parent *plus* a margin, and
+the pan step is shortened to match -- overlapping geometry is useless if the
+gesture still moves a full quarter. 15% of a quarter-viewport is ~34 px,
+about 350 m at the city zoom, comfortably more than any of the three.
+
+The cost is that cells re-harvest their margins, which dedup absorbs for
+nothing. **A duplicate venue is free; a missed one is invisible.**
+
 ---
 
 ## 6. The cap selects by popularity

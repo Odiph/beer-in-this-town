@@ -127,11 +127,18 @@ def test_quartering_a_real_cell_gives_four_real_cells():
     assert max(q.right for q in quarters) == cell.right
 
 
-def test_a_deeper_cell_is_smaller_by_half_in_each_direction():
+def test_a_deeper_cell_is_about_half_plus_an_overlap_margin():
+    """Children are half the parent plus a deliberate margin, because cells
+    that tile exactly lose venues at the seams -- the pan is not pixel-exact,
+    edge markers may not render, and dense markers are drawn displaced."""
+    from beer_in_this_town.app_sweep import CELL_OVERLAP
+
     cell = cell_for_viewport(TLV, Scale(m_per_px=10.2))
     child = cell.quarters()[0]
-    assert (child.right - child.left) == pytest.approx((cell.right - cell.left) / 2)
-    assert (child.top - child.bottom) == pytest.approx((cell.top - cell.bottom) / 2)
+    expected_w = (cell.right - cell.left) / 2 * (1 + CELL_OVERLAP)
+    expected_h = (cell.top - cell.bottom) / 2 * (1 + CELL_OVERLAP)
+    assert (child.right - child.left) == pytest.approx(expected_w)
+    assert (child.top - child.bottom) == pytest.approx(expected_h)
 
 
 # --- where the map actually is --------------------------------------------
