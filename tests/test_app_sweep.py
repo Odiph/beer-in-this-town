@@ -425,3 +425,54 @@ def test_an_unfiltered_sweep_still_just_refreshes():
     sweep(dev, CELL, settle_max_s=0)
     taps = [a for a in dev.actions if a.startswith("tap")]
     assert taps == [f"tap({app_sweep.REFRESH_BUTTON[0]},{app_sweep.REFRESH_BUTTON[1]})"]
+
+
+# --- overlap at the seams -------------------------------------------------
+
+def test_children_overlap_rather_than_tile():
+    """A seam is where venues go missing: the pan is not pixel-exact, a
+    marker on the boundary may not render, and dense markers are drawn
+    displaced by up to ~100 px."""
+    from beer_in_this_town.app_sweep import CELL_OVERLAP
+
+    parent = Cell(left=34.0, right=35.0, bottom=32.0, top=33.0)
+    tl, tr, bl, br = parent.quarters()
+    assert tl.right > tr.left          # they share ground, not an edge
+    assert tl.bottom < tr.top
+    assert CELL_OVERLAP > 0
+
+
+def test_the_overlap_is_a_margin_not_a_doubling():
+    """Too much overlap re-harvests the same ground at full cost."""
+    from beer_in_this_town.app_sweep import CELL_OVERLAP
+
+    assert 0 < CELL_OVERLAP < 0.5
+    parent = Cell(left=34.0, right=35.0, bottom=32.0, top=33.0)
+    child = parent.quarters()[0]
+    width = child.right - child.left
+    assert width < (parent.right - parent.left) * 0.75
+
+
+def test_children_still_cover_the_whole_parent():
+    parent = Cell(left=34.0, right=35.0, bottom=32.0, top=33.0)
+    quarters = parent.quarters()
+    assert min(q.left for q in quarters) == parent.left
+    assert max(q.right for q in quarters) == parent.right
+    assert min(q.bottom for q in quarters) == parent.bottom
+    assert max(q.top for q in quarters) == parent.top
+
+
+def test_the_pan_step_is_short_of_a_quarter():
+    """The geometry overlapping is no use if the gesture still moves a full
+    quarter -- the viewports would tile even though the cells do not."""
+    from beer_in_this_town.app_sweep import (
+        CELL_OVERLAP,
+        MAP_BOTTOM,
+        MAP_TOP,
+        SCREEN_WIDTH,
+    )
+
+    step_x = int(SCREEN_WIDTH // 4 * (1 - CELL_OVERLAP))
+    step_y = int((MAP_BOTTOM - MAP_TOP) // 4 * (1 - CELL_OVERLAP))
+    assert step_x < SCREEN_WIDTH // 4
+    assert step_y < (MAP_BOTTOM - MAP_TOP) // 4

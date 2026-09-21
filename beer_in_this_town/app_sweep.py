@@ -127,6 +127,20 @@ MIN_SHARED_FOR_PAN_CHECK = 6
 # broken sweep.
 MAX_CONSECUTIVE_DEAD_PANS = 3
 
+# How much neighbouring cells overlap, as a fraction of a cell's width.
+#
+# Exact tiling loses venues at the seams, for three measured reasons: the
+# fling is not exact (0.95 to 1.27 depending on swipe duration, and
+# `pin_displacement` measures the error without correcting it); a marker
+# straddling the viewport edge may not render at all; and the map nudges
+# overlapping markers apart by up to ~100 px in dense clusters.
+#
+# 15% of a quarter-viewport is ~34 px horizontally, about 350 m on the
+# ground at the city zoom -- comfortably more than any of those three. The
+# cost is that cells re-harvest their margins, which dedup absorbs: a
+# duplicate venue is free, a missed one is invisible.
+CELL_OVERLAP = 0.15
+
 # How long to let the app settle after a gesture before believing the screen.
 # A `Refresh search` re-queries the network, and a dump taken too early
 # catches a half-drawn map -- which reads as a thinner city, not as an error.
@@ -167,14 +181,23 @@ class Cell:
     bottom: float
     top: float
 
-    def quarters(self) -> list[Cell]:
+    def quarters(self, overlap: float = CELL_OVERLAP) -> list[Cell]:
+        """Four children that overlap rather than tile.
+
+        A seam is where venues go missing: the pan that lands a child is not
+        pixel-exact, a marker on the boundary may not render, and dense
+        markers are drawn displaced. Overlapping costs duplicates, which
+        dedup absorbs for nothing.
+        """
         mx = (self.left + self.right) / 2
         my = (self.bottom + self.top) / 2
+        px = (self.right - self.left) / 2 * overlap
+        py = (self.top - self.bottom) / 2 * overlap
         return [
-            Cell(self.left, mx, my, self.top),
-            Cell(mx, self.right, my, self.top),
-            Cell(self.left, mx, self.bottom, my),
-            Cell(mx, self.right, self.bottom, my),
+            Cell(self.left, mx + px, my - py, self.top),
+            Cell(mx - px, self.right, my - py, self.top),
+            Cell(self.left, mx + px, self.bottom, my + py),
+            Cell(mx - px, self.right, self.bottom, my + py),
         ]
 
 
@@ -502,8 +525,10 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
 
     # A quarter of the map area, which is how far the viewport must move to
     # land on each child cell.
-    step_x = SCREEN_WIDTH // 4
-    step_y = (MAP_BOTTOM - MAP_TOP) // 4
+    # Short of a true quarter, so neighbouring viewports overlap. See
+    # CELL_OVERLAP for why exact tiling loses venues at the seams.
+    step_x = int(SCREEN_WIDTH // 4 * (1 - CELL_OVERLAP))
+    step_y = int((MAP_BOTTOM - MAP_TOP) // 4 * (1 - CELL_OVERLAP))
 
     for dx, dy in ((-step_x, -step_y), (step_x, -step_y),
                    (-step_x, step_y), (step_x, step_y)):
