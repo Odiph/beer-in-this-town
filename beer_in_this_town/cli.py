@@ -1286,7 +1286,7 @@ def main(argv: list[str] | None = None) -> int:
             )), as_json)
             return 1
 
-    if args.cmd in {"sweep", "pin", "notes"}:
+    if args.cmd in {"sweep", "enrich", "filter", "export", "pin", "notes"}:
         # argv, then what the user named in the dashboard, then nothing.
         # There is no built-in default to fall through to any more: a city
         # nobody chose is a scrape of somewhere nobody asked for, and a list

@@ -247,3 +247,17 @@ def test_no_city_is_something_a_person_must_settle(ready):
     state = inspect_state(ready)
     assert blocked_on(state) == "choose_city"
     assert not any(" sweep " in f" {a} " for a in next_actions(state, ready))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stage", ["enrich", "filter", "export"])
+def test_the_later_stages_find_the_chosen_city_too(stage, capsys):
+    """`sweep` fell back to the dashboard's city; the next three did not, so
+    a person typing `beertown enrich` got `no_city` after choosing one."""
+    from beer_in_this_town import cli
+
+    record_intent("london")
+    assert cli.main([stage, "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "stage_input_missing", payload["error"]
+    assert 'london' in payload["error"]["remedy"]
