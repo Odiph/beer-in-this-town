@@ -105,7 +105,7 @@ port and each keeps killing the other.
 
 BlueStacks 5 runs on Windows. On macOS, BlueStacks' current Mac build may work
 the same way but has not been tested with this project. On Linux there is no
-BlueStacks; an Android Studio emulator set to the same 900 x 1600 portrait
+BlueStacks; an Android Studio emulator with a 1600 x 900 (or 900 x 1600)
 screen is the likely route, and is also untested. The sweep has only ever
 been run on BlueStacks 5 on Windows.
 
@@ -116,25 +116,25 @@ Android instance (the installer's "Pie 64-bit" or newer is fine). Let it
 finish, open it once, and sign in to the Google Play Store inside it with any
 Google account (it does not have to be the one your saved list will live in).
 
-### 2b. Display: 900 x 1600, portrait
+### 2b. Display: 1600 x 900 (the default)
 
 Open BlueStacks **Settings** (the gear icon in the right-hand sidebar), then
-**Display**:
+**Display**, and check:
 
-- **Display orientation:** Portrait
-- **Display resolution:** 900 x 1600
-- **Pixel density:** leave it at the default. The tool does not check it,
-  and which density the calibration runs used was not recorded.
+- **Display resolution:** 1600 x 900. This is BlueStacks' default, so usually
+  there is nothing to change. 900 x 1600 portrait works too.
+- **Pixel density:** leave it at the default (240 on the tested instance).
 
 Save, and let BlueStacks restart the instance if it asks.
 
-**Why this exact size.** The sweep reads positions off the screen: where the
-map area starts and ends, where the venue card overlays it, how far a swipe
-moves the map. Those were measured on a 900 x 1600 portrait screen and are
-constants in the code. On any other size the pans land in the wrong place and
-the sweep either stops with `app_pan_failed` or, worse, sweeps an area that is
-not the one it reports. `doctor` refuses to call the emulator ready until the
-screen is 900 x 1600.
+**Why this size.** Untappd is a portrait-only app, so on a 1600 x 900 screen
+BlueStacks draws it at 900 x 1600. The sweep reads positions off that screen:
+where the map area starts and ends, where the venue card overlays it, how far
+a swipe moves the map. Those were measured at 900 x 1600 and are constants in
+the code. On any other size the pans land in the wrong place and the sweep
+either stops with `app_pan_failed` or, worse, sweeps an area that is not the
+one it reports. `doctor` refuses to call the emulator ready unless the screen
+is 1600 x 900 or 900 x 1600.
 
 ### 2c. Turn on Android Debug Bridge
 
@@ -298,7 +298,11 @@ What it does:
    coordinates.
 
 Writes `data/<slug>/1_sweep.csv`. The sweep journals its progress per city,
-so an interrupted sweep resumes rather than restarting.
+so an interrupted sweep resumes rather than restarting. Once every cell has
+been walked the journal is marked complete, so if placement then fails (an
+Overpass 504 is routine) a re-run within 12 hours only redoes the placement
+and does not touch the emulator. `--fresh` sweeps again anyway. A journal
+older than 12 hours is discarded, so a sweep next week starts clean.
 
 Options:
 
@@ -567,10 +571,10 @@ Every command prints one JSON envelope with `--json`. On failure it carries
 
 | Code | What happened | What to do |
 |---|---|---|
-| `emulator_unavailable` | `doctor`'s emulator checks failed before a sweep | Run `beertown doctor --json` and fix the first failing check: adb on `PATH`, `adb connect`, Untappd installed, screen 900 x 1600. |
+| `emulator_unavailable` | `doctor`'s emulator checks failed before a sweep | Run `beertown doctor --json` and fix the first failing check: adb on `PATH`, `adb connect`, Untappd installed, screen 1600 x 900 (or 900 x 1600). |
 | `adb_unavailable` | `adb` could not reach the device, or returned nothing usable | Is BlueStacks running? `adb connect 127.0.0.1:5555`, then `adb devices`. Check `BEERTOWN_ADB_SERIAL` if you changed the port. |
 | `app_screen_unexpected` | The Untappd app was not on the map, or (with `--here`) the map's Reset location control was not on screen | Open Discover -> View Map, close any card or dialog, and re-run. For `--here`, allow Untappd location permission. The sweep resumes where it stopped. |
-| `app_pan_failed` | Swipes stopped moving the map three times in a row | Something is over the map (venue card, dialog, keyboard). Clear it and re-run. Check the screen is still 900 x 1600. |
+| `app_pan_failed` | Swipes stopped moving the map three times in a row | Something is over the map (venue card, dialog, keyboard). Clear it and re-run. Check the screen is still 1600 x 900. |
 | `calibration_failed` | Too few swept venues matched OpenStreetMap to fit positions safely | Nothing was written. Usually a very small area or a city with sparse OSM data; sweep a larger area, or retry later if Overpass was struggling. |
 | `city_not_found` | The geocoder has no match for the city | Spell it the way a map would, add the country (`Portland, OR`), or use `--here`. |
 | `overpass_unavailable` | OpenStreetMap's Overpass API is busy or down | Wait and re-run, or set `OVERPASS_URL` to a mirror. |

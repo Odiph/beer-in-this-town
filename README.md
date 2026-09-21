@@ -59,7 +59,7 @@ All of these are needed for the full flow. None is optional.
 |---|---|
 | **Python 3.11 or 3.12** | Runs the tool. CI tests both, on Linux and Windows. |
 | **Google Chrome** (or Chromium) | The tool's own Chrome profile holds your Google and Untappd sessions; it reads venue pages and drives Google Maps through it. |
-| **BlueStacks 5**, with the screen set to 900 x 1600 portrait and Android Debug Bridge on | Runs the Untappd Android app. The sweep is calibrated for that screen size. Tested on Windows only. |
+| **BlueStacks 5**, at its default 1600 x 900 screen, with Android Debug Bridge on | Runs the Untappd Android app, which it draws at 900 x 1600 -- the size the sweep is calibrated for. Tested on Windows only. |
 | **adb** (Android platform-tools) on your `PATH` | How the tool reads the app's map. |
 | **An Untappd account** | Signed in to the app in BlueStacks (for the map), and on untappd.com in the tool's profile (venue stats are only shown to signed-in visitors). |
 | **A Google account** | The saved list lives there. You create the list by hand; the tool never creates one. |

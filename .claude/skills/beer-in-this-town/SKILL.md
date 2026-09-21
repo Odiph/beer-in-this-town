@@ -31,7 +31,7 @@ best first. Run the first one, read its envelope, repeat. Stop when
 - `"choose_city"` — ask the user which city. Never pick one.
 - `"emulator"` — a sweep is next and the emulator is not ready. Give the user
   the first failing check's `remedy` from `data.emulator` (BlueStacks,
-  900x1600 portrait, ADB on, Untappd installed); `doctor --json` re-checks
+  1600x900 default screen, ADB on, Untappd installed); `doctor --json` re-checks
   once they say it is fixed.
 
 When several apply, `blocked_on` is `sign_in` first, then `choose_city`,
