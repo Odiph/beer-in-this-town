@@ -6,7 +6,44 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `--format kml,geojson,gpx` on `run`. The everyday-map use case — the thing
+  the project is actually for — had only two routes: a My Maps layer that gives
+  up the everyday-map pins, or `pin`, which gets them back by automating a UI
+  Google's terms say not to automate. Organic Maps, OsmAnd and every OSM-based
+  client import GPX and GeoJSON as bookmarks on the everyday map, offline, with
+  no account. The gap "there is no API for this" documents is real for Google,
+  not for every map. Default is unchanged (`kml`), and an unknown format fails
+  at the boundary with `bad_format` rather than writing no map quietly.
+
 ### Fixed
+- State artifacts were global where they describe one city or one list, so a
+  second city could not be scraped without damage. `previous_run.json` was a
+  single baseline: a London run diffed itself against Singapore — every venue
+  "new", every Singapore venue "gone" — and then overwrote the only copy of
+  the Singapore history. Baselines are now per-query, journals per-list.
+- `status` answered from `Settings()` defaults, because it is not one of the
+  commands that derive settings from argv. After `run --query london` it
+  reported Singapore and offered a literal `pin` command aiming the London CSV
+  at a Singapore list, with `--region Singapore` on the lookups — a write to a
+  live account, from the command documented as read-only. `run` now records
+  what it did and `status` reads it.
+- A place saved into one list was recorded as done for every list, so building
+  a second list from the same CSV silently skipped the overlap. The pre-scoping
+  journal does not record which list it belonged to, so it is adopted by
+  exactly one list, by rename, with a warning naming the assumption.
+- `status` reads an unscoped journal for reporting rather than showing zero
+  saved places to someone who has dozens, and labels it as pre-upgrade.
+- A rejected or unbilled geocoding key degraded quietly. `_google` raised on
+  REQUEST_DENIED and OVER_QUERY_LIMIT with a comment saying to surface them
+  rather than quietly degrade, and its only caller wrapped every call in
+  `except Exception: continue`. The result was a KML with a handful of pins
+  instead of a hundred, reported as a successful run. Geocoder failures are now
+  their own exception, abort before anything is written, and report
+  `geocoder_unavailable`. Per-venue misses stay swallowed, as they should be.
+- Every lookup failing is now treated as systemic rather than as a hundred
+  unlucky addresses, so a blocked or unreachable Nominatim — the default path,
+  with no key involved — fails loudly too.
 - Search-result cards were read positionally, so a venue with no category line
   had its address filed as its category and its city filed as its address — a
   CSV that looked entirely reasonable and was entirely wrong. Lines are now

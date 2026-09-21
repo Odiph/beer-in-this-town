@@ -15,10 +15,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import DATA_DIR, STATE_DIR, Settings
+from .config import DATA_DIR, STATE_DIR, Settings, scope_slug
 
-PINNED = STATE_DIR / "pinned.json"
-PREVIOUS_RUN = STATE_DIR / "previous_run.json"
+LAST_RUN = STATE_DIR / "last_run.json"
+LEGACY_PINNED = STATE_DIR / "pinned.json"
+
+
+def record_run(query: str, map_title: str, csv_path: Path) -> None:
+    """Remember what the last `run` actually did.
+
+    `status` used to answer from `Settings()` defaults, because it is not one
+    of the commands that derive settings from argv. So after `run --query
+    london` it reported Singapore and handed an agent a literal `pin` command
+    aiming a London CSV at a Singapore list -- a write to a live account, from
+    the one command documented as read-only.
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    LAST_RUN.write_text(
+        json.dumps({"query": query, "map_title": map_title,
+                    "csv": str(csv_path)}, indent=1),
+        encoding="utf-8",
+    )
 
 
 @dataclass(frozen=True)
@@ -58,8 +75,21 @@ def inspect_state(s: Settings) -> dict[str, Any]:
     csv_path = _latest("venues_*.csv") or _latest("seed_*.csv")
     kml_path = _latest("venues_*.kml")
 
-    previous = _read_json(PREVIOUS_RUN)
-    pinned = _read_json(PINNED)
+    last_run = _read_json(LAST_RUN)
+    query = last_run.get("query") or s.query
+    list_name = last_run.get("map_title") or s.map_title
+
+    previous = _read_json(STATE_DIR / f"previous_run_{scope_slug(query)}.json")
+    # Scoped per list, so this counts progress on the list actually in play
+    # rather than every place ever saved from this machine.
+    pinned = _read_json(STATE_DIR / f"pinned_{scope_slug(list_name)}.json")
+    pin_scope = list_name
+    if not pinned and LEGACY_PINNED.exists():
+        # Pre-upgrade progress. Report it rather than tell someone with fifty
+        # saved places that they have none -- but only read it. Adopting it
+        # belongs to `pin`, which knows which list it is talking about.
+        pinned = _read_json(LEGACY_PINNED)
+        pin_scope = "unscoped (pre-upgrade)"
     pin_counts = {
         "ok": sum(1 for v in pinned.values() if v == "ok"),
         "failed": sum(1 for v in pinned.values() if v == "failed"),
@@ -80,10 +110,13 @@ def inspect_state(s: Settings) -> dict[str, Any]:
 
     return {
         "logged_in": logged_in,
+        "last_run": {"query": query, "map_title": list_name,
+                     "recorded": bool(last_run)},
         "latest_csv": str(csv_path) if csv_path else None,
         "latest_kml": str(kml_path) if kml_path else None,
         "venues_in_baseline": len(previous),
         "pin_progress": pin_counts,
+        "pin_progress_scope": pin_scope,
         "stages": [{"name": st.name, "done": st.done, "detail": st.detail}
                    for st in stages],
     }
@@ -97,16 +130,19 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
             "# then: python -m beer_in_this_town selfcheck --json",
         ]
 
+    query = state.get("last_run", {}).get("query") or s.query
+    list_name = state.get("last_run", {}).get("map_title") or s.map_title
+
     if not state["latest_csv"]:
         return [
-            f"python -m beer_in_this_town run --query {s.query} "
+            f"python -m beer_in_this_town run --query {query} "
             f"--count {s.target_count} --no-upload --json",
         ]
 
     actions: list[str] = []
     if not state["latest_kml"]:
         actions.append(
-            f"python -m beer_in_this_town run --query {s.query} "
+            f"python -m beer_in_this_town run --query {query} "
             f"--count {s.target_count} --no-upload --json"
         )
 
@@ -114,12 +150,12 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
     if pins["ok"] == 0:
         actions.append(
             f'python -m beer_in_this_town pin --csv "{state["latest_csv"]}" '
-            f'--list "{s.map_title}" --limit 3 --json   # trial run first'
+            f'--list "{list_name}" --limit 3 --json   # trial run first'
         )
     elif pins["failed"]:
         actions.append(
             f'python -m beer_in_this_town pin --csv "{state["latest_csv"]}" '
-            f'--list "{s.map_title}" --json   # retries only what failed'
+            f'--list "{list_name}" --json   # retries only what failed'
         )
 
     if not actions:

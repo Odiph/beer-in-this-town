@@ -124,6 +124,8 @@ Outputs land in `data/`:
 |---|---|
 | `venues_<query>_<date>.csv` | full dataset |
 | `venues_<query>_<date>.kml` | import this into Google My Maps |
+| `venues_<query>_<date>.geojson` | `--format geojson` — Organic Maps, OsmAnd, anything OSM-based |
+| `venues_<query>_<date>.gpx` | `--format gpx` — the same, lowest common denominator |
 | `new_venues_<date>.csv` | only venues absent from the previous run |
 
 ## Getting it onto Google Maps
@@ -159,6 +161,12 @@ We researched this properly. As of August 2026:
   ("Bulk Save to Google Maps Lists", filed Oct 2025) is open and unanswered.
 
 **The legitimate alternatives, ranked:**
+
+0. **Skip Google.** Organic Maps and OsmAnd import GPX or GeoJSON as bookmarks
+   that render on your **everyday map** — offline, no account, no OAuth, and
+   nothing in their terms against it. This is the only option that is both
+   fully supported *and* gives you the everyday-map pins, which is what the
+   whole exercise is for. `--format gpx` or `--format geojson`.
 
 1. **Import the KML into My Maps.** Supported, instant, keeps the check-in
    stats on each pin. You give up the everyday-map pins.
@@ -215,6 +223,7 @@ scatter that across a dozen paragraphs, here it is in one place.
 | Scraping Untappd (`run`, `selfcheck`) | **Against Untappd's ToS**, which prohibits automated access. |
 | KML → Google My Maps (`run`) | **Supported.** A documented bulk-import feature. No line crossed. |
 | Driving the Maps UI (`pin`, `notes`) | **Against Google's ToS** — "do not access the Services through automated means". |
+| GPX / GeoJSON → Organic Maps, OsmAnd (`run`) | **Supported.** A documented import, on your everyday map, with no account involved. |
 
 **On the Untappd side**, the pacing is a mitigation, not an exemption: one
 connection, no concurrency, a 12h cache so a re-run costs nothing, and a
