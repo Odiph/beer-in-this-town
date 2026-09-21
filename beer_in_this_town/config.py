@@ -94,6 +94,11 @@ class Settings:
     # self-hosted instance is a legitimate answer to being throttled.
     overpass_url: str = "https://overpass-api.de/api/interpreter"
 
+    # --- the app sweep (emulator) ---------------------------------------
+    # Which adb device the sweep drives. Every adb call is addressed by
+    # serial because a BlueStacks config can put two instances on one port.
+    adb_serial: str = "127.0.0.1:5555"
+
     # --- closure check (#7) ---------------------------------------------
     # Deliberately a separate key from geocoding: different SKU, and somebody
     # may reasonably want coordinates without sending addresses to Places for
@@ -111,6 +116,7 @@ class Settings:
             google_places_key=os.environ.get("GOOGLE_PLACES_KEY") or None,
             nominatim_email=os.environ.get("NOMINATIM_EMAIL") or None,
             overpass_url=os.environ.get("OVERPASS_URL") or s.overpass_url,
+            adb_serial=os.environ.get("BEERTOWN_ADB_SERIAL") or s.adb_serial,
         )
 
 

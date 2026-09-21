@@ -22,10 +22,20 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from .adb_device import AdbUnavailable
+from .adb_device import AdbDevice, AdbUnavailable
 from .agent_io import Envelope, Problem, emit, fail, log_to_stderr
+from .app_calibrate import CalibrationFailed
 from .app_categories import CategoryPanelError
 from .app_map import WrongScreen
+from .app_pipeline import (
+    DEFAULT_MAX_DEPTH,
+    DEFAULT_MIN_DEPTH,
+    CityNotFound,
+    NoLocationControl,
+    census,
+    census_envelope,
+    write_census,
+)
 from .app_sweep import DeadPan
 from .config import DATA_DIR, SEARCH_URL, Settings, ensure_dirs
 from .export import (
@@ -974,6 +984,24 @@ def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
     )
 
 
+def cmd_sweep(s: Settings, *, here: bool, min_depth: int, max_depth: int,
+              formats: tuple[str, ...]) -> Envelope:
+    """Find a city's venues from the Untappd app's map, on an emulator.
+
+    This is the collection step. `run` searches venue names on the web, which
+    is not a geographic search; this sweeps the app's map, which is. It reads
+    only, and resumes from its journal if interrupted.
+    """
+    ensure_dirs()
+    device = AdbDevice(serial=s.adb_serial)
+    c = census(device, s.query, s, here=here, min_depth=min_depth,
+               max_depth=max_depth)
+    csv_path, written = write_census(c, s.query, today_stamp(), s.map_title,
+                                     formats)
+    record_run(query=s.query, map_title=s.map_title, csv_path=csv_path)
+    return census_envelope(c, s.query, s.map_title, csv_path, written)
+
+
 def resolve_region(region: str | None, path: Path) -> tuple[str | None, list[str]]:
     """Work out the region guard, and say so when it cannot be established.
 
@@ -1234,8 +1262,32 @@ def build_parser() -> argparse.ArgumentParser:
                        help="only check the venue page (one request). The "
                             "search probe is what catches a search outage.")
 
+    sw = sub.add_parser("sweep", parents=[common],
+                        help="find a city's venues from the Untappd app's map "
+                             "on an Android emulator (the collection step)")
+    sw.add_argument("--city", dest="query", default=None,
+                    help="the city to sweep. No default: without one, and "
+                         "without a city named in the dashboard, `sweep` "
+                         "refuses rather than choosing for you.")
+    sw.add_argument("--title", default=None,
+                    help='the Google Maps list name the results are meant for, '
+                         'e.g. "London Bars"')
+    sw.add_argument("--here", action="store_true",
+                    help="centre on the emulator's own GPS fix (tap Reset "
+                         "location) instead of searching the city by name")
+    sw.add_argument("--min-depth", type=int, default=DEFAULT_MIN_DEPTH,
+                    help=f"always split at least this deep "
+                         f"(default {DEFAULT_MIN_DEPTH})")
+    sw.add_argument("--max-depth", type=int, default=DEFAULT_MAX_DEPTH,
+                    help=f"never split deeper than this "
+                         f"(default {DEFAULT_MAX_DEPTH})")
+    sw.add_argument("--format", default=None,
+                    help="also write map files: comma-separated kml, geojson, "
+                         "gpx. The CSV is always written.")
+
     run = sub.add_parser("run", parents=[common],
-                         help="scrape, export, diff, and optionally upload")
+                         help="web search by venue name (not geographic; "
+                              "prefer sweep), export, and optionally upload")
     run.add_argument("--query", default=None,
                      help="the city to collect. No default: without one, and "
                           "without a city named in the dashboard, `run` "
@@ -1424,7 +1476,7 @@ def main(argv: list[str] | None = None) -> int:
             )), as_json)
             return 1
 
-    if args.cmd in {"run", "pin", "notes"}:
+    if args.cmd in {"run", "sweep", "pin", "notes"}:
         # argv, then what the user named in the dashboard, then nothing.
         # There is no built-in default to fall through to any more: a city
         # nobody chose is a scrape of somewhere nobody asked for, and a list
@@ -1440,11 +1492,12 @@ def main(argv: list[str] | None = None) -> int:
             target_count=getattr(args, "count", s.target_count),
             map_title=list_name,
         )
-        if args.cmd == "run" and not s.query:
-            emit(fail("run", Problem(
+        if args.cmd in {"run", "sweep"} and not s.query:
+            flag = "--city" if args.cmd == "sweep" else "--query"
+            emit(fail(args.cmd, Problem(
                 code="no_city",
                 message="No city given, and none has been chosen.",
-                remedy='Pass --query "<city>", or name one on the last step '
+                remedy=f'Pass {flag} "<city>", or name one on the last step '
                        "of `beertown ui`. There is deliberately no default: "
                        "choosing a city for someone is choosing what they "
                        "get.",
@@ -1500,6 +1553,27 @@ def main(argv: list[str] | None = None) -> int:
                           skip_robots=args.i_read_robots,
                           formats=formats,
                           check_closed=args.check_closed)
+        elif args.cmd == "sweep":
+            try:
+                formats = parse_formats(args.format) if args.format else ()
+            except ValueError as exc:
+                emit(fail("sweep", Problem(
+                    code="bad_format", message=str(exc),
+                    remedy="Re-run with --format kml, geojson or gpx, "
+                           "comma-separated, or omit it for the CSV alone.",
+                )), as_json)
+                return 1
+            if not 0 <= args.min_depth <= args.max_depth:
+                emit(fail("sweep", Problem(
+                    code="bad_arguments",
+                    message=f"--min-depth {args.min_depth} and --max-depth "
+                            f"{args.max_depth} are not a valid range.",
+                    remedy="Pass 0 <= --min-depth <= --max-depth, or omit "
+                           "both for the measured defaults.",
+                )), as_json)
+                return 1
+            env = cmd_sweep(s, here=args.here, min_depth=args.min_depth,
+                            max_depth=args.max_depth, formats=formats)
         elif args.cmd == "notes":
             env = cmd_notes(s, args.csv, args.list_name, args.limit,
                             # NOT `or None`: "" is the caller switching the
@@ -1564,6 +1638,37 @@ def main(argv: list[str] | None = None) -> int:
                    "re-run, or set OVERPASS_URL to a mirror such as "
                    "https://overpass.kumi.systems/api/interpreter. Nothing "
                    "was written.",
+        ))
+    except CalibrationFailed as exc:
+        env = fail(args.cmd, Problem(
+            code="calibration_failed",
+            message=str(exc),
+            remedy="The map's scale could not be measured against "
+                   "OpenStreetMap, so no coordinates were written. Nothing "
+                   "was written; the sweep journal is kept, so a re-run "
+                   "resumes. Try --here with the emulator's location set "
+                   "inside the city.",
+        ))
+    except CityNotFound as exc:
+        env = fail(args.cmd, Problem(
+            code="city_not_found",
+            message=str(exc),
+            remedy="Check the spelling, or add the country (\"Paris, "
+                   "France\"). Nothing was swept.",
+        ))
+    except GeocoderUnavailable as exc:
+        env = fail(args.cmd, Problem(
+            code="geocoder_unavailable",
+            message=str(exc),
+            remedy="Check GOOGLE_GEOCODING_KEY and billing, or unset it to "
+                   "use Nominatim. Nothing was written.",
+        ))
+    except NoLocationControl as exc:
+        env = fail(args.cmd, Problem(
+            code="app_screen_unexpected",
+            message=str(exc),
+            remedy="Open the Untappd app on Discover -> View Map and re-run, "
+                   "or drop --here to centre by city name instead.",
         ))
     except AdbUnavailable as exc:
         env = fail(args.cmd, Problem(
