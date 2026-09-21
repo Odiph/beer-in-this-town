@@ -29,8 +29,13 @@ best first. Run the first one, read its envelope, repeat. Stop when
 
 - `null` — done. Relay the `hints` (saved list, `pin`, `notes`) to the user.
 - `"choose_city"` — ask the user which city. Never pick one.
-- `"emulator"` — run `doctor --json` and give the user the first failing
-  check's `remedy` (BlueStacks, 900x1600 portrait, ADB on, Untappd installed).
+- `"emulator"` — a sweep is next and the emulator is not ready. Give the user
+  the first failing check's `remedy` from `data.emulator` (BlueStacks,
+  900x1600 portrait, ADB on, Untappd installed); `doctor --json` re-checks
+  once they say it is fixed.
+
+When several apply, `blocked_on` is `sign_in` first, then `choose_city`,
+then `emulator`. `sweep` is offered only after `verify` has passed.
 - `"sign_in"` — run `ui --detach --json`, give the user `data.url`, ask them
   to sign in to Google and Untappd, then `verify --json`.
 
@@ -60,18 +65,24 @@ app is not on the map: ask the user to open Discover -> View Map, then re-run.
   to check the list, then continue. The rest spans several days under the
   100/day budget; do not schedule it.
 - **Never** run `closures` unasked: it bills the user's Places key.
-- **Never** pass `--i-read-robots`. Human's call.
-- Never lower `--min-gap` / `--max-gap` / `--delay`, never delete
-  `state/rate_ledger.json`, never retry past a tripped guardrail.
+- **Never** switch off the robots.txt check (`robots_disallow` from
+  `enrich` means stop and ask). Human's call.
+- Never lower `pin`/`notes`' `--min-gap` / `--max-gap`, never edit the
+  pacing in `config.py`, never delete `state/rate_ledger.json`, never retry
+  past `guardrail_tripped`.
+- The Google Maps list name should be plain letters, digits and spaces:
+  printed commands strip shell symbols (`&`, `|`, `$`, quotes...) from names.
 - Do not tap, type, install or sign in on the emulator yourself. `sweep` is
   the only thing that drives the app. Manual steps are instructions for the
   user, not something to automate.
-- If a quality gate or `calibration_failed` fires, that is a real finding.
-  Report it; do not work around it.
+- If `selectors_stale` or `calibration_failed` fires, that is a real
+  finding. Report it; do not work around it. `enrich` has no parse gate: a
+  run where most rows are `fetch_failed` / `unverified` is a finding too.
 
 ## Interpreting results
 
-- A sweep is not a census. Relay truncated cells / depth-limit warnings.
+- A sweep is not a census. Relay `data.truncated_cells` /
+  `data.hit_depth_limit` and `data.calibration.median_residual_m`.
 - Unresolved venues after `enrich` have **unknown** counts, not zero.
 - `3_excluded.csv` lists what `filter` dropped and why; mention the counts.
 - A `not-found` place in `pin` means Google Maps had no match for that name
