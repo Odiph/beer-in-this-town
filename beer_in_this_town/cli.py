@@ -1293,9 +1293,14 @@ def main(argv: list[str] | None = None) -> int:
         # name nobody chose is a write to an account.
         remembered = inspect_state(s)["last_run"]
         query = getattr(args, "query", None) or remembered.get("query") or ""
-        list_name = (getattr(args, "title", None)
-                     or getattr(args, "list_name", None)
-                     or remembered.get("map_title") or "")
+        if args.cmd in {"pin", "notes"}:
+            # Only a name the person typed. The dashboard derives "<City>
+            # Bars" as a suggestion; falling back to it made `no_list`
+            # unreachable and aimed a write at a list nobody named.
+            list_name = getattr(args, "list_name", None) or ""
+        else:
+            list_name = (getattr(args, "title", None)
+                         or remembered.get("map_title") or "")
         s = replace(s, query=query, map_title=list_name)
         if args.cmd == "sweep" and not s.query:
             emit(fail(args.cmd, Problem(
