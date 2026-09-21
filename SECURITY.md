@@ -5,6 +5,10 @@
 Please report security issues privately via GitHub's **Report a vulnerability**
 button on the Security tab, rather than opening a public issue.
 
+If that button is not available to you, open a minimal public issue asking for
+a private channel -- say only that you have a security report, not what it is
+-- and a maintainer will set one up with you.
+
 ## What this tool touches
 
 Worth understanding before you run it:
@@ -20,10 +24,14 @@ Worth understanding before you run it:
   contain your username and avatar. Do not paste them wholesale into public
   issues — quote the relevant fragment.
 - **Geocoding.** If `GOOGLE_GEOCODING_KEY` is set, venue addresses are sent to
-  Google. Otherwise Nominatim (OpenStreetMap) is used. No key is ever written to
-  disk by this tool; it is read from the environment.
+  Google. Otherwise Nominatim (OpenStreetMap) is used, identified by
+  `NOMINATIM_EMAIL` if you set it -- Nominatim's policy asks for a contact, and
+  the tool warns once when there is none. No key is ever written to disk by
+  this tool; it is read from the environment. Results are cached in
+  `state/geocache.json`; Google-derived entries expire after 30 days, as
+  Google's terms require.
 - **The closure check.** If `GOOGLE_PLACES_KEY` is set *and* you ask for the
-  check -- `closures`, or `run --check-closed` -- each venue's name, address
+  check with `closures`, each venue's name, address
   and city are sent to the Google Places API to read its `businessStatus`.
   Nothing is sent without that flag or that command, and a key alone does not
   start it.
@@ -35,7 +43,8 @@ Worth understanding before you run it:
 
   The reply is cached in `state/places_cache.json`, which is gitignored. It
   holds the place id, display name, types and status for each venue queried --
-  Google's description of a public business, not anything about you.
+  Google's description of a public business, not anything about you. Everything
+  but the place id expires after 30 days, per Google's terms.
 
 - **The setup dashboard (`ui`).** It opens a local HTTP server that can launch
   Chrome on your profile and write `storage_state.json`, so it is the most
