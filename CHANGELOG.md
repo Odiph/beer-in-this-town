@@ -7,6 +7,18 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `label` and `score`: a measurement harness for the venue heuristics, so
+  thresholds stop being guesses with numbers attached. `classify.py` holds
+  candidate rules for venue kind, closed venues and private spaces, and is
+  deliberately **not** wired into `run` — a classifier merged without
+  measurement produces plausible output, is wrong at an unknown rate, and
+  nothing raises, which is the failure `corpus_quality_gate` and the raising
+  selectors exist to prevent. Sampling takes a fixed quota per bucket, rare
+  ones included, and scoring reweights by inverse sampling probability so the
+  numbers describe the whole scrape. Error rates are reported by direction —
+  a private space kept is someone's front door on a shared map; a real venue
+  dropped costs one bar to re-add — and never averaged into one accuracy
+  figure.
 - `--format kml,geojson,gpx` on `run`. The everyday-map use case — the thing
   the project is actually for — had only two routes: a My Maps layer that gives
   up the everyday-map pins, or `pin`, which gets them back by automating a UI
@@ -17,6 +29,78 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   at the boundary with `bad_format` rather than writing no map quietly.
 
 ### Fixed
+- `notes` had no pre-flight. Signed-out Google Maps loads perfectly happily, so
+  a signed-out profile either read every place as "not in the list" — a hundred
+  page loads, `ok: true`, and a warning telling the user to run `pin` first,
+  which was the wrong diagnosis — or tripped the block detector and started a
+  six-hour cool-off that also blocks `pin`, for a condition `pin` itself
+  reports as `not_signed_in` with no cool-off at all. It now runs the same
+  pre-flight `pin` does, and maps its errors the same way.
+- `robots_disallows_scraping` swallowed a 403. That is a block already in
+  progress, and swallowing it read as "robots does not forbid this", so the run
+  carried on requesting into the block — the one move the module's own 403 rule
+  says never to make.
+- A dead network made `run` sleep instead of stopping: three retries over
+  60/180/600s per venue, swallowed per venue, so a hundred venues meant roughly
+  twenty-three hours of sleeping before the corpus gate failed. Three
+  consecutive transport failures now stop the run with `network_unavailable`.
+- Nominatim's rate limit was skipped exactly when it mattered. The pause sat
+  after the call inside the `try`, so a timeout or a 429 skipped it and
+  consecutive failures hit OSM back to back.
+- `status` could not see the write guardrails that several error remedies send
+  the caller to it to check — cool-off, budget, and whether another run holds
+  the lock. It reports all three now, and the contended-lock message no longer
+  ends by inviting a manual delete of the lock `AGENTS.md` says not to delete.
+- The agent contract steered an agent into the account write it forbids.
+  `AGENTS.md` says to run the first `next_action` and repeat until the list is
+  empty, and also that `pin` must never run without a human asking. `pin` was
+  listed in `next_actions` and was the only entry that ever emptied it, so
+  following the contract led an agent into the ToS-crossing write. `pin`,
+  `notes` and `bootstrap` are out of `next_actions` entirely; an empty list
+  now genuinely means the safe work is finished.
+- `next_actions` no longer carries `#` comments. It promises literal runnable
+  commands, and an agent passing argv as a list got `#` as an argument while
+  one that shelled out silently no-opped and looped on the same suggestion.
+  Prose moved to a new additive `hints` field that nothing executes.
+- `--region` defaulted to "Singapore" for every city, so a London CSV searched
+  Maps for "..., London, Singapore". The guard exists precisely so a bare name
+  cannot match a venue in the wrong country. It is now read from the CSV's own
+  city column, and when that cannot be established the run says the guard is
+  off rather than quietly appending nothing. An explicit `--region ''` still
+  switches it off and is no longer collapsed back into re-derivation.
+- `pin` identified the target saved list by substring, in all three places it
+  checks one: picking the row in the list picker, verifying what Maps said
+  afterwards, and confirming the list exists at all. An account holding both
+  "Bars" and "London Bars" could therefore have a place saved into the wrong
+  one **and have that verified as correct** — `"bars" in "london bars"` is
+  True — after which the run journalled `ok` and never retried it. That is the
+  wrong-list failure `pin_to_list.py`'s own docstring says the module exists to
+  prevent. All three now compare whole names, ignoring only case, padding and a
+  trailing place count. A name that matches no list, or several, raises
+  `list_ambiguous` and saves nothing rather than clicking the nearest label.
+  `notes` used the same substring test and is fixed with it.
+- `score` reported numbers that did not mean what they said. A dropped venue
+  was judged by "was this a real venue", which every café in the `non_beer`
+  bucket is — so with every label correct the harness reported that 100% of
+  dropped venues were dropped wrongly. A drop is now judged against the claim
+  the classifier actually made about that bucket. Found by an independent
+  review of the harness; caught nothing because the tests only ever built two
+  buckets, neither of them `non_beer`.
+- Every rate's denominator is now the rows that answered *that* question. A
+  blank counted as "no error", so a sheet where only `true_kind` was filled
+  reported a clean corpus nobody had looked at.
+- `?` is an abstention rather than a verdict. It counted as "private",
+  inflating the expensive rate, while an unrecognised value like `closed`
+  counted as "not closed" and deflated the cheap one — silently, in the tool
+  built to stop exactly that. Unknown values now fail `labels_unusable`
+  naming the row and the cell.
+- `unsettled` predictions are excluded from kind accuracy instead of scored as
+  wrong, so the metric stops measuring how often the category line was blank.
+- The labelling sheet survives a spreadsheet. The bucket sizes rode in a `#`
+  comment on line 1; Excel and Sheets parse that as CSV and write it back
+  mangled, after which `score` failed with a remedy that failed the same way.
+  They now ride in a `_stratum_size` column, and a sheet saved in the system
+  codepage is read as cp1252 rather than crashing.
 - `selfcheck` could not see a search outage. It fetched one venue detail page,
   which is server-rendered and was unaffected when Untappd moved search to
   Algolia, so it returned `ok: true` for the whole time every `run` was

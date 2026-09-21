@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DATA_DIR, STATE_DIR, Settings, scope_slug
+from .guardrails import Limits, inspect_guardrails
 
 LAST_RUN = STATE_DIR / "last_run.json"
 LEGACY_PINNED = STATE_DIR / "pinned.json"
@@ -117,47 +118,84 @@ def inspect_state(s: Settings) -> dict[str, Any]:
         "venues_in_baseline": len(previous),
         "pin_progress": pin_counts,
         "pin_progress_scope": pin_scope,
+        # The write guardrails, which `status` could not previously see even
+        # though several error remedies send the caller here to check them.
+        "write_guardrails": inspect_guardrails(Limits()),
         "stages": [{"name": st.name, "done": st.done, "detail": st.detail}
                    for st in stages],
     }
 
 
 def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
-    """Literal commands to run next. Ordered; the first one is the recommendation."""
-    if not state["logged_in"]:
-        return [
-            "python -m beer_in_this_town bootstrap",
-            "# then: python -m beer_in_this_town selfcheck --json",
-        ]
+    """Literal commands to run next. Ordered; the first one is the recommendation.
 
+    Only read-only, safe commands appear here. `pin` and `notes` write to the
+    user's Google account and AGENTS.md says an agent must never run them
+    without being asked -- while the loop this list defines says to run the
+    first action and repeat until it is empty. Listing them made those two
+    rules contradict each other, and the loop won: `pin` was the only action
+    that ever terminated it. What a human might want to do next lives in
+    `hints`, which nothing is instructed to execute.
+    """
+    # A session is only needed for the YOU column and for the writing
+    # commands. Returning [] here ended the loop before any safe work was
+    # done, on a fresh install where `run --no-upload` would have worked fine:
+    # bootstrap belongs in hints, not in the way.
     query = state.get("last_run", {}).get("query") or s.query
+    if state["latest_csv"] and state["latest_kml"]:
+        # Nothing further an agent should start on its own. An empty list is
+        # what AGENTS.md defines as the end of the loop, and now that the
+        # account-writing commands are out of it the loop can actually reach
+        # that end -- previously `pin` was the only thing that terminated it.
+        return []
+
+    return [
+        f'python -m beer_in_this_town run --query "{query}" '
+        f"--count {s.target_count} --no-upload --json"
+    ]
+
+
+def hints(state: dict[str, Any], s: Settings) -> list[str]:
+    """What a person might want to do next. Never executed by anything."""
+    if not state["logged_in"]:
+        return ["No saved session. Run `python -m beer_in_this_town bootstrap` "
+                "yourself -- it opens a browser and waits for you to sign in."]
+
+    out: list[str] = []
+    guards = state.get("write_guardrails") or {}
+    if guards.get("cooloff_remaining_h"):
+        out.append(
+            f"A write cool-off is active with "
+            f"{guards['cooloff_remaining_h']:.1f}h remaining. `pin` and `notes` "
+            f"will refuse to start until it expires. Wait it out; do not delete "
+            f"state/rate_ledger.json."
+        )
+    lock = guards.get("lock")
+    if lock and lock.get("stale"):
+        out.append(
+            f"A ledger lock has been untouched for {lock['age_h']:.1f}h "
+            f"(pid {lock.get('pid')}). If nothing is running, the next `pin` "
+            f"will break it automatically -- no need to delete it by hand."
+        )
+    elif lock:
+        out.append(
+            f"Another run holds the write budget (pid {lock.get('pid')}, "
+            f"{lock['age_h']:.1f}h). Wait for it rather than starting a second."
+        )
+
     list_name = state.get("last_run", {}).get("map_title") or s.map_title
-
-    if not state["latest_csv"]:
-        return [
-            f"python -m beer_in_this_town run --query {query} "
-            f"--count {s.target_count} --no-upload --json",
-        ]
-
-    actions: list[str] = []
-    if not state["latest_kml"]:
-        actions.append(
-            f"python -m beer_in_this_town run --query {query} "
-            f"--count {s.target_count} --no-upload --json"
-        )
-
+    csv_path = state.get("latest_csv")
     pins = state["pin_progress"]
-    if pins["ok"] == 0:
-        actions.append(
-            f'python -m beer_in_this_town pin --csv "{state["latest_csv"]}" '
-            f'--list "{list_name}" --limit 3 --json   # trial run first'
+    if csv_path and pins["ok"] == 0:
+        out.append(
+            f'To build a real Google Maps saved list, a human can run: pin '
+            f'--csv "{csv_path}" --list "{list_name}" --limit 3 --json. It '
+            "writes to the account and automates a UI that Google's terms do "
+            "not permit, so it is never something to start unasked."
         )
-    elif pins["failed"]:
-        actions.append(
-            f'python -m beer_in_this_town pin --csv "{state["latest_csv"]}" '
-            f'--list "{list_name}" --json   # retries only what failed'
+    elif csv_path and pins["failed"]:
+        out.append(
+            f'{pins["failed"]} place(s) failed to pin. A human can retry just '
+            f'those: pin --csv "{csv_path}" --list "{list_name}" --json.'
         )
-
-    if not actions:
-        actions.append("# pipeline complete -- re-run `run` to refresh the data")
-    return actions
+    return out

@@ -54,6 +54,7 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 LEDGER = STATE_DIR / "rate_ledger.json"
+BREAKER = STATE_DIR / "breaker.json"
 
 # Conservative defaults. A human adding bars to a list does not do 200 in a day.
 DEFAULT_MAX_PER_RUN = 60
@@ -104,8 +105,62 @@ class AlreadyRunning(Tripped):
 _held: tuple[Path, str] | None = None
 
 
+def inspect_guardrails(
+    limits: Limits, path: Path | None = None, breaker_path: Path | None = None
+) -> dict[str, object]:
+    """What the write guardrails currently say, without changing any of it.
+
+    Several error remedies tell the caller to check `status` -- for a cool-off,
+    for whether another run holds the budget -- and `status` could not see
+    either. An agent that tripped a guardrail therefore asked, was told all
+    clear, and re-ran straight back into it. AGENTS.md documented that hole
+    rather than closing it.
+
+    Read-only on purpose: `RateLedger` prunes in memory but this never calls
+    anything that persists, so `status` stays the free, side-effect-free
+    command it is advertised as.
+    """
+    path = path if path is not None else LEDGER
+    ledger = RateLedger(limits, path=path)
+    cooloff_h = ledger.cooloff_remaining_s() / 3600
+    used = ledger.used_today()
+
+    lock_path = path.with_suffix(".lock")
+    lock: dict[str, object] | None = None
+    if lock_path.exists():
+        age = _lock_age_s(lock_path)
+        try:
+            body = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            # A half-written or clobbered lock still blocks a run, so saying
+            # nothing about it is the one unhelpful answer.
+            body = {}
+        lock = {
+            "pid": body.get("pid"),
+            "age_h": round((age or 0) / 3600, 2),
+            "stale": age is not None and age >= STALE_LOCK_SECONDS,
+            "path": str(lock_path),
+        }
+
+    breaker = CircuitBreaker(limits.max_consecutive_failures, path=breaker_path)
+
+    return {
+        "used_today": used,
+        "remaining_today": ledger.remaining_today(),
+        "max_per_day": limits.max_per_day,
+        "cooloff_remaining_h": round(cooloff_h, 2),
+        "breaker": {"consecutive": breaker.consecutive,
+                    "limit": breaker.limit,
+                    "tripped": breaker.is_tripped},
+        "can_write": (cooloff_h <= 0 and ledger.remaining_today() > 0
+                      and not breaker.is_tripped),
+        "ledger_corrupt": ledger.corrupt,
+        "lock": lock,
+    }
+
+
 @contextmanager
-def ledger_lock(path: Path = LEDGER) -> Iterator[None]:
+def ledger_lock(path: Path | None = None) -> Iterator[None]:
     """Hold exclusive ownership of the ledger for the length of a run.
 
     Without this, two processes -- the nightly catch-up task and someone
@@ -125,6 +180,7 @@ def ledger_lock(path: Path = LEDGER) -> Iterator[None]:
     """
     global _held
 
+    path = path if path is not None else LEDGER
     lock = path.with_suffix(".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
     token = secrets.token_hex(8)
@@ -255,12 +311,25 @@ def _read_token(lock: Path) -> str | None:
 
 
 def _contended_message(lock: Path) -> str:
+    """Why the run stopped, and what to do -- which is never "delete this".
+
+    The message used to end by inviting a manual delete, which AGENTS.md
+    explicitly forbids and which throws away the only evidence that a run died
+    mid-write. It is also unnecessary: an abandoned lock is broken
+    automatically once it has been untouched for STALE_LOCK_SECONDS, because a
+    live run refreshes it on every write.
+    """
+    hours = STALE_LOCK_SECONDS / 3600
     return (
         f"Another run is already running (lock at {lock}). Two runs sharing "
         "one budget would spend it twice over. Wait for it to finish -- there "
         "is no cool-off to sit out, and re-running now will only trip this "
-        "again. If you are certain nothing is running, a previous run was "
-        f"killed: delete {lock.name}."
+        "again. "
+        f"If nothing is actually running, a previous run was killed before it "
+        f"could release the lock. Leave it alone: it is broken automatically "
+        f"once untouched for {hours:.0f}h, and "
+        "`python -m beer_in_this_town status --json` reports its age under "
+        "write_guardrails.lock in the meantime."
     )
 
 
@@ -310,9 +379,13 @@ class RateLedger:
     does not hand you a fresh allowance.
     """
 
-    def __init__(self, limits: Limits, path: Path = LEDGER) -> None:
+    def __init__(self, limits: Limits, path: Path | None = None) -> None:
         self.limits = limits
-        self.path = path
+    # Resolved at call time, not bound as a default: a default is
+    # evaluated once at import, so anything that redirects the module
+    # constant afterwards (tests, a relocated state dir) never reaches
+    # it and the write lands in the real tree.
+        self.path = path if path is not None else LEDGER
         self.corrupt = False
         raw = self._read()
         self.events: list[float] = list(raw.get("events", []))
@@ -410,17 +483,68 @@ class RateLedger:
 
 
 class CircuitBreaker:
-    """Stop after N consecutive failures instead of hammering a broken UI."""
+    """Stop after N consecutive failures instead of hammering a broken UI.
 
-    def __init__(self, limit: int) -> None:
+    The count is persisted. Without that, three failures on the last three
+    places of a run tripped nothing -- `is_tripped` is only read at the top of
+    the next iteration, and there was no next iteration -- and the following
+    run started from zero. A UI that has stopped responding the way we expect
+    is exactly when a script looks least human, and it does not start looking
+    human again because the process restarted.
+    """
+
+    def __init__(self, limit: int, path: Path | None = None,
+                 max_age_s: float = DEFAULT_COOLOFF_HOURS * 3600) -> None:
         self.limit = limit
+        self.path = path if path is not None else BREAKER
+        self.max_age_s = max_age_s
+        self.consecutive = self._read()
+
+    def _read(self) -> int:
+        """The count, unless it is older than the cool-off it would cause.
+
+        A run of failures says something about conditions *now*. Left to
+        accumulate forever, three failures from last week trip a healthy run
+        before it touches a single place -- and since the trip fires ahead of
+        any work, no success can ever occur to clear it. That is a permanent
+        lockout of both writing commands, which is a far worse failure than
+        the gap persistence was added to close.
+        """
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            count = int(raw["consecutive"])
+            at = float(raw.get("at", 0.0))
+        except (OSError, ValueError, TypeError, KeyError):
+            return 0
+        if _now() - at >= self.max_age_s:
+            log.info("Discarding a circuit-breaker count older than %.0fh.",
+                     self.max_age_s / 3600)
+            return 0
+        return count
+
+    def _write(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(
+            json.dumps({"consecutive": self.consecutive, "at": _now()}),
+            encoding="utf-8",
+        )
+
+    def reset(self) -> None:
+        """Clear the count. Called when a cool-off starts.
+
+        The cool-off is the punishment for tripping; carrying the count past
+        it would punish the next run for the same failures, forever.
+        """
         self.consecutive = 0
+        self._write()
 
     def record_success(self) -> None:
         self.consecutive = 0
+        self._write()
 
     def record_failure(self) -> None:
         self.consecutive += 1
+        self._write()
 
     @property
     def is_tripped(self) -> bool:

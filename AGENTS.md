@@ -26,15 +26,24 @@ stderr. Parse stdout; ignore stderr unless debugging.
   "schema_version": "1.0",
   "data": { "venues": 100, "csv": "...", "kml": "..." },
   "warnings": ["4 venue(s) have no coordinates and are not pinned"],
-  "next_actions": ["python -m beer_in_this_town pin --csv \"...\" --limit 3 --json"],
+  "next_actions": ["python -m beer_in_this_town label --csv \"...\" --json"],
+  "hints": ["To build a Google Maps saved list, a human can run: pin --csv ..."],
   "error": null
 }
 ```
 
 - `ok` — did the command achieve its purpose. Exit code matches (`0` / `1`).
 - `next_actions` — **literal runnable commands**, best first. Not hints.
+  Only read-only, safe commands appear here; it never contains `pin`, `notes`
+  or `bootstrap`, and never contains a `#` comment. An **empty list is the end
+  of the loop**, not an error.
+- `hints` — prose for a human: what only a person can decide to do next.
+  Nothing executes this, and an agent must not treat it as a next action.
 - `error` — present only on failure. Always carries `code` and `remedy`.
-- `schema_version` — treat a change as breaking.
+- `schema_version` — treat a change as breaking. **New fields are not a
+  change**: `data`, `warnings`, `hints` and `next_actions` gain keys without a
+  bump, so read them defensively and ignore what you do not recognise. A field
+  being *removed* or *renamed*, or an existing one changing meaning, bumps it.
 
 `--json` works before or after the subcommand.
 
@@ -43,14 +52,20 @@ stderr. Parse stdout; ignore stderr unless debugging.
 | `error.code` | Meaning | What to do |
 |---|---|---|
 | `not_signed_in` | Playwright profile has no Google session | **Stop and ask the human.** Requires their password; you cannot do this. |
-| `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off, and `status` will look clear because it does not know about the lock. Do not delete the lock file. |
+| `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off. `status` reports the lock's age and whether it is stale under `data.write_guardrails.lock`. Do not delete the lock file; an abandoned one is broken automatically after 2h. |
 | `list_missing` | Target saved list does not exist | Ask the human to create it, or pick another `--list`. |
+| `list_ambiguous` | `--list` does not name exactly one list — no list matches it exactly, or several do | **Stop and ask.** Nothing was saved. Do not retry with a nearby name; that is how a place lands in the wrong list. |
 | `robots_disallow` | robots.txt forbids the paths | **Stop and ask.** Do not pass `--i-read-robots` on your own initiative. |
 | `corpus_quality_gate` | <90% of venues parsed cleanly | Read `debug/*.html`, fix selectors in `parsers.py`, re-run. Nothing was written. |
 | `selectors_stale` | `selfcheck` could not parse a known-good venue page or the search page, or neither search path parsed during `run` | Same as above. `selfcheck` is the cheap early warning and covers both surfaces; `data.search` says which shape the search page had. |
 | `search_login_required` | Untappd's sign-in wall cut the search short (anonymous search stops at 5) | Ask the human to sign in to Untappd in the browser profile. `bootstrap` only detects a Google session, so it cannot confirm this one. |
 | `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Not per-venue — check the key and billing, or unset it for Nominatim. Nothing was written. |
+| `network_unavailable` | Several URLs in a row failed at the transport | Check connectivity, then re-run. The run stopped instead of sleeping through the backoff ladder per venue. |
+| `bad_arguments` | An argument was rejected — most often a pacing value below its floor | **Do not retry with a different number.** The floors are account-safety limits; the message says which one. |
+| `bad_pacing` | `--max-gap` is below `--min-gap` | Pass a real range, or omit both and take the defaults. |
 | `csv_missing` | No input data | Run `run` first. |
+| `labels_incomplete` | A sampled bucket came back with no labels | Ask the human to label a few rows in every bucket. The rare ones are the point. |
+| `labels_unusable` | An answer is outside the accepted vocabulary, or the sheet lost its `_stratum`/`_stratum_size` columns | The message names the row and cell. Answers are `y` / `n` / `?`; a blank means unanswered. |
 | `notes_failed` | The notes pass failed | Re-run; progress resumes. |
 | `interrupted` | Ctrl-C | Re-run the same command; progress is journalled. |
 | `unexpected_error` | Unhandled | Re-run with `-v` for a traceback. |
@@ -62,10 +77,17 @@ stderr. Parse stdout; ignore stderr unless debugging.
 2. **Never run `pin` without an explicit human instruction.** It automates the
    Google Maps UI, which is against Google's ToS (see README). Default to the
    supported My Maps KML path.
+
+   This used to contradict the loop above, and the loop won: `pin` was listed
+   in `next_actions` and was the only entry that ever emptied it, so following
+   the contract led an agent into the write. It is now in `hints` instead —
+   where nothing is instructed to run it.
 3. **Trial before bulk.** First `pin` run should use `--limit 3`. Report the
    result before doing the rest.
-4. **Do not lower the pacing.** `--min-gap` / `--max-gap` exist to keep the
-   user's account safe. Raise them if throttled; do not lower them.
+4. **Do not lower the pacing.** `--min-gap` / `--max-gap` / `--delay` exist to
+   keep the user's account safe. Raise them if throttled; do not lower them.
+   This is now enforced rather than asked: a value below the default is
+   refused with `bad_arguments`, and the floors are the shipped defaults.
 5. **A failed parse is a real finding.** The quality gate deliberately writes
    nothing when data looks degraded. Do not work around it by lowering
    `parse_strictness` — fix the selector and say what changed.
@@ -79,6 +101,34 @@ trial it with `--limit` first.
 
 It only annotates places already in the target list; anything else is recorded
 as `not-in-list` and left alone. A note that already matches is never rewritten.
+
+Like `pin`, it runs a pre-flight first and reports `not_signed_in` or
+`list_missing` rather than working through a hundred places against a
+signed-out browser.
+
+## The `label` and `score` commands
+
+`classify.py` holds candidate heuristics for venue kind, closed venues and
+private spaces. **None of them are wired into `run`**, and none should be until
+they have been measured. `label` emits a stratified sample for a human to
+judge; `score` reports the error rates by direction.
+
+Both are read-only, offline and touch no account, so an agent may run them
+freely. What an agent must **not** do is fill in the labels: the whole point is
+a human judgement the classifier can be checked against, and a model labelling
+its own classifier's output measures nothing.
+
+Sampling takes a fixed quota per bucket, rare ones included, and `score`
+divides that back out. Two consequences worth knowing:
+
+- Labelling only the easy rows breaks the weighting. `score` refuses a bucket
+  with no labels and warns about thin ones, but cannot detect cherry-picking.
+- Every rate's denominator is the rows that answered **that** question. A blank
+  is not an answer and `?` is not a verdict, so a rate can come back `null`
+  meaning *unknown* — which is not the same as zero errors, and must not be
+  reported as a clean result.
+- A CSV with no `category` column makes every kind prediction `unsettled`, so
+  the kind measurement says nothing. `label` warns when it sees this.
 
 ## Idempotency
 
@@ -111,6 +161,11 @@ defeating one still leaves the others:
 | **Circuit breaker** | 3 consecutive failures → stop and start a cool-off. Repeated failure is when a script looks least human. |
 | **Block detection** | Scans every page for CAPTCHA / "unusual traffic" / "not a robot" / forced sign-out. Any hit aborts instantly. Google serves these as HTTP 200, so text is the only signal. |
 | **Cool-off** | 6h, persisted. Applied after any trip or detected block. |
+
+Every one of those survives a restart, and so do the read-side protections:
+the hourly request ceiling and the circuit-breaker count are both on disk. A
+guardrail you can clear by starting the process again is a speed bump, not a
+guardrail.
 
 Rules for agents:
 
