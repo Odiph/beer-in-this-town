@@ -101,6 +101,34 @@ for a person in `docs/FLOW.md` and for a coding agent in `AGENTS.md`.
 - **CI test selection.** CI ran `-m unit`, which skipped every test that was
   never marked -- 187 of 647. It now runs `-m "not integration"`.
 
+Found by the first live end-to-end run of this flow:
+
+- **Stock BlueStacks was refused.** `doctor` read `wm size` (the physical
+  1600 x 900) and called a working emulator not ready. Untappd is
+  portrait-only, so on that screen it is drawn at exactly the 900 x 1600 the
+  sweep is calibrated for. Either orientation is now accepted, and the setup
+  says 1600 x 900 is the default rather than sending people to change it.
+- **A placement failure cost a whole second sweep.** A complete sweep that
+  then hit an Overpass 504 was walked again on re-run, because a resumed
+  journal re-walks cells by design. The journal is now marked complete before
+  placement; a re-run within 12h places it without touching the emulator, and
+  `sweep --fresh` walks the map again. Journals older than 12h are discarded,
+  so last week's venues no longer seed this week's sweep.
+- **The calibration census was too big to answer.** A depth-3 sweep spread
+  17 km, and the matching Overpass query timed out on two servers. It is
+  capped at 8 km (anchors from the core fix the whole map) and retried once
+  at half the radius on a refusal.
+- **Shell syntax in commands built from names.** A city or list name went
+  into `next_actions` and the dashboard's copyable commands with only double
+  quotes removed. Quote, backtick, dollar, separators, redirects, percent,
+  caret, bang, control characters and a trailing backslash are now all
+  removed.
+- **`pin` and `notes` fell back to a list name nobody typed** (the dashboard's
+  "<City> Bars" suggestion), so `no_list` could not fire. They now need
+  `--list`.
+- `enrich`, `filter` and `export` now find the chosen city the way `sweep`
+  does.
+
 The entries below were written during the 0.2.0 cycle, before the flow above
 replaced the old collection command, and describe the tool as it was at the
 time. Anything they mention that is listed under Removed above is gone.
