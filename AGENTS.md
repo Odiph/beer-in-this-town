@@ -133,13 +133,13 @@ python -m beer_in_this_town doctor --json
 
 `doctor` runs four emulator checks, in order: `adb_on_path`,
 `device_connected`, `untappd_installed` (package `com.untappdllc.app`),
-`screen_size` (900x1600). They are in `data.emulator`, a list of
+`screen_size` (1600x900 or 900x1600). They are in `data.emulator`, a list of
 `{name, ok, detail, remedy}` always in that order, and `data.emulator_ready`
 is true only when all four pass. A check after a failing one is reported as
 not checked rather than run. Take the **first** failing one and give the
 human its `remedy`. Message, when nothing is set up yet:
 
-> In BlueStacks: Settings → Display → Portrait, 900 x 1600, save and restart.
+> In BlueStacks: Settings → Display → resolution 1600 x 900 (the default), save and restart.
 > Then Settings → Advanced → turn on Android Debug Bridge, and note the
 > address it shows (usually 127.0.0.1:5555). Install Untappd from the Play
 > Store inside BlueStacks and sign in to it. Tell me when that's done and
@@ -532,7 +532,11 @@ Rules for agents:
 ## Idempotency
 
 - `sweep` — resumable. Journalled per city; a re-run after a failure picks up
-  where it stopped. Overwrites `1_sweep.csv` when it completes.
+  where it stopped. Once every cell is walked the journal is marked complete,
+  so a re-run within 12h after a placement failure (`overpass_unavailable`,
+  `calibration_failed`) re-places without touching the emulator. Do not pass
+  `--fresh` on your own initiative: it re-walks the whole map. Journals older
+  than 12h are discarded. Overwrites `1_sweep.csv` when it completes.
 - `enrich` — safe to repeat. Venue pages are cached for 12h; a re-run costs
   almost no requests. Overwrites `2_enriched.csv`.
 - `filter`, `export` — offline, deterministic, overwrite their own outputs.
@@ -548,8 +552,8 @@ Rules for agents:
 
 ## What needs a human
 
-- Installing Chrome, BlueStacks and adb, and setting BlueStacks to 900 x 1600
-  portrait with Android Debug Bridge on.
+- Installing Chrome, BlueStacks and adb, and turning on BlueStacks' Android
+  Debug Bridge (the default 1600 x 900 screen is the right one).
 - Installing Untappd in the emulator and signing in to it.
 - Signing in to Google and Untappd in the tool's Chrome profile (`ui` or
   `bootstrap`).
