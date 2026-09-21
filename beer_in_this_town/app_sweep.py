@@ -48,9 +48,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from .app_categories import is_drinking_category, plan_category_taps
 from .app_map import (
     Pin,
     WrongScreen,
+    categories_in,
     is_truncated,
     pin_displacement,
     pins_in,
@@ -73,6 +75,18 @@ SCREEN_WIDTH = 900
 # twice live before the cause was understood -- a pan of (-225,-331) px moved
 # the map by precisely (0,0) across 58 shared pins.
 CARD_TOP = 1242
+
+# Controls on the map and in the filter panel. Tapped by position because
+# their bounds are stable within a session; the descriptions record what each
+# one is, so a layout change is a lookup rather than a hunt.
+FILTERS_BUTTON = (774, 81)        # content-desc "filters"
+CATEGORY_ROW = (450, 185)         # "Filter by Category"
+APPLY_BUTTON = (845, 78)          # "APPLY"
+SHOW_RESULTS_BUTTON = (450, 1556) # "SHOW RESULTS"
+
+# How many tap-and-rescan passes the category panel gets before we accept it
+# as set. It scrolls, so one pass only reaches the visible rows.
+MAX_CATEGORY_PASSES = 10
 
 # `Refresh search`, found by content-desc in the live app. Kept as a constant
 # so a layout change is one edit rather than a hunt through the sweep.
@@ -234,6 +248,53 @@ def _clear_origin(pins: list[Pin], dx: int, dy: int) -> tuple[int, int]:
 def _pan(device: Device, dx: int, dy: int, pins: list[Pin]) -> None:
     cx, cy = _clear_origin(pins, dx, dy)
     device.swipe(cx, cy, cx + dx, cy + dy, PAN_MS)
+
+
+def apply_drinking_filter(device: Device,
+                          settle_min_s: float = 1.0,
+                          settle_max_s: float = 2.0) -> list[str]:
+    """Set the category filter to drinking venues only, before searching.
+
+    A result set holds about 60 venues and Untappd's index is not a drinking
+    index -- only 6 of the 17 categories a Tel Aviv search returns are places
+    you can drink. Every slot spent on a park, a hotel or a supermarket is a
+    bar that did not fit, and it cannot be corrected afterwards because pins
+    carry no category.
+
+    The panel scrolls, so this taps what is visible, re-reads, and moves
+    down until the rows stop changing. Returns the categories it ended up
+    keeping, so a caller can record what the corpus was filtered to.
+    """
+    device.tap(*FILTERS_BUTTON)
+    _settle(settle_min_s, settle_max_s)
+    device.tap(*CATEGORY_ROW)
+    _settle(settle_min_s, settle_max_s)
+
+    kept: set[str] = set()
+    seen: set[str] = set()
+    for _ in range(MAX_CATEGORY_PASSES):
+        xml = device.dump()
+        cats = categories_in(xml)
+        kept.update(n for n, c in cats.items() if c.checked)
+        taps = plan_category_taps(cats, xml)
+        for tap in taps:
+            device.tap(tap.x, tap.y)
+            _settle(settle_min_s / 2, settle_max_s / 2)
+
+        fresh = set(cats) - seen
+        seen.update(cats)
+        if not taps and not fresh:
+            break
+        # Reach the rows below the fold.
+        device.swipe(450, 1200, 450, 700, PAN_MS // 2)
+        _settle(settle_min_s, settle_max_s)
+
+    device.tap(*APPLY_BUTTON)
+    _settle(settle_min_s, settle_max_s)
+    device.tap(*SHOW_RESULTS_BUTTON)
+    _settle(settle_min_s, settle_max_s)
+
+    return sorted(n for n in seen if is_drinking_category(n))
 
 
 def _harvest_screen(device: Device) -> list[Pin]:

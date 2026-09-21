@@ -267,3 +267,39 @@ def test_refresh_is_pressed_for_each_cell():
     # concluded the cell was complete. A cell must re-search before it
     # believes its own pin count.
     assert sum(1 for a in dev.actions if a.startswith("tap")) == 5
+
+
+# --- the category filter --------------------------------------------------
+
+def _panel(rows):
+    nodes = "".join(
+        f'<node class="android.widget.CheckBox" content-desc="{n}, {c}, " '
+        f'checked="{str(k).lower()}" bounds="[0,{254 + i * 82}][900,{336 + i * 82}]"/>'
+        for i, (n, c, k) in enumerate(rows))
+    return ("<?xml version='1.0'?><hierarchy>"
+            '<node class="android.widget.TextView" text="Filter by Category"'
+            ' bounds="[132,58][370,99]"/>' + nodes + "</hierarchy>")
+
+
+def test_the_filter_turns_drinking_categories_on_and_junk_off():
+    """Only 6 of the 17 categories a Tel Aviv search returns are drinking
+    places, so most of a 58-slot result set goes to parks and hotels. It
+    cannot be fixed afterwards: pins carry no category."""
+    from beer_in_this_town.app_sweep import apply_drinking_filter
+
+    settled = _panel([("Bar", 6, True), ("Supermarket", 2, False)])
+    dev = FakeDevice([_panel([("Bar", 6, False), ("Supermarket", 2, True)]), settled])
+    kept = apply_drinking_filter(dev, settle_max_s=0)
+    assert kept == ["Bar"]
+    # Two toggles, plus filters / category row / APPLY / SHOW RESULTS.
+    assert sum(1 for a in dev.actions if a.startswith("tap")) >= 6
+
+
+def test_the_filter_stops_when_the_panel_stops_changing():
+    """The panel scrolls, so the driver must know when it has reached the
+    bottom rather than scrolling forever."""
+    from beer_in_this_town.app_sweep import apply_drinking_filter
+
+    dev = FakeDevice([_panel([("Bar", 6, True)])])
+    apply_drinking_filter(dev, settle_max_s=0)
+    assert sum(1 for a in dev.actions if a.startswith("swipe")) <= 1
