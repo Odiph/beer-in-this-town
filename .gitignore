@@ -21,3 +21,6 @@ data/
 # Private working files: drafts, one-off verification scripts.
 .local/
 depth_probe.py
+
+# Agent worktrees: full checkouts, never part of this one.
+.claude/worktrees/

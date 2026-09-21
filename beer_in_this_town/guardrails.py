@@ -337,8 +337,7 @@ def single_writer(fn: Callable[P, T]) -> Callable[P, T]:
     """Mark a command as the only thing allowed to spend the budget while it runs.
 
     Applied to the two account-writing entry points. Held for the whole call,
-    so `pin` and `notes` run one after another -- which is what
-    run_catchup.ps1 already does -- rather than overlapping.
+    so `pin` and `notes` run one after another rather than overlapping.
     """
     @functools.wraps(fn)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
