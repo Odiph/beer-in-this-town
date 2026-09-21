@@ -43,6 +43,25 @@ def _read_baseline(query: str) -> dict[str, dict]:
     return {}
 
 
+# The map formats `export` writes, in the order it writes them.
+MAP_FORMATS = ("kml", "gpx", "geojson")
+
+# Coordinate sources that carry OpenStreetMap data. `app` rows are map pins
+# placed by a calibration fitted against OSM (Overpass) around a Nominatim
+# centre, so they are derived from it; `nominatim` is OSM's own geocoder.
+# `embedded` (the venue page) and `google` are not OSM and need no credit.
+OSM_DERIVED_SOURCES = frozenset({"app", "nominatim", "osm", "overpass"})
+
+
+def osm_attribution(venues: list[Venue]) -> str | None:
+    """The ODbL credit, when any exported coordinate came from OSM."""
+    from .overpass import ATTRIBUTION
+
+    if any(v.has_coords and v.geo_source in OSM_DERIVED_SOURCES for v in venues):
+        return ATTRIBUTION
+    return None
+
+
 def write_csv(venues: list[Venue], path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     # newline="" is required on Windows or every row gets a blank line after it.
@@ -58,7 +77,8 @@ def _or_na(n: int | None) -> str:
     return "n/a" if n is None else str(n)
 
 
-def write_kml(venues: list[Venue], path: Path, title: str) -> Path:
+def write_kml(venues: list[Venue], path: Path, title: str,
+              attribution: str | None = None) -> Path:
     """KML beats CSV for My Maps import: exact coordinates, no re-geocoding by
     Google, and a rich info-window body carrying the check-in stats."""
     pinned = [v for v in venues if v.has_coords]
@@ -76,6 +96,9 @@ def write_kml(venues: list[Venue], path: Path, title: str) -> Path:
     kml = ET.Element(f"{{{ns}}}kml")
     doc = ET.SubElement(kml, "Document")
     ET.SubElement(doc, "name").text = title
+    if attribution:
+        # Document-level, where every KML reader shows the file's credits.
+        ET.SubElement(doc, "description").text = f"Coordinates: {attribution}"
 
     for v in pinned:
         pm = ET.SubElement(doc, "Placemark")
@@ -135,7 +158,8 @@ def _stats_line(v: Venue) -> str:
     return " | ".join(bits)
 
 
-def write_geojson(venues: list[Venue], path: Path) -> Path:
+def write_geojson(venues: list[Venue], path: Path,
+                  attribution: str | None = None) -> Path:
     """GeoJSON, for anything that is not Google.
 
     Organic Maps, OsmAnd and every OSM-based client import this as bookmarks
@@ -159,16 +183,22 @@ def write_geojson(venues: list[Venue], path: Path) -> Path:
             },
         })
 
+    collection: dict = {"type": "FeatureCollection", "features": features}
+    if attribution:
+        # A foreign member (RFC 7946 s6.1): readers that do not know it
+        # ignore it, and the credit travels with the file.
+        collection["attribution"] = attribution
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"type": "FeatureCollection", "features": features}, indent=1),
-        encoding="utf-8",
-    )
+    # ensure_ascii=False: the credit's (c) sign and Hebrew or Greek venue
+    # names stay readable to anyone who opens the file.
+    path.write_text(json.dumps(collection, indent=1, ensure_ascii=False),
+                    encoding="utf-8")
     log.info("Wrote %d features -> %s", len(features), path)
     return path
 
 
-def write_gpx(venues: list[Venue], path: Path, title: str) -> Path:
+def write_gpx(venues: list[Venue], path: Path, title: str,
+              attribution: str | None = None) -> Path:
     """GPX waypoints. The lowest common denominator every map app reads."""
     ns = "http://www.topografix.com/GPX/1/1"
     ET.register_namespace("", ns)
@@ -177,6 +207,13 @@ def write_gpx(venues: list[Venue], path: Path, title: str) -> Path:
     })
     meta = ET.SubElement(gpx, "metadata")
     ET.SubElement(meta, "name").text = title
+    if attribution:
+        # GPX 1.1 metadata order is name, desc, author, copyright.
+        ET.SubElement(meta, "desc").text = f"Coordinates: {attribution}"
+        rights = ET.SubElement(meta, "copyright",
+                               {"author": "OpenStreetMap contributors"})
+        ET.SubElement(rights, "license").text = (
+            "https://opendatacommons.org/licenses/odbl/")
 
     located = _located(venues, "GPX")
     for v in located:

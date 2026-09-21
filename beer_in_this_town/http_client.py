@@ -279,6 +279,22 @@ class PoliteClient:
             return None
         return path.read_text(encoding="utf-8", errors="replace")
 
+    @staticmethod
+    def _write_cache(path: Path, html: str) -> None:
+        """Cache a page we already paid for, and never fail the call over it.
+
+        The request has been made and counted against the budget by the time
+        this runs. Raising here -- a missing `cache/` when no caller ran
+        `ensure_dirs()`, a full disk -- threw away a good response, and the
+        retry that followed spent a second request on the same page.
+        """
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(html, encoding="utf-8")
+        except OSError as exc:
+            log.warning("Could not cache %s (%s); the page is still used.",
+                        path.name, exc)
+
     def get(
         self,
         url: str,
@@ -350,7 +366,7 @@ class PoliteClient:
             self._consecutive_429 = 0
             html = resp.text
             if use_cache:
-                cache_path.write_text(html, encoding="utf-8")
+                self._write_cache(cache_path, html)
             return html
 
         # Every attempt for this URL failed at the transport. Count it: one
