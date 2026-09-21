@@ -65,7 +65,7 @@ from .notes import MAX_GAP_S as NOTES_MAX_GAP
 from .notes import MIN_GAP_S as NOTES_MIN_GAP
 from .notes import add_notes, notes_from_csv
 from .overpass import OverpassUnavailable
-from .parsers import ParseError, parse_venue_stats
+from .parsers import ParseError, StatsLoginRequired, parse_venue_stats
 from .pin_to_list import MAX_GAP_S as PIN_MAX_GAP
 from .pin_to_list import MIN_GAP_S as PIN_MIN_GAP
 from .pin_to_list import (
@@ -473,6 +473,17 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
         with PoliteClient(s) as client:
             html = client.get(ref.url, use_cache=False)
             venue = parse_venue_stats(html, ref)
+    except StatsLoginRequired as exc:
+        # A ParseError by type, but an account problem: sending the user to
+        # fix selectors would send them after a debug dump that was never
+        # written.
+        return fail("selfcheck", Problem(
+            code="not_signed_in",
+            message=str(exc),
+            remedy="Sign in to untappd.com in the tool's Chrome profile: run "
+                   "`beertown ui` and use the Accounts step. It needs a "
+                   "password, so it is the human's to do.",
+        ))
     except ParseError as exc:
         return fail("selfcheck", Problem(
             code="selectors_stale",
