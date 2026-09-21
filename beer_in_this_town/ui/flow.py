@@ -92,12 +92,14 @@ EMULATOR_STEPS = (
              "Install version 5 and start it once so it finishes setting up.",
      "links": [{"label": "Download BlueStacks",
                 "url": "https://www.bluestacks.com/download.html"}]},
-    {"title": "Set the display to 900 x 1600, portrait",
-     "body": "BlueStacks: Settings -> Display -> Display orientation: "
-             "Portrait, Display resolution: 900 x 1600. Save and let it "
-             "restart. Why: the sweep taps and swipes the Untappd map at "
-             "positions measured on exactly this screen. Any other size and "
-             "it misses the map and pans the wrong way."},
+    {"title": "Check the display is 1600 x 900",
+     "body": "BlueStacks: Settings -> Display -> Display resolution: "
+             "1600 x 900 (the default; 900 x 1600 portrait works too). Save "
+             "and let it restart if you changed it. Why: Untappd is a "
+             "portrait app, so on this screen it is drawn at 900 x 1600 -- "
+             "and the sweep taps and swipes the map at positions measured on "
+             "exactly that. Any other size and it misses the map and pans the "
+             "wrong way."},
     {"title": "Turn on Android Debug Bridge (adb)",
      "body": "BlueStacks: Settings -> Advanced -> Android Debug Bridge (ADB): "
              "on. It shows an address such as 127.0.0.1:5555 -- note the "
