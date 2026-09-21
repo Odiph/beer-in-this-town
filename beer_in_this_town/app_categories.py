@@ -23,18 +23,17 @@ import re
 from dataclasses import dataclass
 
 from .app_map import Category
+from .classify import KEEP_CATEGORIES
 
-# Categories that mean "you can drink here". Matched as whole phrases against
-# the comma-separated list the app gives, so `Hotel Bar` is kept while
-# `Hotel` is not -- a distinction substring matching cannot make, and the one
-# that decides whether a hotel lobby is a beer destination.
-DRINKING_CATEGORIES = frozenset({
-    "bar", "pub", "irish pub", "dive bar", "beer bar", "wine bar",
-    "cocktail bar", "sports bar", "hotel bar", "lounge", "beer garden",
-    "biergarten", "brewery", "brewpub", "taproom", "tap room", "gastropub",
-    "beer store", "bottle shop", "liquor store", "wine shop", "distillery",
-    "cidery", "meadery", "winery", "beer festival",
-})
+# Categories that mean "a craft-beer venue could be here". Matched as whole
+# phrases against the comma-separated list the app gives, so `Hotel Bar` is
+# kept while `Hotel` is not -- a distinction substring matching cannot make,
+# and the one that decides whether a hotel lobby is a beer destination.
+#
+# Defined once, in `classify`: `filter` applies the same vocabulary to the
+# enriched rows, so what the sweep collects and what the map keeps agree.
+# Wine bars, cocktail bars, wineries and distilleries are deliberately absent.
+DRINKING_CATEGORIES = KEEP_CATEGORIES
 
 _BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 

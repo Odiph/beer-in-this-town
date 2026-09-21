@@ -9,7 +9,8 @@ without parsing tracebacks.
   python -m beer_in_this_town doctor --json      # are the preconditions met
   python -m beer_in_this_town bootstrap          # one-time interactive login
   python -m beer_in_this_town selfcheck --json   # 1 request: are selectors alive
-  python -m beer_in_this_town run --no-upload --json  # collect -> CSV + maps
+  python -m beer_in_this_town sweep --city "Tel Aviv" --json   # 1_sweep.csv
+  python -m beer_in_this_town enrich|filter|export --city ... --json
   python -m beer_in_this_town pin  --json        # save into a Google Maps list
 """
 from __future__ import annotations
@@ -22,23 +23,26 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from .adb_device import AdbUnavailable
+from . import flow_cmds
+from .adb_device import AdbDevice, AdbUnavailable
 from .agent_io import Envelope, Problem, emit, fail, log_to_stderr
+from .app_calibrate import CalibrationFailed
 from .app_categories import CategoryPanelError
 from .app_map import WrongScreen
-from .app_sweep import DeadPan
-from .config import DATA_DIR, SEARCH_URL, Settings, ensure_dirs
-from .export import (
-    commit_run,
-    diff_against_previous,
-    today_stamp,
-    write_csv,
-    write_diff_outputs,
-    write_geojson,
-    write_gpx,
-    write_kml,
+from .app_pipeline import (
+    DEFAULT_MAX_DEPTH,
+    DEFAULT_MIN_DEPTH,
+    CityNotFound,
+    NoLocationControl,
+    census,
+    census_envelope,
+    write_census,
 )
-from .geocode import GeocoderUnavailable, geocode_missing
+from .app_sweep import DeadPan
+from .config import DATA_DIR, Settings, ensure_dirs
+from .emulator_checks import check_emulator, emulator_ready, first_failure
+from .export import write_csv
+from .geocode import GeocoderUnavailable
 from .guardrails import AlreadyRunning, Tripped
 from .http_client import (
     BudgetExceeded,
@@ -57,18 +61,11 @@ from .measure import (
     write_sheet,
 )
 from .models import VenueRef
-from .mymaps_upload import manual_instructions, upload_kml
 from .notes import MAX_GAP_S as NOTES_MAX_GAP
 from .notes import MIN_GAP_S as NOTES_MIN_GAP
 from .notes import add_notes, notes_from_csv
 from .overpass import OverpassUnavailable
-from .parsers import (
-    ClientRenderedSearch,
-    ParseError,
-    assert_corpus_quality,
-    parse_search_page,
-    parse_venue_stats,
-)
+from .parsers import ParseError, StatsLoginRequired, parse_venue_stats
 from .pin_to_list import MAX_GAP_S as PIN_MAX_GAP
 from .pin_to_list import MIN_GAP_S as PIN_MIN_GAP
 from .pin_to_list import (
@@ -79,7 +76,6 @@ from .pin_to_list import (
 )
 from .places import PlacesUnavailable, resolve_closures
 from .places import counts as closure_counts
-from .scrape import SearchLoginRequired, collect_venue_refs, fetch_venues
 from .state import (
     blocked_on,
     hints,
@@ -187,7 +183,10 @@ def setup_logging(verbose: bool, as_json: bool) -> None:
 # Agent-facing introspection
 # --------------------------------------------------------------------------
 def cmd_status(s: Settings) -> Envelope:
-    state = inspect_state(s)
+    # The emulator is probed only when a sweep is the next stage; see
+    # inspect_state. Each adb call has a short timeout, and a machine with no
+    # adb at all answers at once with a failed check, not an exception.
+    state = inspect_state(s, probe_emulator=True, emulator=check_emulator)
     # Additive field, so no schema bump -- AGENTS.md says `data` gains keys
     # without one. It tells an empty `next_actions` that means "finished"
     # apart from one that means "waiting for a person".
@@ -246,9 +245,9 @@ def cmd_verify(s: Settings) -> Envelope:
             code="not_signed_in",
             message="Signed out of " + " and ".join(failed) + ".",
             remedy="Ask the human to run `beertown ui` and sign in; it needs "
-                   "a password, so an agent cannot do it. Signed out of "
-                   "Untappd, search stops at 5 results and a run would build "
-                   "a five-venue corpus.",
+                   "a password, so an agent cannot do it. Google holds the "
+                   "saved list; Untappd on the web is what `enrich` reads "
+                   "venue pages through.",
         ), accounts=results)
 
     return Envelope(
@@ -258,7 +257,7 @@ def cmd_verify(s: Settings) -> Envelope:
     )
 
 
-def cmd_doctor(s: Settings) -> Envelope:
+def cmd_doctor(s: Settings, emulator=None) -> Envelope:
     """Check preconditions without touching the network more than necessary."""
     problems: list[str] = []
     data: dict[str, object] = {}
@@ -278,7 +277,7 @@ def cmd_doctor(s: Settings) -> Envelope:
         data["playwright"] = "ok"
     except ImportError:
         problems.append(
-            "playwright missing (only needed for bootstrap/pin) "
+            "playwright missing (needed for sign-in, enrich, pin and notes) "
             "-- pip install -e \".[browser]\""
         )
 
@@ -302,6 +301,22 @@ def cmd_doctor(s: Settings) -> Envelope:
         )
 
     data["geocoder"] = "google" if s.google_geocoding_key else "nominatim (free, 1 req/s)"
+
+    # The sweep's half of the setup: BlueStacks, adb, the app, the display.
+    # Each failure carries a remedy a stranger can follow, in the order they
+    # have to be fixed -- a later check is only meaningful once the earlier
+    # ones pass.
+    checks = (emulator or check_emulator)(s.adb_serial)
+    data["emulator"] = [c.to_dict() for c in checks]
+    data["emulator_ready"] = emulator_ready(checks)
+    first = first_failure(checks)
+    if first is not None:
+        problems.append(
+            f"emulator not ready ({first.name}): {first.detail} "
+            f"Fix: {first.remedy}")
+    else:
+        notes.append(
+            "Before each sweep, open the Untappd app on Discover -> View Map.")
 
     return Envelope(
         command="doctor",
@@ -446,40 +461,29 @@ def _capture_session(s: Settings, sync_playwright) -> Envelope:
     )
 
 
-def _probe_search(client, s: Settings) -> str:
-    """Is the search page one of the two shapes we know how to handle?
+def cmd_selfcheck(s: Settings, slug: str, venue_id: str) -> Envelope:
+    """Cheap pre-flight: one known-good venue page, its shape asserted.
 
-    Either it carries `.beer-item` rows (server-rendered) or an `#algolia-hits`
-    container the browser path can fill (client-rendered). Anything else is a
-    stale selector, and saying so is the entire reason this probe exists:
-    search moved to Algolia, every `run` broke, and `selfcheck` stayed green
-    for the duration because venue detail pages were never affected.
-
-    Deliberately says nothing about how many results came back. Anonymous
-    search is capped at five by Untappd's login gate, so a count assertion
-    would fail on a healthy signed-out install.
+    Venue pages are what `enrich` reads, so they are the one Untappd surface
+    whose markup this tool still depends on. One paced request.
     """
-    html = client.get(SEARCH_URL, params={"q": s.query, "type": "venues"},
-                      use_cache=False)
-    try:
-        parse_search_page(html)
-    except ClientRenderedSearch:
-        return "client-rendered"
-    return "server-rendered"
-
-
-def cmd_selfcheck(s: Settings, slug: str, venue_id: str,
-                  probe_search: bool = True) -> Envelope:
-    """Cheap pre-flight: one venue page and one search page, shape asserted."""
     ref = VenueRef(venue_id=venue_id, slug=slug, name="selfcheck",
                    category=None, address=None, city=None)
-    search_shape = "not checked"
     try:
         with PoliteClient(s) as client:
             html = client.get(ref.url, use_cache=False)
             venue = parse_venue_stats(html, ref)
-            if probe_search:
-                search_shape = _probe_search(client, s)
+    except StatsLoginRequired as exc:
+        # A ParseError by type, but an account problem: sending the user to
+        # fix selectors would send them after a debug dump that was never
+        # written.
+        return fail("selfcheck", Problem(
+            code="not_signed_in",
+            message=str(exc),
+            remedy="Sign in to untappd.com in the tool's Chrome profile: run "
+                   "`beertown ui` and use the Accounts step. It needs a "
+                   "password, so it is the human's to do.",
+        ))
     except ParseError as exc:
         return fail("selfcheck", Problem(
             code="selectors_stale",
@@ -505,14 +509,12 @@ def cmd_selfcheck(s: Settings, slug: str, venue_id: str,
         command="selfcheck",
         ok=True,
         data={"url": ref.url, "total": venue.total, "unique": venue.unique,
-              "monthly": venue.monthly, "coords_embedded": venue.has_coords,
-              "search": search_shape},
-        next_actions=["python -m beer_in_this_town run --no-upload --json"],
+              "monthly": venue.monthly, "coords_embedded": venue.has_coords},
+        next_actions=["python -m beer_in_this_town status --json"],
     )
 
 
-# Asked for, and not possible. Shared by `closures` and `run --check-closed`
-# so the two cannot answer differently about the same missing key.
+# Asked for, and not possible.
 #
 # The stage no-ops when nobody asked for it -- that is #20's rule. But a
 # command invoked explicitly, or a flag passed deliberately, is somebody
@@ -548,7 +550,8 @@ def cmd_closures(s: Settings, csv_path: str, out: str | None,
         return fail("closures", Problem(
             code="csv_missing",
             message=f"No such CSV: {source}",
-            remedy="Run `run` first, or pass --csv with a path that exists.",
+            remedy="Run the collection stages first (`status --json` says "
+                   "which is next), or pass --csv with a path that exists.",
         ))
 
     if not s.google_places_key:
@@ -679,14 +682,16 @@ def cmd_label(s: Settings, csv_path: str, out: str | None,
               quota: int, seed: int) -> Envelope:
     """Emit a labelling sheet: a stratified sample for a human to judge.
 
-    Reads only what `run` already wrote. No network, no browser, no account.
+    Reads only a CSV the pipeline already wrote. No network, no browser,
+    no account.
     """
     source = Path(csv_path)
     if not source.exists():
         return fail("label", Problem(
             code="csv_missing",
             message=f"No such CSV: {source}",
-            remedy="Run `run` first, or pass --csv with a path that exists.",
+            remedy="Run the collection stages first (`status --json` says "
+                   "which is next), or pass --csv with a path that exists.",
         ))
 
     venues = venues_from_csv(source)
@@ -710,8 +715,9 @@ def cmd_label(s: Settings, csv_path: str, out: str | None,
         warnings.append(
             "No venue in this CSV has a category, so every kind prediction is "
             "'unsettled' and the venue-kind measurement will say nothing. The "
-            "closure and private-space measurements are unaffected. Re-scrape "
-            "with a current `run` to measure kind."
+            "closure and private-space measurements are unaffected. Use an "
+            "enriched CSV (data/<city>/2_enriched.csv or later) to measure "
+            "kind."
         )
     thin = [b for b, n in sheet.counts_by_stratum().items() if n < quota]
     if thin:
@@ -755,7 +761,7 @@ def cmd_score(s: Settings, labels_path: str) -> Envelope:
             code="csv_missing",
             message=f"No such labelling sheet: {source}",
             remedy="Generate one first: python -m beer_in_this_town label "
-                   "--csv data/venues_<city>_<date>.csv --json",
+                   "--csv data/<city>/3_venues.csv --json",
         ))
 
     try:
@@ -808,170 +814,37 @@ def cmd_score(s: Settings, labels_path: str) -> Envelope:
     )
 
 
-def cmd_run(s: Settings, *, upload: bool, force_browser: bool,
-            skip_robots: bool, formats: tuple[str, ...] = ("kml",),
-            check_closed: bool = False) -> Envelope:
+def cmd_sweep(s: Settings, *, here: bool, min_depth: int, max_depth: int,
+              formats: tuple[str, ...], device=None,
+              emulator=None, fresh: bool = False) -> Envelope:
+    """Find a city's venues from the Untappd app's map, on an emulator.
+
+    This is the collection step, and the only one: the app's map is a real
+    geographic search, where Untappd's web search matched venue *names*. It
+    reads only, resumes from its journal if interrupted, and calibrates the
+    map's scale against OpenStreetMap before writing a single coordinate.
+
+    The emulator checks run first. Finding out that adb is missing, the app
+    is not installed or the display is the wrong size used to cost a failed
+    sweep with a remedy that could only guess at the cause.
+    """
+    checks = (emulator or check_emulator)(s.adb_serial)
+    if not emulator_ready(checks):
+        first = first_failure(checks)
+        return fail("sweep", Problem(
+            code="emulator_unavailable",
+            message=f"The emulator is not ready ({first.name}): {first.detail}",
+            remedy=f"{first.remedy} Then run `beertown doctor --json`; it "
+                   f"re-runs every emulator check. Nothing was swept.",
+        ), emulator=[c.to_dict() for c in checks])
+
     ensure_dirs()
-    stamp = today_stamp()
-
-    # Before a single request. A run that scrapes a hundred venues and only
-    # then discovers it cannot do the thing it was asked to do has wasted the
-    # expensive part -- and the expensive part is the one with an account
-    # attached.
-    if check_closed and not s.google_places_key:
-        return fail("run", _NO_KEY)
-
-    with PoliteClient(s) as client:
-        if s.respect_robots and not skip_robots and client.robots_disallows_scraping():
-            return fail("run", Problem(
-                code="robots_disallow",
-                message="untappd.com/robots.txt disallows /v/ or /search for *.",
-                remedy="Pass --i-read-robots to override, accepting that it is "
-                       "against the site's stated wishes and its ToS.",
-            ))
-
-        try:
-            refs = collect_venue_refs(client, s, force_browser=force_browser)
-        except SearchLoginRequired as exc:
-            return fail("run", Problem(
-                code="search_login_required",
-                message=str(exc),
-                remedy=f"Sign in to Untappd once in the browser profile at "
-                       f"{s.profile_dir}; the search path reuses it. Note that "
-                       f"bootstrap only detects a Google session and will "
-                       f"report login_not_detected for an Untappd-only login.",
-            ))
-        except ParseError as exc:
-            # Both search paths failed to parse. Say which gate caught it, so
-            # this does not surface as a bare unexpected_error.
-            return fail("run", Problem(
-                code="selectors_stale",
-                message=str(exc),
-                remedy="Neither the HTTP nor the browser search page parsed. "
-                       "Inspect debug/*.html and update the search selectors "
-                       "in beer_in_this_town/parsers.py, then re-run.",
-            ))
-        log.info("Collected %d venue references", len(refs))
-
-        def progress(i: int, n: int, ref: VenueRef) -> None:
-            log.info("[%3d/%d] %s", i, n, ref.name)
-
-        venues = fetch_venues(client, refs, progress=progress)
-
-    # Gate: abort before writing anything if the parse looks degraded.
-    try:
-        assert_corpus_quality(venues, s.parse_strictness)
-    except ParseError as exc:
-        return fail("run", Problem(
-            code="corpus_quality_gate",
-            message=str(exc),
-            remedy="Inspect debug/*.html and update parsers.py, then re-run. "
-                   "Nothing was written -- this is the gate working.",
-        ), venues_scraped=len(venues))
-
-    try:
-        venues = geocode_missing(venues, s)
-    except GeocoderUnavailable as exc:
-        # Nothing has been written yet, same as the corpus gate above. A KML
-        # missing most of its pins because a key was rejected is worse than no
-        # KML at all, because it looks like a finished run.
-        return fail("run", Problem(
-            code="geocoder_unavailable",
-            message=str(exc),
-            remedy="Check GOOGLE_GEOCODING_KEY and that billing is enabled on "
-                   "it, or unset it to fall back to Nominatim. If no key is "
-                   "set, check connectivity -- Nominatim may be throttling or "
-                   "blocking this client. Nothing was written.",
-        ), venues_scraped=len(venues))
-
-    if check_closed:
-        try:
-            venues = resolve_closures(venues, s)
-        except PlacesUnavailable as exc:
-            # Same posture as the corpus gate and the geocoder above: nothing
-            # has been written, and a corpus half-annotated by a key that died
-            # partway looks finished while being partly unasked.
-            return fail("run", Problem(
-                code="places_unavailable",
-                message=str(exc),
-                remedy=_PLACES_REMEDY,
-            ), venues_scraped=len(venues))
-
-    csv_path = write_csv(venues, DATA_DIR / f"venues_{s.query}_{stamp}.csv")
-
-    base = DATA_DIR / f"venues_{s.query}_{stamp}"
-    # KML stays in the default set so existing workflows are untouched.
-    written: dict[str, str] = {}
-    if "kml" in formats:
-        written["kml"] = str(write_kml(venues, base.with_suffix(".kml"), s.map_title))
-    if "geojson" in formats:
-        written["geojson"] = str(write_geojson(venues, base.with_suffix(".geojson")))
-    if "gpx" in formats:
-        written["gpx"] = str(write_gpx(venues, base.with_suffix(".gpx"), s.map_title))
-    kml_path = Path(written["kml"]) if "kml" in written else None
-
-    diff = diff_against_previous(venues, s.query)
-    write_diff_outputs(diff, stamp)
-    commit_run(venues, s.query)
-    # So `status` answers about this city, not about Settings() defaults.
+    device = device or AdbDevice(serial=s.adb_serial)
+    c = census(device, s.query, s, here=here, min_depth=min_depth,
+               max_depth=max_depth, fresh=fresh)
+    csv_path, written = write_census(c, s.query, s.map_title, formats)
     record_run(query=s.query, map_title=s.map_title, csv_path=csv_path)
-
-    warnings = []
-    if len(venues) < s.target_count:
-        warnings.append(
-            f"Asked for {s.target_count} venues and got {len(venues)}. Either "
-            f"the query has no more, or search paging stopped early -- check "
-            f"the log for where it stopped before trusting the totals."
-        )
-    closed = [v for v in venues if v.is_closed]
-    if closed:
-        warnings.append(
-            f"{len(closed)} venue(s) are flagged closed by Google Places and "
-            f"are still exported and still in the KML: "
-            f"{', '.join(v.ref.name for v in closed[:5])}. Nothing drops them "
-            f"automatically -- read the business_status column and decide."
-        )
-    without_coords = [v.ref.name for v in venues if not v.has_coords]
-    if without_coords:
-        warnings.append(
-            f"{len(without_coords)} venue(s) have no coordinates and are not "
-            f"pinned in the KML: {', '.join(without_coords[:5])}"
-        )
-
-    map_url = None
-    if upload and kml_path is None:
-        warnings.append(
-            "--upload needs a KML; add kml to --format. Nothing was uploaded."
-        )
-    elif upload:
-        map_url = upload_kml(kml_path, s)
-        if not map_url:
-            warnings.append("My Maps automation failed; import the KML by hand.")
-            print(manual_instructions(kml_path, s.map_title), file=sys.stderr)
-
-    return Envelope(
-        command="run",
-        ok=True,
-        data={
-            "venues": len(venues),
-            "csv": str(csv_path),
-            "kml": written.get("kml"),
-            "maps": written,
-            "closed": len(closed),
-            "by_status": closure_counts(venues) if check_closed else None,
-            "new_since_last_run": len(diff["new"]),
-            "changed": len(diff["changed"]),
-            "my_maps_url": map_url,
-        },
-        warnings=warnings,
-        next_actions=[],
-        hints=[
-            f'The data is in "{csv_path}". To put it on a Google Maps saved '
-            f'list a human can run: pin --csv "{csv_path}" --list '
-            f'"{s.map_title}" --limit 3 --json. That writes to the account, so '
-            f'it is never started unasked; the map files above need nothing.'
-        ],
-    )
+    return census_envelope(c, s.query, s.map_title, csv_path, written)
 
 
 def resolve_region(region: str | None, path: Path) -> tuple[str | None, list[str]]:
@@ -1001,7 +874,7 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
         return fail("pin", Problem(
             code="csv_missing",
             message=f"CSV not found: {path}",
-            remedy="python -m beer_in_this_town run --no-upload --json",
+            remedy="python -m beer_in_this_town status --json",
         ))
 
     places = places_from_csv(path)
@@ -1104,7 +977,7 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
         return fail("notes", Problem(
             code="csv_missing",
             message=f"CSV not found: {path}",
-            remedy="python -m beer_in_this_town run --no-upload --json",
+            remedy="python -m beer_in_this_town status --json",
         ))
 
     places = notes_from_csv(path)
@@ -1216,7 +1089,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", parents=[common],
                    help="where the pipeline is up to, and what to run next")
     sub.add_parser("doctor", parents=[common],
-                   help="check preconditions (deps, session, geocoder)")
+                   help="check preconditions (deps, session, geocoder, "
+                        "and the emulator the sweep drives)")
     boot = sub.add_parser("bootstrap", parents=[common],
                           help="one-time interactive login")
     boot.add_argument("--capture", action="store_true",
@@ -1227,39 +1101,41 @@ def build_parser() -> argparse.ArgumentParser:
                            "(default 900)")
 
     check = sub.add_parser("selfcheck", parents=[common],
-                           help="verify selectors still work (1 request)")
+                           help="check a known venue page still parses "
+                                "(1 request)")
     check.add_argument("--slug", default="american-taproom-waterloo")
     check.add_argument("--id", dest="venue_id", default="7480946")
-    check.add_argument("--skip-search", action="store_true",
-                       help="only check the venue page (one request). The "
-                            "search probe is what catches a search outage.")
 
-    run = sub.add_parser("run", parents=[common],
-                         help="scrape, export, diff, and optionally upload")
-    run.add_argument("--query", default=None,
-                     help="the city to collect. No default: without one, and "
-                          "without a city named in the dashboard, `run` "
-                          "refuses rather than choosing for you.")
-    run.add_argument("--count", type=int, default=100)
-    run.add_argument("--title", default=None, help='My Maps title, e.g. "Singapore Bars"')
-    run.add_argument("--format", default="kml",
-                     help="comma-separated map formats: kml (My Maps), geojson "
-                          "and gpx (Organic Maps, OsmAnd -- these pin on the "
-                          "everyday map). Default: kml")
-    run.add_argument("--no-upload", action="store_true", help="write files only")
-    run.add_argument("--browser-search", action="store_true",
-                     help="force the Show More click path instead of HTTP pagination")
-    run.add_argument("--check-closed", action="store_true",
-                     help="ask Google Places whether each venue still trades "
-                          "and record it in a business_status column. Needs "
-                          "GOOGLE_PLACES_KEY. Flags; never drops.")
-    run.add_argument("--i-read-robots", action="store_true",
-                     help="proceed even if robots.txt disallows these paths")
-    run.add_argument("--delay", type=at_least(Settings().min_delay_s, "--delay"),
-                     default=None,
-                     help="raise the minimum inter-request delay, in seconds. "
-                          "It cannot be lowered: the pacing is what keeps this "
-                          "from looking like a script.")
+    sw = sub.add_parser("sweep", parents=[common],
+                        help="find a city's venues from the Untappd app's map "
+                             "on an Android emulator (the collection step)")
+    sw.add_argument("--city", dest="query", default=None,
+                    help="the city to sweep. No default: without one, and "
+                         "without a city named in the dashboard, `sweep` "
+                         "refuses rather than choosing for you.")
+    sw.add_argument("--title", default=None,
+                    help='the Google Maps list name the results are meant for, '
+                         'e.g. "London Bars"')
+    sw.add_argument("--fresh", action="store_true",
+                    help="sweep again even if a complete sweep of this city "
+                         "from the last 12h exists (a re-run otherwise only "
+                         "re-does the placement step)")
+    sw.add_argument("--here", action="store_true",
+                    help="centre on the emulator's own GPS fix (tap Reset "
+                         "location) instead of searching the city by name")
+    sw.add_argument("--min-depth", type=int, default=DEFAULT_MIN_DEPTH,
+                    help=f"always split at least this deep "
+                         f"(default {DEFAULT_MIN_DEPTH})")
+    sw.add_argument("--max-depth", type=int, default=DEFAULT_MAX_DEPTH,
+                    help=f"never split deeper than this "
+                         f"(default {DEFAULT_MAX_DEPTH})")
+    sw.add_argument("--format", default=None,
+                    help="also write 1_sweep.<fmt> map files: comma-separated "
+                         "kml, geojson, gpx. data/<city>/1_sweep.csv is "
+                         "always written.")
+
+    # enrich / filter / export: stream A2's module owns them.
+    flow_cmds.add_parsers(sub, common)
 
     pin = sub.add_parser(
         "pin",
@@ -1365,8 +1241,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 # Every subcommand name, so a bare invocation can be told from a mistyped one.
 _SUBCOMMANDS = frozenset({
-    "status", "doctor", "bootstrap", "selfcheck", "run", "pin", "notes",
-    "label", "score", "closures", "ui", "verify",
+    "status", "doctor", "bootstrap", "selfcheck", "sweep", "enrich",
+    "filter", "export", "pin", "notes", "label", "score", "closures", "ui",
+    "verify",
 })
 
 
@@ -1424,27 +1301,27 @@ def main(argv: list[str] | None = None) -> int:
             )), as_json)
             return 1
 
-    if args.cmd in {"run", "pin", "notes"}:
+    if args.cmd in {"sweep", "enrich", "filter", "export", "pin", "notes"}:
         # argv, then what the user named in the dashboard, then nothing.
         # There is no built-in default to fall through to any more: a city
         # nobody chose is a scrape of somewhere nobody asked for, and a list
         # name nobody chose is a write to an account.
         remembered = inspect_state(s)["last_run"]
         query = getattr(args, "query", None) or remembered.get("query") or ""
-        list_name = (getattr(args, "title", None)
-                     or getattr(args, "list_name", None)
-                     or remembered.get("map_title") or "")
-        s = replace(
-            s,
-            query=query,
-            target_count=getattr(args, "count", s.target_count),
-            map_title=list_name,
-        )
-        if args.cmd == "run" and not s.query:
-            emit(fail("run", Problem(
+        if args.cmd in {"pin", "notes"}:
+            # Only a name the person typed. The dashboard derives "<City>
+            # Bars" as a suggestion; falling back to it made `no_list`
+            # unreachable and aimed a write at a list nobody named.
+            list_name = getattr(args, "list_name", None) or ""
+        else:
+            list_name = (getattr(args, "title", None)
+                         or remembered.get("map_title") or "")
+        s = replace(s, query=query, map_title=list_name)
+        if args.cmd == "sweep" and not s.query:
+            emit(fail(args.cmd, Problem(
                 code="no_city",
                 message="No city given, and none has been chosen.",
-                remedy='Pass --query "<city>", or name one on the last step '
+                remedy='Pass --city "<city>", or name one on the last step '
                        "of `beertown ui`. There is deliberately no default: "
                        "choosing a city for someone is choosing what they "
                        "get.",
@@ -1459,8 +1336,6 @@ def main(argv: list[str] | None = None) -> int:
                        "a guessed name is a guess about where.",
             )), as_json)
             return 1
-        if getattr(args, "delay", None):
-            s = replace(s, min_delay_s=args.delay, max_delay_s=args.delay * 2.0)
 
     try:
         if args.cmd == "status":
@@ -1481,25 +1356,29 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "score":
             env = cmd_score(s, args.labels)
         elif args.cmd == "selfcheck":
-            env = cmd_selfcheck(s, args.slug, args.venue_id,
-                                probe_search=not args.skip_search)
-        elif args.cmd == "run":
+            env = cmd_selfcheck(s, args.slug, args.venue_id)
+        elif args.cmd == "sweep":
             try:
-                formats = parse_formats(args.format)
+                formats = parse_formats(args.format) if args.format else ()
             except ValueError as exc:
-                env = fail("run", Problem(
-                    code="bad_format",
-                    message=str(exc),
-                    remedy="Re-run with --format kml (My Maps), geojson or gpx "
-                           "(Organic Maps, OsmAnd), comma-separated.",
-                ))
-                emit(env, as_json)
+                emit(fail("sweep", Problem(
+                    code="bad_format", message=str(exc),
+                    remedy="Re-run with --format kml, geojson or gpx, "
+                           "comma-separated, or omit it for the CSV alone.",
+                )), as_json)
                 return 1
-            env = cmd_run(s, upload=not args.no_upload,
-                          force_browser=args.browser_search,
-                          skip_robots=args.i_read_robots,
-                          formats=formats,
-                          check_closed=args.check_closed)
+            if not 0 <= args.min_depth <= args.max_depth:
+                emit(fail("sweep", Problem(
+                    code="bad_arguments",
+                    message=f"--min-depth {args.min_depth} and --max-depth "
+                            f"{args.max_depth} are not a valid range.",
+                    remedy="Pass 0 <= --min-depth <= --max-depth, or omit "
+                           "both for the measured defaults.",
+                )), as_json)
+                return 1
+            env = cmd_sweep(s, here=args.here, min_depth=args.min_depth,
+                            max_depth=args.max_depth, formats=formats,
+                            fresh=args.fresh)
         elif args.cmd == "notes":
             env = cmd_notes(s, args.csv, args.list_name, args.limit,
                             # NOT `or None`: "" is the caller switching the
@@ -1508,8 +1387,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "pin":
             env = cmd_pin(s, args.csv, args.list_name, args.limit,
                           args.region, args.min_gap, args.max_gap)
-        else:  # pragma: no cover -- argparse enforces the choices
-            raise SystemExit(f"unknown command {args.cmd}")
+        else:
+            flow = flow_cmds.dispatch(args, s)
+            if flow is None:  # pragma: no cover -- argparse enforces choices
+                raise SystemExit(f"unknown command {args.cmd}")
+            env = flow
     except KeyboardInterrupt:
         env = fail(args.cmd, Problem(
             code="interrupted",
@@ -1564,6 +1446,37 @@ def main(argv: list[str] | None = None) -> int:
                    "re-run, or set OVERPASS_URL to a mirror such as "
                    "https://overpass.kumi.systems/api/interpreter. Nothing "
                    "was written.",
+        ))
+    except CalibrationFailed as exc:
+        env = fail(args.cmd, Problem(
+            code="calibration_failed",
+            message=str(exc),
+            remedy="The map's scale could not be measured against "
+                   "OpenStreetMap, so no coordinates were written. Nothing "
+                   "was written; the sweep journal is kept, so a re-run "
+                   "resumes. Try --here with the emulator's location set "
+                   "inside the city.",
+        ))
+    except CityNotFound as exc:
+        env = fail(args.cmd, Problem(
+            code="city_not_found",
+            message=str(exc),
+            remedy="Check the spelling, or add the country (\"Paris, "
+                   "France\"). Nothing was swept.",
+        ))
+    except GeocoderUnavailable as exc:
+        env = fail(args.cmd, Problem(
+            code="geocoder_unavailable",
+            message=str(exc),
+            remedy="Check GOOGLE_GEOCODING_KEY and billing, or unset it to "
+                   "use Nominatim. Nothing was written.",
+        ))
+    except NoLocationControl as exc:
+        env = fail(args.cmd, Problem(
+            code="app_screen_unexpected",
+            message=str(exc),
+            remedy="Open the Untappd app on Discover -> View Map and re-run, "
+                   "or drop --here to centre by city name instead.",
         ))
     except AdbUnavailable as exc:
         env = fail(args.cmd, Problem(

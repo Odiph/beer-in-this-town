@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -15,9 +18,9 @@ jobs:
         python-version: ["3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -31,11 +34,14 @@ jobs:
         run: ruff check beer_in_this_town tests
 
       - name: Test
-        # Offline only. Nothing in CI touches Untappd or Google.
-        run: pytest -q -m unit
+        # Offline only. Nothing in CI touches Untappd, Google or an emulator.
+        # Everything that is not explicitly `integration` runs: `-m unit`
+        # used to skip every unmarked test.
+        run: pytest -q -m "not integration"
 
       - name: Agent contract smoke test
         # The JSON envelope is the public API; assert it stays parseable.
+        # `status` is read-only and always exists; no other command is assumed.
         run: |
           python -m beer_in_this_town status --json > envelope.json
-          python -c "import json,sys; d=json.load(open('envelope.json')); assert d['schema_version']=='1.0'; assert 'next_actions' in d; print('envelope ok')"
+          python -c "import json; d=json.load(open('envelope.json')); assert d['schema_version']=='2.0', d; assert isinstance(d['next_actions'], list); assert 'ok' in d; print('envelope ok')"

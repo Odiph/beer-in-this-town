@@ -154,12 +154,22 @@ class ReadBudget:
         if time.time() - self.window_start >= 3600:
             self.window_start, self.count = time.time(), 0
 
-    def remaining(self) -> int:
+    def _refresh(self) -> None:
+        """Take the count from disk, not from memory.
+
+        Two budgets over one file each kept their own count and overwrote the
+        other's: 20 requests alternating between them persisted as 10, so the
+        hourly ceiling under-counted by half. The file is the budget.
+        """
+        self.window_start, self.count = self._read()
         self._roll()
+
+    def remaining(self) -> int:
+        self._refresh()
         return max(0, self.s.hourly_budget - self.count)
 
     def record(self) -> None:
-        self._roll()
+        self._refresh()
         self.count += 1
         self._write()
 
@@ -272,12 +282,37 @@ class PoliteClient:
         key = url + ("?" + urlencode(sorted((params or {}).items())) if params else "")
         return CACHE_DIR / (hashlib.sha256(key.encode()).hexdigest() + ".html")
 
+    def forget(self, url: str, params: dict | None = None) -> None:
+        """Drop one cached page, so the next `get` fetches it again."""
+        try:
+            self._cache_path(url, params).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("Could not drop the cached copy of %s (%s).", url, exc)
+
     def _read_cache(self, path: Path) -> str | None:
         if not path.exists():
             return None
         if time.time() - path.stat().st_mtime > self.s.cache_ttl_s:
             return None
         return path.read_text(encoding="utf-8", errors="replace")
+
+    @staticmethod
+    def _write_cache(path: Path, html: str) -> None:
+        """Cache a page we already paid for, and never fail the call over it.
+
+        The request has been made and counted against the budget by the time
+        this runs. Raising here -- a missing `cache/` when no caller ran
+        `ensure_dirs()`, a full disk -- threw away a good response, and the
+        retry that followed spent a second request on the same page.
+        """
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(html, encoding="utf-8")
+        except OSError as exc:
+            log.warning("Could not cache %s (%s); the page is still used.",
+                        path.name, exc)
 
     def get(
         self,
@@ -350,7 +385,7 @@ class PoliteClient:
             self._consecutive_429 = 0
             html = resp.text
             if use_cache:
-                cache_path.write_text(html, encoding="utf-8")
+                self._write_cache(cache_path, html)
             return html
 
         # Every attempt for this URL failed at the transport. Count it: one

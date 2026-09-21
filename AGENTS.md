@@ -3,6 +3,10 @@
 This tool is built to be driven by a coding agent. This file is the contract.
 If you are an agent, read this and nothing else is required.
 
+The flow it drives, for a human, is [docs/FLOW.md](docs/FLOW.md). This file is
+the same flow for an agent with no UI: what you run, what only a person can
+do, and what to say to them when you reach it.
+
 ## The loop
 
 ```
@@ -14,6 +18,30 @@ repeat until `next_actions` is empty
 `status` is free, has no side effects, and always tells you where the pipeline
 is. Never infer progress from logs — ask.
 
+`next_actions` only ever contains `status`, `verify`, `sweep`, `enrich`,
+`filter`, `export`, `ui --detach` (when a sign-in is needed or no city has
+been chosen, and no dashboard is already serving), and `score` after
+`label`. None of them writes to an account. `status` never offers `doctor`:
+doctor changes nothing, so offering it would loop. `pin`, `notes`, `closures`
+and `bootstrap` never appear there; when they are the next step, their exact
+command text is in `hints`, for the human.
+
+An empty `next_actions` means one of these, and `data.blocked_on` says which:
+
+| `blocked_on` | Meaning | You |
+|---|---|---|
+| `null` | Finished: every read-side stage is done for the city | Report, then give the human the `hints` (list creation, `pin`, `notes`). |
+| `"sign_in"` | No session file, or `verify` found an account signed out | Open the dashboard and ask the human to sign in (step 3). |
+| `"choose_city"` | Nobody has named a city | Ask the human which city. |
+| `"emulator"` | A sweep is next and the emulator checks fail | Give the human the failing checks' `remedy` (in `data.emulator` and `hints`; see the playbook, step 2). |
+
+When several apply, `blocked_on` reports the first in this order: `sign_in`,
+then `choose_city`, then `emulator`. The emulator is probed only when `sweep`
+is the next stage, so it never blocks `enrich`, `filter` or `export`.
+
+(`"app_screen"` is not reported by `status`; it is what a `sweep` failure with
+`app_screen_unexpected` means. See step 5.)
+
 ## The envelope
 
 Every command with `--json` prints exactly one object on stdout. Logs go to
@@ -21,22 +49,34 @@ stderr. Parse stdout; ignore stderr unless debugging.
 
 ```json
 {
-  "command": "run",
+  "command": "filter",
   "ok": true,
-  "schema_version": "1.0",
-  "data": { "venues": 100, "csv": "...", "kml": "..." },
-  "warnings": ["4 venue(s) have no coordinates and are not pinned"],
-  "next_actions": ["python -m beer_in_this_town label --csv \"...\" --json"],
-  "hints": ["To build a Google Maps saved list, a human can run: pin --csv ..."],
+  "schema_version": "2.0",
+  "data": {
+    "city": "Tel Aviv",
+    "input": "/path/to/beer-in-this-town/data/tel-aviv/2_enriched.csv",
+    "csv": "/path/to/beer-in-this-town/data/tel-aviv/3_venues.csv",
+    "excluded_csv": "/path/to/beer-in-this-town/data/tel-aviv/3_excluded.csv",
+    "kept": 81,
+    "excluded": 7,
+    "excluded_by_reason": { "restaurant-only": 4, "no beer category: Hotel": 3 },
+    "flagged": { "possibly_closed": 2 }
+  },
+  "warnings": ["2 kept venue(s) are flagged (possibly_closed: 2). Flagged, not dropped: removing one is your decision."],
+  "next_actions": ["python -m beer_in_this_town export --city \"Tel Aviv\" --json"],
+  "hints": ["Optional, paid (Google Places key): a human can check closures with: python -m beer_in_this_town closures --csv \"/path/to/beer-in-this-town/data/tel-aviv/3_venues.csv\" --limit 3 --json"],
   "error": null
 }
 ```
 
+Paths in `data` are absolute. The counts and reason strings are
+illustrative; the keys are the ones `filter` returns.
+
 - `ok` — did the command achieve its purpose. Exit code matches (`0` / `1`).
 - `next_actions` — **literal runnable commands**, best first. Not hints.
-  Only read-only, safe commands appear here; it never contains `pin`, `notes`
-  or `bootstrap`, and never contains a `#` comment. An **empty list is the end
-  of the loop**, not an error.
+  Only read-only, safe commands appear here; it never contains `pin`, `notes`,
+  `closures` or `bootstrap`, and never contains a `#` comment. An **empty list
+  is the end of the loop**, not an error.
 - `hints` — prose for a human: what only a person can decide to do next.
   Nothing executes this, and an agent must not treat it as a next action.
 - `error` — present only on failure. Always carries `code` and `remedy`.
@@ -44,64 +84,294 @@ stderr. Parse stdout; ignore stderr unless debugging.
   change**: `data`, `warnings`, `hints` and `next_actions` gain keys without a
   bump, so read them defensively and ignore what you do not recognise. A field
   being *removed* or *renamed*, or an existing one changing meaning, bumps it.
+  It is `"2.0"` as of v0.2.0, bumped because a command was removed (see
+  CHANGELOG.md) and `status`'s `data.stages` changed meaning (see
+  [Setup](#setup-when-you-are-the-one-driving)).
+
+Commands built from a name you or the human gave (a city, a list) are shown
+with shell metacharacters removed, not escaped: `"`, `` ` ``, `$`, `;`, `&`,
+`|`, `<`, `>`, `%`, `^`, `!` and control characters are dropped, because the
+same text is pasted into PowerShell, cmd and POSIX shells. A list called
+`Beer & Bars` appears in a printed command as `"Beer  Bars"`, which is not
+its name. Ask the human to name the Google Maps list with plain letters,
+digits and spaces.
 
 `--json` works before or after the subcommand.
+
+## Playbook
+
+One command per step. There is no command that chains them; you run each, read
+its envelope, and move on. Steps marked **human** cannot be done by you: stop,
+give the human the message shown (adapted, not paraphrased away), and wait.
+
+`<slug>` is the city lower-cased with runs of non-alphanumerics turned into
+`-` (`Tel Aviv` → `tel-aviv`). Each stage reads the previous stage's file from
+`--city`; `--in PATH` overrides. Re-running a stage overwrites only its own
+output.
+
+### 1. Install — human, once
+
+You may run the Python half yourself if you have a shell in the checkout:
+
+```bash
+python -m venv .venv
+.venv/Scripts/python -m pip install -e ".[browser]"    # .venv/bin/python elsewhere
+```
+
+The rest is theirs. Message:
+
+> I need a few things installed that I can't install for you: Google Chrome,
+> BlueStacks 5 (bluestacks.com), and Android platform-tools so that `adb` is
+> on your PATH (on Windows: `winget install Google.PlatformTools`). Steps 1
+> and 2 of docs/FLOW.md walk through each. Tell me when they're done.
+
+### 2. Emulator — human, once; you check
+
+```bash
+python -m beer_in_this_town doctor --json
+```
+
+`doctor` runs four emulator checks, in order: `adb_on_path`,
+`device_connected`, `untappd_installed` (package `com.untappdllc.app`),
+`screen_size` (1600x900 or 900x1600). They are in `data.emulator`, a list of
+`{name, ok, detail, remedy}` always in that order, and `data.emulator_ready`
+is true only when all four pass. A check after a failing one is reported as
+not checked rather than run. Take the **first** failing one and give the
+human its `remedy`. Message, when nothing is set up yet:
+
+> In BlueStacks: Settings → Display → resolution 1600 x 900 (the default), save and restart.
+> Then Settings → Advanced → turn on Android Debug Bridge, and note the
+> address it shows (usually 127.0.0.1:5555). Install Untappd from the Play
+> Store inside BlueStacks and sign in to it. Tell me when that's done and
+> I'll connect.
+
+You may run `adb connect 127.0.0.1:5555` and `adb devices` yourself: they
+touch the local emulator only. If the human's port is not 5555, set
+`BEERTOWN_ADB_SERIAL` to the address they give you. Re-run `doctor` until
+every check passes. (`status` does not offer `doctor` itself: while the
+emulator is not ready and a sweep is next, its `next_actions` is empty and
+`blocked_on` is `"emulator"`.)
+
+### 3. Sign in — human; you open the page and check
+
+`status` offers `ui --detach` first when there is no session. Run it; it starts
+the dashboard in its own process and returns at once with `data.url`.
+
+> Please open <data.url> and complete the Accounts step: sign in to Google and
+> then to untappd.com in the Chrome window it opens. It needs your
+> passwords, so I can't do it. Tell me when it shows both connected.
+
+Then:
+
+```bash
+python -m beer_in_this_town verify --json
+```
+
+Read `data.ran` before `ok`. `ok: false, ran: true` is a signed-out account:
+back to the message above. `ran: false` means the check could not run at all
+(usually a missing browser): fix what the message names, and do **not** tell
+the human they are signed out. `verify` writes `state/verification.json`,
+which expires after 12 hours.
+
+### 4. Choose a city — human
+
+> Which city should I map?
+
+Pass what they say as `--city`, verbatim. Never infer a city from `data/`, an
+old corpus, a list name or the repo. If they chose one in the dashboard,
+`data.intent` has it and the `sweep` in `next_actions` already carries it.
+
+### 5. Open the map — human, before each sweep
+
+> In BlueStacks, open Untappd, tap Discover, then View Map, and close
+> anything covering the map. Please don't touch the emulator until I say the
+> sweep is done.
+
+You cannot verify this except by running the sweep: it refuses with
+`app_screen_unexpected` when the map is not in front. That is the signal to
+send this message again, not to retry blindly.
+
+### 6. Sweep — you
+
+```bash
+python -m beer_in_this_town sweep --city "<city>" --json
+```
+
+Writes `data/<slug>/1_sweep.csv`. Takes minutes at depth 1 and can take an
+hour or more at depth 3 on a large city; run it with a long timeout, or in the
+background, and do not interrupt it. It journals per city, so a re-run after a
+failure resumes. Use the defaults (`--min-depth 1 --max-depth 3`); they are
+the measured recommendation in [docs/HARVESTING.md](docs/HARVESTING.md). Pass
+`--here` only when the human asked for the emulator's GPS position rather than
+a named city.
+
+Report from the envelope: venues found (`data.venues`, of which
+`data.located` have coordinates), cells still at the result cap when the
+depth limit stopped them (`data.truncated_cells`, `data.hit_depth_limit`: the
+sweep is saying it stopped short), and the calibration error
+(`data.calibration.median_residual_m`). A sweep is **not** a census; do not
+describe it as "all the bars in <city>".
+
+### 7. Enrich — you
+
+```bash
+python -m beer_in_this_town enrich --city "<city>" --json
+```
+
+Writes `data/<slug>/2_enriched.csv`. Needs the Untappd web session (step 3),
+and opens a visible Chrome window on the tool's profile for the name lookups.
+Report `data.resolved` out of `data.venues`, and `data.statuses` (counts of
+`resolved`, `too_far`, `no_match`, `unverified`, `unlocated`, `fetch_failed`,
+`search_failed`, `duplicate`; the per-row reason is the `resolution` column).
+An unresolved venue has **unknown** counts, not zero: never report it as
+having no check-ins. If most rows come back `fetch_failed` or `unverified`,
+suspect the parser or the session, not the city: run `selfcheck --json`.
+
+### 8. Filter — you
+
+```bash
+python -m beer_in_this_town filter --city "<city>" --json
+```
+
+Writes `data/<slug>/3_venues.csv` and `data/<slug>/3_excluded.csv`; both
+carry `kind`, `flag` and `reason` columns. Offline. Report `data.excluded`,
+the most common entries of `data.excluded_by_reason`, and `data.flagged`
+(`closed`, `possibly_closed`): flagged venues are kept, not dropped.
+
+### 9. Export — you
+
+```bash
+python -m beer_in_this_town export --city "<city>" --json
+```
+
+Writes `data/<slug>/venues.{kml,gpx,geojson}`, all three by default;
+`--format` narrows it. Offline.
+These are backups and non-Google maps, not the delivery.
+
+### 10. Create the saved list — human
+
+> In Google Maps (the same Google account you signed in with), go to Saved →
+> New list and create a list for this city. Tell me its exact name. Pick a
+> name no other list of yours contains, or the tool will refuse to guess,
+> and use only letters, digits and spaces: symbols such as & | $ are
+> stripped from the commands the tool prints.
+
+### 11. Pin — human-triggered only
+
+Do not run `pin` unless the human has explicitly asked you to put the venues
+in their saved list, after reading that it automates Google Maps against
+Google's terms. Then, trial first:
+
+```bash
+python -m beer_in_this_town pin --csv data/<slug>/3_venues.csv --list "<exact name>" --limit 3 --json
+```
+
+> I've saved 3 places into "<name>". Please check in Google Maps that they
+> are the right places and in the right list before I do the rest.
+
+Only after they confirm, run the same command without `--limit`. It trims
+itself to the write budget (60 per run, 100 per 24h, shared with `notes`) and
+says so; that is correct. Report where it stopped and tell the human to ask
+again tomorrow. Do not schedule it.
+
+### 12. Notes — human-triggered only
+
+Same rules as `pin`, same trial:
+
+```bash
+python -m beer_in_this_town notes --csv data/<slug>/3_venues.csv --list "<exact name>" --limit 3 --json
+```
+
+### Optional: closures — human-triggered only
+
+Costs the human money. See [The `closures` command](#the-closures-command).
+
+### Where a step would need new automation
+
+This project does not automate the emulator's setup, the app's sign-in,
+BlueStacks' settings, Google Maps list creation, or anything else that is not
+already a command above, and it will not. When a step is outside the commands,
+you give the human instructions; you do not write a script, drive a browser or
+send taps to the emulator to do it for them. The only adb commands you run
+yourself are `adb connect` and `adb devices`.
 
 ## Error codes you should handle
 
 | `error.code` | Meaning | What to do |
 |---|---|---|
-| `not_signed_in` | An account is signed out — from `verify`, `pin` or `notes` | **Stop and ask the human.** Requires their password; you cannot do this. `data.accounts` says which one and how it was established. |
-| `no_city` | `run` with no city, and none chosen | **Ask the human.** There is no default — choosing a city for someone chooses what they get. They name one on the last step of `beertown ui`, or you pass `--query`. |
-| `no_list` | `pin`/`notes` with no `--list` | **Ask the human.** No default, because this writes into a real Maps list and a guessed name is a guess about where. |
-| `port_unavailable` | `ui --detach` could not start the dashboard | Another process holds the port, or the interpreter could not be spawned. Retry with `--port` set to something else. |
+| `emulator_unavailable` | `doctor`'s emulator checks fail, so `sweep` refused before touching the device | Run `doctor --json`, give the human the first failing check's `remedy` (step 2). |
+| `adb_unavailable` | The emulator could not be reached, or `adb` returned nothing usable | Check BlueStacks is running and `adb devices` lists it; `adb connect` again. Never read an empty result as an empty city. |
+| `app_screen_unexpected` | The Untappd app was not showing the map, its category filter was not where expected, or `--here` could not find the map's Reset location control | Send the step-5 message (for `--here`, add "allow Untappd location access"). Progress is journalled per city, so the sweep resumes rather than restarting. |
+| `app_pan_failed` | Gestures stopped reaching the map, three cells in a row | A marker, a dialog or the venue card is absorbing the swipe. Ask the human to bring the map to the front and dismiss anything over it, then re-run. **Do not** lower the pacing to compensate. |
+| `calibration_failed` | Too few swept venues matched OpenStreetMap to trust the fitted positions | Nothing was written. Report it. Do not work around it; a sweep with guessed positions puts every venue somewhere plausible and wrong. |
+| `city_not_found` | The geocoder has no match for the city | Ask the human for a fuller name (with country or state). Do not substitute a nearby city. |
+| `overpass_unavailable` | OpenStreetMap's Overpass endpoint is throttled, down or unreachable | Not per-venue. Wait and re-run, or set `OVERPASS_URL` to a mirror. Overpass is volunteer-run and sheds load under pressure; a 504 is normal. |
+| `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Check the key and billing, or unset it for Nominatim. |
+| `stage_input_missing` | The previous stage's file is not there | Run the command the `remedy` names (for `filter`, that is `enrich`). |
+| `bad_format` | `export --format` named an unknown format | Use a comma-separated subset of `kml,gpx,geojson`. |
+| `no_city` | A stage with no city, and none chosen | **Ask the human.** There is no default — choosing a city for someone chooses what they get. |
+| `not_signed_in` | An account is signed out — from `verify`, `pin` or `notes`; or from `enrich`, which refuses without an Untappd session and stops at the first venue page that says "Log In to view Venue Stats" | **Stop and ask the human.** Requires their password; you cannot do this. `data.accounts` (from `verify`) says which one. `enrich` writes nothing when it stops this way. |
 | `verify_unavailable` | The account check itself could not run | Not a signed-out account — usually a missing browser. Fix what the message names. Do **not** report this as "signed out". |
-| `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off. `status` reports the lock's age and whether it is stale under `data.write_guardrails.lock`. Do not delete the lock file; an abandoned one is broken automatically after 2h. |
-| `list_missing` | Target saved list does not exist | Ask the human to create it, or pick another `--list`. |
+| `port_unavailable` | `ui --detach` could not start the dashboard | Another process holds the port, or the interpreter could not be spawned. Retry with `--port` set to something else. |
+| `no_list` | `pin`/`notes` with no `--list`, and no list name remembered from `sweep --title` or the dashboard | **Ask the human.** Always pass `--list` with the exact name they gave you; this writes into a real Maps list and a guessed name is a guess about where. |
+| `list_missing` | Target saved list does not exist | Ask the human to create it (step 10), or pick another `--list`. |
 | `list_ambiguous` | `--list` does not name exactly one list — no list matches it exactly, or several do | **Stop and ask.** Nothing was saved. Do not retry with a nearby name; that is how a place lands in the wrong list. |
-| `robots_disallow` | robots.txt forbids the paths | **Stop and ask.** Do not pass `--i-read-robots` on your own initiative. |
-| `corpus_quality_gate` | <90% of venues parsed cleanly | Read `debug/*.html`, fix selectors in `parsers.py`, re-run. Nothing was written. |
-| `selectors_stale` | `selfcheck` could not parse a known-good venue page or the search page, or neither search path parsed during `run` | Same as above. `selfcheck` is the cheap early warning and covers both surfaces; `data.search` says which shape the search page had. |
-| `search_login_required` | Untappd's sign-in wall cut the search short (anonymous search stops at 5) | Ask the human to sign in to Untappd in the browser profile. `bootstrap` only detects a Google session, so it cannot confirm this one. |
-| `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Not per-venue — check the key and billing, or unset it for Nominatim. Nothing was written. |
+| `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off. `status` reports the lock's age and whether it is stale under `data.write_guardrails.lock`. Do not delete the lock file; an abandoned one is broken automatically after 2h. |
+| `robots_disallow` | `enrich`: Untappd's robots.txt disallows the venue pages | **Stop and ask.** Nothing was fetched. There is no flag to override it; see rule 1. |
+| `selectors_stale` | `selfcheck` could not parse a known-good venue page | Read `debug/*.html`, fix selectors in `parsers.py`, re-run. `selfcheck` is the cheap early warning. |
+| `stats_missing` | `selfcheck` parsed the page but found no check-in stats | Usually a signed-out Untappd web session (step 3); otherwise the markup changed, as above. |
+| `fetch_failed` | `selfcheck` could not fetch the known-good page | Check connectivity, then retry. Repeated 403s mean a block: stop and report. |
+| `rate_limited` | The hourly read budget (600 requests) is spent, or Untappd answered with repeated 429s | Wait, then re-run the same command; pages and searches already done are cached. Do not retry in a loop. |
+| `guardrail_tripped` | A write guardrail tripped in `pin`/`notes` (circuit breaker, block detected, cool-off) | **Stop.** Do not re-run until the cool-off `status` reports has expired. Never delete `state/rate_ledger.json`. |
+| `pin_failed` | `pin` stopped on an unexpected error | Re-run the same command; progress is journalled and resumes. |
+| `no_profile` | `bootstrap --capture` with no Chrome profile yet | Human: run `bootstrap` without `--capture`. |
+| `chrome_not_found` | `bootstrap` could not find or start Google Chrome | Human: install Google Chrome. |
+| `login_timed_out` | `bootstrap`'s Chrome window was still open after `--timeout` | Human: close Chrome, then run `bootstrap --capture`. |
+| `login_not_detected` | Chrome closed, but `bootstrap` found no Google session in the profile | Human: re-run `bootstrap` and finish the Google sign-in before closing the window. |
 | `places_unavailable` | The Places API is rejected, out of quota, or unreachable | Not per-venue — check `GOOGLE_PLACES_KEY`, that the Places API (New) is enabled, and that billing is on. Nothing was written. |
 | `places_key_missing` | The closure check was asked for with no `GOOGLE_PLACES_KEY` | Ask the human to set one. Do not silently carry on without the check — the venues are unchecked, not open. |
 | `network_unavailable` | Several URLs in a row failed at the transport | Check connectivity, then re-run. The run stopped instead of sleeping through the backoff ladder per venue. |
 | `bad_arguments` | An argument was rejected — most often a pacing value below its floor | **Do not retry with a different number.** The floors are account-safety limits; the message says which one. |
 | `bad_pacing` | `--max-gap` is below `--min-gap` | Pass a real range, or omit both and take the defaults. |
-| `csv_missing` | No input data | Run `run` first. |
+| `csv_missing` | The `--csv` given to `pin`, `notes`, `closures` or `label` does not exist | Run the stages up to `filter` first; the file to pass is `data/<slug>/3_venues.csv`. |
 | `labels_incomplete` | A sampled bucket came back with no labels | Ask the human to label a few rows in every bucket. The rare ones are the point. |
 | `labels_unusable` | An answer is outside the accepted vocabulary, or the sheet lost its `_stratum`/`_stratum_size` columns | The message names the row and cell. Answers are `y` / `n` / `?`; a blank means unanswered. |
 | `notes_failed` | The notes pass failed | Re-run; progress resumes. |
 | `interrupted` | Ctrl-C | Re-run the same command; progress is journalled. |
-| `overpass_unavailable` | OpenStreetMap's Overpass endpoint is throttled, down or unreachable | Not per-venue. Wait and re-run, or set `OVERPASS_URL` to a mirror. Overpass is volunteer-run and sheds load under pressure; a 504 is normal. Nothing was written. |
-| `adb_unavailable` | The emulator could not be reached, or `adb` returned nothing usable | Check the emulator is running and `adb devices` lists it. Never read an empty result as an empty city. |
-| `app_screen_unexpected` | The Untappd app was not showing the screen the step needed | Open the app on Discover -> View Map and re-run. Progress is journalled per city, so the sweep resumes rather than restarting. |
-| `app_pan_failed` | Gestures stopped reaching the map, three cells in a row | A marker, a dialog or the venue card is absorbing the swipe. Bring the map to the front, dismiss anything over it, re-run. **Do not** lower the pacing to compensate. |
 | `unexpected_error` | Unhandled | Re-run with `-v` for a traceback. |
 
 ## Rules for agents
 
-1. **Never pass `--i-read-robots`.** That flag overrides a site's stated wishes.
-   It is a human's call, not yours.
+1. **Never switch off the robots.txt check.** `enrich` refuses with
+   `robots_disallow` when Untappd's robots.txt disallows the venue pages.
+   No command-line flag overrides it (it is `respect_robots` in
+   `config.py`), and changing that is a human's call, not yours.
 2. **Never run `pin` without an explicit human instruction.** It automates the
-   Google Maps UI, which is against Google's ToS (see README). Default to the
-   supported My Maps KML path.
-
-   This used to contradict the loop above, and the loop won: `pin` was listed
-   in `next_actions` and was the only entry that ever emptied it, so following
-   the contract led an agent into the write. It is now in `hints` instead —
-   where nothing is instructed to run it.
+   Google Maps UI, which is against Google's ToS (see README). It is never in
+   `next_actions`; it is in `hints`, where nothing is instructed to run it.
+   Following the loop can therefore never lead you into a write.
 3. **Trial before bulk.** First `pin` run should use `--limit 3`. Report the
    result before doing the rest.
-4. **Do not lower the pacing.** `--min-gap` / `--max-gap` / `--delay` exist to
-   keep the user's account safe. Raise them if throttled; do not lower them.
-   This is now enforced rather than asked: a value below the default is
-   refused with `bad_arguments`, and the floors are the shipped defaults.
-5. **A failed parse is a real finding.** The quality gate deliberately writes
-   nothing when data looks degraded. Do not work around it by lowering
-   `parse_strictness` — fix the selector and say what changed.
+4. **Do not lower the pacing.** `pin`'s and `notes`' `--min-gap` /
+   `--max-gap` exist to keep the user's account safe (defaults 8–16 s for
+   `pin`, 5–11 s for `notes`). Raise them if throttled; do not lower them.
+   This is enforced rather than asked: a value below the default is refused
+   with `bad_arguments`, and the floors are the shipped defaults. The read
+   side's pacing (2–4.5 s between requests, 600 an hour) has no flag; do not
+   edit `config.py` to change it.
+5. **A failed parse is a real finding.** `selfcheck` fails with
+   `selectors_stale` when a known-good venue page no longer parses. Do not
+   work around it — fix the selector and say what changed. `enrich` has no
+   aggregate parse gate: a parser break shows up there as rows marked
+   `fetch_failed` or `unverified`, which you report as such, not as a thin
+   city.
 6. **Ask before anything irreversible** that touches the user's account.
+7. **Do not drive the emulator beyond the tool.** `sweep` is the only thing
+   that sends gestures to the Untappd app, and it drives a real, signed-in
+   account. Do not tap, type, install or sign in on the emulator yourself,
+   and do not automate a step the playbook gives to the human.
+8. **Do not schedule anything.** No cron jobs, scheduled tasks or loops that
+   re-run `pin` or `notes` overnight. The human decides each write session.
 
 ## The `notes` command
 
@@ -119,9 +389,15 @@ signed-out browser.
 ## The `label` and `score` commands
 
 `classify.py` holds candidate heuristics for venue kind, closed venues and
-private spaces. **None of them are wired into `run`**, and none should be until
-they have been measured. `label` emits a stratified sample for a human to
-judge; `score` reports the error rates by direction.
+private spaces. `label` emits a stratified sample for a human to judge;
+`score` reports the error rates by direction.
+
+`filter` does apply `classify.py`: it runs `craft_beer_decision`, which
+excludes a venue that `looks_private`, keeps or excludes by the category
+vocabulary in that module's docstring (a venue with no category is kept), and
+only *flags* one that is closed per Places or `looks_closed`, never dropping
+it. `label` and `score` measure the older `classify()` verdict, not
+`craft_beer_decision`.
 
 Both are read-only, offline and touch no account, so an agent may run them
 freely. What an agent must **not** do is fill in the labels: the whole point is
@@ -129,7 +405,7 @@ a human judgement the classifier can be checked against, and a model labelling
 its own classifier's output measures nothing.
 
 Sampling takes a fixed quota per bucket, rare ones included, and `score`
-divides that back out. Two consequences worth knowing:
+divides that back out. Things worth knowing:
 
 - Labelling only the easy rows breaks the weighting. `score` refuses a bucket
   with no labels and warns about thin ones, but cannot detect cherry-picking.
@@ -142,9 +418,8 @@ divides that back out. Two consequences worth knowing:
 
 ## Setup, when you are the one driving
 
-`status` empties `next_actions` for two different reasons: the work is done,
-or it cannot go on without a person. **`data.blocked_on` tells them apart** --
-`null` means finished, `"sign_in"` means a human has to sign in.
+`status` empties `next_actions` for different reasons: the work is done, or it
+cannot go on without a person. **`data.blocked_on` tells them apart.**
 
 This used to loop. `next_actions` handed back `selfcheck`, nothing selfcheck
 does changes the session, and the loop above ran it forever. An empty list is
@@ -152,38 +427,49 @@ the end of the loop; being blocked on a password is the end.
 
 **`data.logged_in` is a file, not an account.** It means
 `storage_state.json` exists. It was true on a machine whose Google and
-Untappd sessions had both expired, and the first action offered there was
-`run`. So `run` is never offered until a `verify` has actually passed:
+Untappd sessions had both expired. So `sweep` is never offered until a
+`verify` has actually passed:
+
+The rows are checked top to bottom; the first that matches decides.
 
 | What `status` shows | First action | Why |
 |---|---|---|
-| no session | `ui --detach` (then nothing) | a person must sign in |
+| no session | `ui --detach` (nothing if a dashboard is already serving) — `blocked_on: "sign_in"` | a person must sign in |
 | session, `verification: null` | `verify --json` | a cookie proves nothing |
 | `verification.ok: false` | *(none)* — `blocked_on: "sign_in"` | a person must sign in |
-| `verification.ok: true` | `run ... --no-upload` | now it is known to work |
+| no city | `ui --detach` (nothing if a dashboard is already serving) — `blocked_on: "choose_city"` | a person must choose |
+| sweep next, emulator checks failing | *(none)* — `blocked_on: "emulator"` | a person must set up BlueStacks |
+| sweep next, emulator ready | `sweep --city ... --json` | only now, after `verify` passed |
+| sweep done | `enrich`, then `filter`, then `export` | one stage at a time |
+| every stage done | *(none)* — `blocked_on: null` | finished; `hints` has the rest |
 
-**There is no default city.** `data.blocked_on` is `"choose_city"` until
-somebody names one, and `run` refuses with `no_city` rather than picking. Do
-not pass a city you inferred from a previous corpus or from the repo — ask.
+`status` never offers `sweep` before a `verify` has passed.
+
+`data.stages` is per city (the city in `data.city`, its folder in
+`data.city_dir`): a list of `sweep`, `enrich`, `filter`, `export`, `pin` and
+`notes`, each with `name`, `done`, `count` and `detail`. The four collection
+stages also carry `stale` (its input is newer than its output: re-run it)
+and `path`; `filter` adds `excluded` and `excluded_path`, `export` adds
+`files`, and an interrupted sweep adds `journal_venues`. `pin` and `notes`
+carry `total`, `by_status` and `list` from their per-list journals.
+`data.next_stage` is the first collection stage not done, or `null`.
+`data.emulator` is the emulator checks (as in `doctor`) when a sweep is next,
+and `null` otherwise: `null` means not checked, never fine.
 
 **The city comes from the user, not from a default.** `data.intent` is what
-they asked for in the dashboard; `data.last_run.query` already resolves
-through it, so the `run` in `next_actions` carries their city without you
-doing anything. When `intent` is null and no run has happened, nobody has chosen one and
-there is nothing to fall back on.
-A real run outranks an intention; the intention is not destroyed by one.
+they asked for in the dashboard. When `intent` is null and no stage has run,
+nobody has chosen one and there is nothing to fall back on. Do not pass a city
+you inferred from a previous corpus or from the repo — ask.
 
 `verify` writes `state/verification.json`, which is what lets the loop
 terminate rather than re-verifying on every pass. It expires after 12 hours,
-because a session that worked this morning can be dead by lunchtime — a
-verdict with no age on it is the same "a cookie means a working account"
-mistake wearing a different hat.
+because a session that worked this morning can be dead by lunchtime.
 
 The sequence when `blocked_on` is `"sign_in"`:
 
-1. **Stop looping.** Report it. Do not substitute `run` -- signed out of
-   Untappd, search stops at 5 results and a run builds a five-venue corpus
-   that looks like a finished scrape.
+1. **Stop looping.** Report it. Do not substitute a stage — signed out of
+   Untappd, venue pages hide their totals, and `enrich` would produce a map
+   whose every count is unknown.
 2. **Open the dashboard** with `ui --detach --json` and give the user
    `data.url`. Then ask them to sign in: it needs a password, so it is not
    yours to do.
@@ -192,7 +478,7 @@ The sequence when `blocked_on` is `"sign_in"`:
 ## The `verify` command
 
 Tests both accounts for real: a headless Maps load for Google, one request for
-Untappd. Read-only, opens no window, always returns -- safe for an agent, and
+Untappd. Read-only, opens no window, always returns — safe for an agent, and
 the only way to answer "did the sign-in work" without the dashboard.
 
 Read `ran` before `ok`. `ok: false, ran: true` is a signed-out account.
@@ -200,32 +486,29 @@ Read `ran` before `ok`. `ok: false, ran: true` is a signed-out account.
 problem with the opposite remedy, and reporting it as "signed out" sends the
 human through a login that was never broken.
 
-A cookie on disk is not a working account. `status`'s `logged_in` only means
-`storage_state.json` exists; this is what settles it.
+It does not check the Untappd **app** session on the emulator. A signed-out
+app shows a sign-in screen instead of the map, which `sweep` reports as
+`app_screen_unexpected`.
 
 ## The `ui` command
 
 Serves a setup dashboard on localhost and **blocks until interrupted**. It is
-for a human at a keyboard: it opens a browser, waits on a sign-in, and has no
-useful envelope until it exits.
+for a human at a keyboard.
 
-A bare `beertown` with no subcommand opens it too -- but only at a terminal,
-and never with `--json` or piped output, so an agent gets the usual
-`bad_arguments` envelope instead of a process that never returns.
+Run it only as `ui --detach --json`, which starts it in its own process and
+returns at once with `data.url`. Never run a bare `ui`: an agent that starts
+it will hang. A bare `beertown` with no subcommand opens it too — but only at
+a terminal, and never with `--json` or piped output, so an agent gets the
+usual `bad_arguments` envelope instead of a process that never returns.
 
-Do not run it. An agent that starts it will hang. When a user needs to connect
-or re-connect an account, tell them to run `beertown ui` themselves — the same
-way `bootstrap` is theirs to run.
-
-What it is useful for knowing: it can tell a signed-out Untappd session from a
-working one *before* a run, which is the condition behind
-`search_login_required`. If a run fails that way, that is the thing to suggest.
+The dashboard walks the human through the same flow as the playbook,
+including the emulator setup and the saved list. It has no button and no route
+that can `pin` or write `notes`.
 
 ## The `closures` command
 
 Asks the Google Places API whether each venue in a CSV still trades, and writes
-a `business_status` column into a **new** CSV. `run --check-closed` runs the
-same stage inline and is off by default.
+a `business_status` column into a **new** CSV.
 
 It touches no account and opens no browser, so it is not in the `pin`/`notes`
 category. But it **spends the user's money** — Places Text Search Pro, 5,000
@@ -242,29 +525,43 @@ Rules for agents:
    on "not OPERATIONAL", and do not treat a run full of `unmatched` as a
    finding — that shape usually means the query is wrong, not that a city shut.
 4. **Closed venues are flagged, never dropped.** Removing them is a decision
-   the user makes; `run` uploads to My Maps, so a silent drop is invisible.
+   the user makes.
 5. `places_key_missing` means stop and ask. It never means carry on unchecked
    and call the venues open.
 
 ## Idempotency
 
-- `run` — safe to repeat. Cached for 12h; re-running costs almost no requests.
+- `sweep` — resumable. Journalled per city; a re-run after a failure picks up
+  where it stopped. Once every cell is walked the journal is marked complete,
+  so a re-run within 12h after a placement failure (`overpass_unavailable`,
+  `calibration_failed`) re-places without touching the emulator. Do not pass
+  `--fresh` on your own initiative: it re-walks the whole map. Journals older
+  than 12h are discarded. Overwrites `1_sweep.csv` when it completes.
+- `enrich` — safe to repeat. Venue pages are cached for 12h; a re-run costs
+  almost no requests. Overwrites `2_enriched.csv`.
+- `filter`, `export` — offline, deterministic, overwrite their own outputs.
 - `pin` — resumable and idempotent. `state/pinned_<list>.json` records every place;
   re-running skips successes and retries failures. Places recorded `not-found`
   or `ambiguous` are retried too, since both can be transient.
 - `notes` — resumable via `state/noted_<list>.json`; a matching note is skipped.
 - Journals, baselines and `status` are scoped to the city or list they
-  describe. `status` reports the last `run`'s query and list under
-  `data.last_run`; its `next_actions` are built from those, not from
-  defaults. If `recorded` is false no run has happened yet and the
-  defaults are in play — check before running a write command.
-- `status`, `doctor`, `selfcheck` — read-only.
+  describe. `status` reports per-city stage progress in `data.stages` (done,
+  stale, count, path, detail); its `next_actions` are built from those, not
+  from defaults.
+- `status`, `doctor`, `selfcheck`, `verify` — read-only.
 
 ## What needs a human
 
-- The one-time `bootstrap` login (credentials).
+- Installing Chrome, BlueStacks and adb, and turning on BlueStacks' Android
+  Debug Bridge (the default 1600 x 900 screen is the right one).
+- Installing Untappd in the emulator and signing in to it.
+- Signing in to Google and Untappd in the tool's Chrome profile (`ui` or
+  `bootstrap`).
+- Choosing the city.
+- Opening Discover → View Map before each sweep, and leaving the emulator
+  alone while it runs.
 - Creating the target saved list in Google Maps.
-- Deciding whether to use `pin` at all.
+- Deciding whether to use `pin`, `notes` and `closures` at all.
 
 ## Account-safety guardrails (do not weaken these)
 
@@ -282,6 +579,10 @@ Every one of those survives a restart, and so do the read-side protections:
 the hourly request ceiling and the circuit-breaker count are both on disk. A
 guardrail you can clear by starting the process again is a speed bump, not a
 guardrail.
+
+The sweep has its own: jittered 5–8 s settles after every search, a quorum
+before it calls a pan dead, and an abort after three dead pans. It drives a
+real, signed-in Untappd account, and a fixed rhythm is a tell.
 
 Rules for agents:
 

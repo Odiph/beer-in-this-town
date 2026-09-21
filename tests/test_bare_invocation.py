@@ -43,7 +43,7 @@ def test_piped_output_never_opens_a_blocking_server():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("raw", [["status"], ["run", "--no-upload"], ["ui"]])
+@pytest.mark.parametrize("raw", [["status"], ["sweep", "--city", "x"], ["ui"]])
 def test_a_real_command_is_still_the_command(raw):
     assert wants_dashboard(raw, isatty=True) is False
 
