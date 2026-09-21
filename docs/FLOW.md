@@ -32,7 +32,7 @@ such and the exact message to give them.
 | 10 | [Create the saved list](#10-create-the-saved-list-in-google-maps) | you | | (in Google Maps) |
 | 11 | [Pin](#11-pin-three-check-then-the-rest) | you trigger it | `beertown pin --csv data/<slug>/3_venues.csv --list "<name>" --limit 3` | the saved list; `state/pinned_<list>.json` |
 | 12 | [Notes](#12-notes) | you trigger it | `beertown notes --csv data/<slug>/3_venues.csv --list "<name>" --limit 3` | each place's note; `state/noted_<list>.json` |
-| opt | [Closure check](#optional-closure-check-paid) | you trigger it | `beertown closures --csv data/<slug>/3_venues.csv` | `data/checked_<name>.csv` |
+| opt | [Closure check](#optional-closure-check-paid) | you trigger it | `beertown closures --csv data/<slug>/3_venues.csv` | `data/checked_3_venues.csv` (or `--out`) |
 
 `<slug>` is the city in lower case with every run of non-alphanumeric
 characters turned into `-`: `"Tel Aviv"` becomes `tel-aviv`. Each stage finds
@@ -67,7 +67,7 @@ cd beer-in-this-town
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
 python -m pip install -e ".[browser]"
-playwright install chrome          # only if `beertown doctor` says no Chrome was found
+playwright install chrome          # only if no Google Chrome is installed
 ```
 
 That puts `beertown` on your `PATH`. `python -m beer_in_this_town <command>`
@@ -106,8 +106,8 @@ port and each keeps killing the other.
 BlueStacks 5 runs on Windows. On macOS, BlueStacks' current Mac build may work
 the same way but has not been tested with this project. On Linux there is no
 BlueStacks; an Android Studio emulator set to the same 900 x 1600 portrait
-screen is the likely route, and is also untested.
-<!-- verify: nobody has run the sweep on anything but BlueStacks 5 on Windows. -->
+screen is the likely route, and is also untested. The sweep has only ever
+been run on BlueStacks 5 on Windows.
 
 ### 2a. Install BlueStacks 5
 
@@ -123,7 +123,8 @@ Open BlueStacks **Settings** (the gear icon in the right-hand sidebar), then
 
 - **Display orientation:** Portrait
 - **Display resolution:** 900 x 1600
-- **Pixel density:** leave it at the default <!-- verify: which DPI the calibration runs used; believed to be BlueStacks' default (240). -->
+- **Pixel density:** leave it at the default. The tool does not check it,
+  and which density the calibration runs used was not recorded.
 
 Save, and let BlueStacks restart the instance if it asks.
 
@@ -182,8 +183,11 @@ beertown doctor --json
 
 `doctor` checks, in order: `adb` is on your `PATH`, a device is connected at
 the serial above, the Untappd app is installed on it, and the screen is 900 x
-1600. Each failing check says what to do. Nothing downstream is worth running
-until all four pass; `status` reports `blocked_on: "emulator"` until they do.
+1600 (`adb_on_path`, `device_connected`, `untappd_installed`, `screen_size`
+under `data.emulator`, with `data.emulator_ready` true once all pass). Each
+failing check says what to do. No sweep is worth running until all four
+pass; while a sweep is the next stage, `status` reports
+`blocked_on: "emulator"` until they do.
 
 ---
 
@@ -302,16 +306,28 @@ Options:
   **Reset location** control) instead of searching the city by name. Use it
   when the geocoder places the city somewhere the app does not, or for a
   neighbourhood rather than a city. Set the position first with BlueStacks'
-  location tool <!-- verify: exact BlueStacks menu for setting a GPS location (sidebar "Location" / "Set location"). -->.
+  own location setting (this guide does not name the menu: it was not
+  recorded and differs between BlueStacks versions). You still pass
+  `--city`; it names the output folder. If the Reset location control is not
+  on screen, the sweep stops with `app_screen_unexpected`.
+- `--title "<list name>"` records the Google Maps list the results are meant
+  for, so later hints name it.
+- `--format kml,gpx,geojson` also writes `1_sweep.<fmt>` map files next to
+  the CSV. `export` is the usual way to get map files.
 - `--min-depth` / `--max-depth` bound the splitting. Going shallower is
   faster and loses mostly the less-visited venues; see
   [Measured quality](#measured-quality).
 
-**Time.** Roughly 5 to 10 minutes at depth 1 for a city like Tel Aviv. Every
-further level can multiply the number of searches by up to four, so a large,
-dense city at depth 3 can take an hour or more. The waits between gestures
-are deliberate: a map redrawing mid-read returns fewer pins, and that reads
-exactly like a finished area. <!-- verify: timing measured only at depth 1 (507 s, before the filter pass was tuned); depth-3 time is an estimate. -->
+**Time.** Measured once: 507 s (about 8.5 minutes) at depth 1 for Tel Aviv,
+before the filter pass was tuned. Every further level can multiply the number
+of searches by up to four, so a large, dense city at depth 3 can take an hour
+or more; that figure is an estimate, not a measurement. The waits between
+gestures (5 to 8 seconds after every search) are deliberate: a map redrawing
+mid-read returns fewer pins, and that reads exactly like a finished area.
+
+The envelope reports `data.venues`, `data.truncated_cells` and
+`data.hit_depth_limit` (cells still full when the depth limit stopped them),
+and `data.calibration.median_residual_m`, the fit's error in metres.
 
 **Network.** The geocoder (unless `--here`) and Overpass, both
 OpenStreetMap services, no key. Overpass is volunteer-run and sometimes
@@ -325,26 +341,33 @@ returns 504 under load; that is `overpass_unavailable`, and waiting fixes it.
 beertown enrich --city "Tel Aviv" --json
 ```
 
-For each swept venue, looks its name up on untappd.com, opens at most two
-candidate venue pages, and accepts a page **only if the coordinates the venue
-published on it are within 1 km of where the map put the pin**. An accepted
+For each swept venue, looks its name up on untappd.com (in a visible Chrome
+window on the tool's profile), ranks the results so those whose card names
+the city come first, opens at most two candidate venue pages, and accepts a
+page **only if the coordinates the venue published on it are within 1 km of
+where the map put the pin**. When no result names the city, one more search
+with the city added (`Mike's Place Tel Aviv`) is tried first. An accepted
 venue gets its Untappd id, page link, check-in totals (total, unique, this
 month, yours) and the page's own coordinates, which are more precise than the
 pin.
 
 A name that does not resolve stays in the output with its counts blank:
-unknown, never zero, never dropped. The envelope reports how many resolved
-and why the others did not (`too_far`, `no_match`, `unverified`, ...).
+unknown, never zero, never dropped. The `resolution` column and the
+envelope's `data.statuses` say why (`too_far`, `no_match`, `unverified`,
+`unlocated`, `fetch_failed`, `search_failed`, `duplicate`).
 
 Writes `data/<slug>/2_enriched.csv`. Needs the Untappd web session from step
-3: signed out, the pages hide their totals.
+3: signed out, the pages hide their totals. If Untappd's robots.txt
+disallows the venue pages, it stops with `robots_disallow` and fetches
+nothing.
 
-**Time.** About three paced requests per venue at 2 to 4.5 seconds apart, so
-roughly 10 to 20 minutes for 90 venues. The tool never makes more than 600
-requests an hour, persisted across restarts; a large city can hit that and
-stop with a clear message, in which case run the same command again later.
-Pages are cached for 12 hours, so a re-run is nearly free.
-<!-- verify: request count per venue (search + up to 2 page fetches) and whether the name lookup counts against the same hourly budget. -->
+**Time.** One to four paced requests per venue (a name search, sometimes a
+city-qualified search, and up to two page fetches), 2 to 4.5 seconds apart.
+Searches and page fetches count against the same limit of 600 requests an
+hour, persisted across restarts; a large city can hit it and stop with
+`rate_limited`, in which case run the same command again later. Searches and
+pages are cached for 12 hours, so a re-run is nearly free. Roughly 10 to 20
+minutes for 90 venues is an estimate, not a measurement.
 
 ---
 
@@ -359,9 +382,14 @@ the app's drinking filter on, a sweep picks up the odd supermarket, highway
 or hotel that people log beers at.
 
 Writes `data/<slug>/3_venues.csv` (the map) and `data/<slug>/3_excluded.csv`
-(everything left out, with a `reason` column). Read the excluded file once:
-if a bar you know is in it, that is worth an issue. Offline, seconds.
-<!-- verify: exact name of the reason column in 3_excluded.csv. -->
+(everything left out). Both carry three added columns: `kind` (`brewery`,
+`bottle_shop`, `beer_bar`, `bar`, `uncategorised` or `excluded`), `reason`
+(why it was kept or left out) and `flag` (`closed`, `possibly_closed` or
+empty). The rules are the category vocabulary in
+`beer_in_this_town/classify.py`; a venue that looks private (many check-ins
+from very few people) is left out, and a venue with no category is kept.
+A flagged venue is kept: removing it is your decision. Read the excluded file
+once: if a bar you know is in it, that is worth an issue. Offline, seconds.
 
 ---
 
@@ -372,12 +400,11 @@ beertown export --city "Tel Aviv" --json
 beertown export --city "Tel Aviv" --format gpx --json
 ```
 
-Writes `data/<slug>/venues.kml`, `venues.gpx` and `venues.geojson` (or only
-the formats named in `--format`). These are a backup of the map and a way onto
+Writes `data/<slug>/venues.kml`, `venues.gpx` and `venues.geojson`: all
+three by default, or only the formats named in `--format`. These are a backup of the map and a way onto
 other map apps: Organic Maps and OsmAnd import GPX or GeoJSON as bookmarks on
 their everyday map, with no account. They are not how the venues reach Google
 Maps; that is steps 10 to 12. Offline, seconds.
-<!-- verify: default --format when omitted (all three assumed). -->
 
 ---
 
@@ -393,6 +420,10 @@ The tool never creates a list; it only saves places into one you made.
 Use the Google account you signed in with in step 3. Pick a name that no
 other list of yours contains as part of its name: `--list` must match exactly
 one list, and `pin` refuses with `list_ambiguous` rather than guess.
+Use only letters, digits and spaces: the commands the tool prints for you
+drop shell symbols such as `&`, `|`, `$`, `;`, `!` and quotes from names, so
+a list called `Beer & Bars` would be shown as `Beer  Bars`, which is not its
+name.
 
 Saved lists hold at most 3000 places.
 
@@ -437,8 +468,8 @@ command again the next day. It skips everything already saved and retries
 failures.
 
 Pacing is 8 to 16 seconds between saves, and every save is verified by
-reloading the place. Expect roughly half a minute per place.
-<!-- verify: per-place time for pin is an estimate. -->
+reloading the place. Roughly half a minute per place is an estimate, not a
+measurement.
 
 If Google shows a CAPTCHA, an "unusual traffic" page or signs you out, `pin`
 stops at once and will not write for 6 hours. Do not work around that: it is
@@ -538,11 +569,10 @@ Every command prints one JSON envelope with `--json`. On failure it carries
 |---|---|---|
 | `emulator_unavailable` | `doctor`'s emulator checks failed before a sweep | Run `beertown doctor --json` and fix the first failing check: adb on `PATH`, `adb connect`, Untappd installed, screen 900 x 1600. |
 | `adb_unavailable` | `adb` could not reach the device, or returned nothing usable | Is BlueStacks running? `adb connect 127.0.0.1:5555`, then `adb devices`. Check `BEERTOWN_ADB_SERIAL` if you changed the port. |
-| `app_screen_unexpected` | The Untappd app was not on the map | Open Discover -> View Map, close any card or dialog, and re-run. The sweep resumes where it stopped. |
+| `app_screen_unexpected` | The Untappd app was not on the map, or (with `--here`) the map's Reset location control was not on screen | Open Discover -> View Map, close any card or dialog, and re-run. For `--here`, allow Untappd location permission. The sweep resumes where it stopped. |
 | `app_pan_failed` | Swipes stopped moving the map three times in a row | Something is over the map (venue card, dialog, keyboard). Clear it and re-run. Check the screen is still 900 x 1600. |
 | `calibration_failed` | Too few swept venues matched OpenStreetMap to fit positions safely | Nothing was written. Usually a very small area or a city with sparse OSM data; sweep a larger area, or retry later if Overpass was struggling. |
 | `city_not_found` | The geocoder has no match for the city | Spell it the way a map would, add the country (`Portland, OR`), or use `--here`. |
-| `no_location_control` | `--here` could not find the map's Reset location control | Open Discover -> View Map and make sure the map's location button is visible; allow Untappd location permission. |
 | `overpass_unavailable` | OpenStreetMap's Overpass API is busy or down | Wait and re-run, or set `OVERPASS_URL` to a mirror. |
 | `geocoder_unavailable` | The geocoder refused or is unreachable | Check the network; if you set `GOOGLE_GEOCODING_KEY`, check its key and billing. |
 | `stage_input_missing` | The previous stage's file is not there | Run the command the remedy names (for example `enrich` before `filter`), or pass `--in PATH`. |
@@ -550,12 +580,20 @@ Every command prints one JSON envelope with `--json`. On failure it carries
 | `no_city` | No city given and none chosen in the dashboard | Pass `--city`, or choose one in `beertown ui`. |
 | `not_signed_in` | Google or Untappd is signed out in the tool's profile | Sign in again (step 3), then `beertown verify --json`. |
 | `verify_unavailable` | The account check could not run | Usually no Chrome. Fix what the message says; you are not necessarily signed out. |
-| `selectors_stale` | Untappd changed its venue page markup | Open an issue; a parser fix is needed. |
+| `robots_disallow` | Untappd's robots.txt disallows the venue pages `enrich` reads | Nothing was fetched. Stop; there is no flag to override it. |
+| `rate_limited` | The 600-an-hour read budget is spent, or Untappd answered with repeated 429s | Wait, then re-run the same command; finished work is cached. |
+| `selectors_stale` | `selfcheck`: Untappd changed its venue page markup | Open an issue; a parser fix is needed. |
+| `stats_missing` | `selfcheck`: the venue page parsed but showed no check-in stats | Usually signed out of untappd.com (step 3); otherwise a parser fix is needed. |
+| `fetch_failed` | `selfcheck` could not fetch its known-good page | Check your connection. Repeated 403s mean a block: stop. |
 | `network_unavailable` | Several requests in a row failed to connect | Check your connection and re-run. |
 | `no_list` | `pin`/`notes` without `--list` | Pass the exact list name. |
 | `list_missing` | No saved list with that name | Create it (step 10) or fix the name. |
 | `list_ambiguous` | The name matches more than one list, or none exactly | Use the exact, full name, or rename a list so only one matches. Nothing was saved. |
 | `already_running` | Another `pin`/`notes` holds the write budget | Wait for it to finish. Do not delete the lock. |
+| `guardrail_tripped` | A write guardrail tripped: circuit breaker, block detected, or cool-off active | Stop. Wait out the cool-off that `beertown status --json` reports. |
+| `pin_failed` | `pin` stopped on an unexpected error | Re-run; it resumes. If it repeats, open an issue with `-v` output. |
+| `notes_failed` | `notes` stopped on an unexpected error | Re-run; it resumes. |
+| `chrome_not_found`, `no_profile`, `login_timed_out`, `login_not_detected` | `bootstrap` could not find Chrome, had no profile to capture, was left open past `--timeout`, or saw no Google sign-in | Install Chrome; run `bootstrap` (not `--capture`); close Chrome and run `bootstrap --capture`; sign in fully before closing the window. |
 | `places_key_missing` | `closures` without `GOOGLE_PLACES_KEY` | Set the key, or skip the closure check. |
 | `places_unavailable` | Places API refused or is out of quota | Check the key, that Places API (New) is enabled, and billing. |
 | `bad_arguments` | An argument was refused, often a pacing value below its floor | The floors protect your account and cannot be lowered. |
