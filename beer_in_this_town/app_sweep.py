@@ -85,6 +85,25 @@ PAN_MS = 1200
 # A pan that moves the map by fewer pixels than this did not really happen.
 MIN_PAN_PX = 20.0
 
+# How many pins must survive a pan before its displacement is worth trusting.
+#
+# Below this the measurement says nothing: a large pan legitimately leaves
+# almost no overlap, and the handful that remain are usually clustered
+# markers, which the map re-lays-out. Firing `DeadPan` on three shared pins
+# that moved (10,9) px was a false accusation -- the map had moved so far
+# that only three pins were left to compare.
+MIN_SHARED_FOR_PAN_CHECK = 6
+
+# How many pans may stall before the sweep gives up.
+#
+# One dead pan is a cell worth skipping; a run of them means the gesture is
+# not working at all and every later cell would re-harvest the same
+# rectangle. Same shape as the circuit breaker in `guardrails.py`: tolerate
+# the occasional failure, stop when it looks systematic. Non-consecutive
+# stalls do not accumulate, because a single awkward viewport is not a
+# broken sweep.
+MAX_CONSECUTIVE_DEAD_PANS = 3
+
 # How long to let the app settle after a gesture before believing the screen.
 # A `Refresh search` re-queries the network, and a dump taken too early
 # catches a half-drawn map -- which reads as a thinner city, not as an error.
@@ -154,8 +173,10 @@ class SweepResult:
     venues: list[Venue] = field(default_factory=list)
     cells_visited: int = 0
     truncated_cells: int = 0
+    skipped_cells: int = 0
     hit_depth_limit: bool = False
     warnings: list[str] = field(default_factory=list)
+    _consecutive_dead_pans: int = 0
 
 
 def _require_app(device: Device) -> None:
@@ -292,14 +313,28 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
         if verify_pans:
             after = _harvest_screen(device)
             moved_x, moved_y, shared = pin_displacement(before or [], after)
-            stalled = (shared and moved_x is not None and moved_y is not None
+            # Low overlap is evidence the map moved, not that it stalled,
+            # so the guard only accuses when it has enough pins to be sure.
+            stalled = (shared >= MIN_SHARED_FOR_PAN_CHECK
+                       and moved_x is not None and moved_y is not None
                        and abs(moved_x) < MIN_PAN_PX
                        and abs(moved_y) < MIN_PAN_PX)
             if stalled:
-                raise DeadPan(
-                    f"panned by ({dx},{dy}) px but the map moved "
-                    f"({moved_x:.0f},{moved_y:.0f}) across {shared} shared "
-                    "pin(s). The gesture is not reaching the map.")
+                result._consecutive_dead_pans += 1
+                msg = (f"pan of ({dx},{dy}) px moved the map "
+                       f"({moved_x:.0f},{moved_y:.0f}) across {shared} shared "
+                       f"pin(s); skipping this cell "
+                       f"({result._consecutive_dead_pans} in a row).")
+                log.warning(msg)
+                result.warnings.append(msg)
+                result.skipped_cells += 1
+                if result._consecutive_dead_pans >= MAX_CONSECUTIVE_DEAD_PANS:
+                    raise DeadPan(
+                        f"{result._consecutive_dead_pans} pans in a row failed "
+                        "to move the map. The gesture is not reaching it, and "
+                        "every later cell would re-harvest the same rectangle.")
+                continue
+            result._consecutive_dead_pans = 0
 
         # The child re-searches on entry, so nothing is needed here.
         sweep(device, cell, max_depth=max_depth, verify_pans=verify_pans,

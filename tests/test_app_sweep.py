@@ -162,13 +162,40 @@ def test_the_list_view_is_refused():
         sweep(FakeDevice([listing]), CELL, settle_max_s=0)
 
 
-def test_a_pan_that_does_not_move_the_map_raises():
-    """The map not moving means the gesture is not landing, and every cell
-    after it would re-harvest the same place while reporting progress."""
+def test_repeated_dead_pans_stop_the_sweep():
+    """One dead pan is a cell worth skipping. A run of them means the gesture
+    is not landing at all, and every later cell would re-harvest the same
+    rectangle while the sweep counted progress."""
     full = dump_with([f"v{i}" for i in range(58)])
     dev = FakeDevice([full])                    # identical dump forever
-    with pytest.raises(DeadPan):
+    with pytest.raises(DeadPan, match="in a row"):
         sweep(dev, CELL, settle_max_s=0, max_depth=1, verify_pans=True)
+
+
+def test_a_single_dead_pan_skips_its_cell_and_carries_on():
+    """Losing a whole sweep to one awkward viewport wastes every cell already
+    collected. The skip is recorded so the result never looks complete."""
+    full = dump_with([f"v{i}" for i in range(58)])
+    stuck = dump_with([f"v{i}" for i in range(58)])      # identical: dead pan
+    moved = dump_with([f"v{i}" for i in range(58)], offset=-300)
+    dev = FakeDevice([full, stuck, moved] + [dump_with(["ok"])] * 40)
+    out = sweep(dev, CELL, settle_max_s=0, max_depth=1, verify_pans=True)
+    assert out.skipped_cells == 1
+    assert any("skipping" in w for w in out.warnings)
+    assert "ok" in {v.name for v in out.venues}
+
+
+def test_a_stalled_pan_is_only_accused_with_enough_evidence():
+    """A large pan legitimately leaves almost no overlap, and the few pins
+    that survive are usually clustered markers the map re-lays-out. Firing
+    on three shared pins that moved (10,9) px was a false accusation against
+    a pan that had worked."""
+    full = dump_with([f"v{i}" for i in range(58)])
+    # Only three names in common, and those barely move.
+    thin = dump_with(["v0", "v1", "v2"] + [f"w{i}" for i in range(55)], offset=3)
+    dev = FakeDevice([full, thin] + [dump_with(["x"])] * 40)
+    out = sweep(dev, CELL, settle_max_s=0, max_depth=1, verify_pans=True)
+    assert out.cells_visited == 5
 
 
 def test_a_pan_that_moves_is_accepted():
