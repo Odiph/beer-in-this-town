@@ -79,6 +79,42 @@ class Venue:
     def with_business_status(self, status: str) -> Venue:
         return replace(self, business_status=status)
 
+    @classmethod
+    def from_row(cls, row: dict[str, str]) -> Venue:
+        """The inverse of `to_row`, for reading a stage file back.
+
+        Unknown stays unknown: an empty count is `None`, never `0`, and an
+        empty `venue_id` stays empty rather than borrowing the name -- a
+        map-swept venue with no page has no id, and inventing one makes a
+        `url` that looks real and is not.
+        """
+        def text(key: str) -> str:
+            return (row.get(key) or "").strip()
+
+        def number(key: str) -> int | None:
+            raw = text(key).replace(",", "")
+            return int(raw) if raw.isdigit() else None
+
+        def coord(key: str) -> float | None:
+            try:
+                return float(text(key))
+            except ValueError:
+                return None
+
+        url = text("url").rstrip("/").split("/")
+        slug = url[-2] if len(url) >= 2 and url[-1].isdigit() else ""
+        return cls(
+            ref=VenueRef(venue_id=text("venue_id"), slug=slug,
+                         name=text("name"), category=text("category") or None,
+                         address=text("address") or None,
+                         city=text("city") or None),
+            total=number("total"), unique=number("unique"),
+            monthly=number("monthly"), you=number("you"),
+            lat=coord("lat"), lng=coord("lng"),
+            geo_source=text("geo_source") or "none",
+            business_status=text("business_status"),
+        )
+
     def to_row(self) -> dict[str, Any]:
         r = self.ref
         return {
