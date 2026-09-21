@@ -23,10 +23,14 @@ that looks contradictory until you have it:
 - Panning re-draws; it does **not** re-query. A pin count falling after a pan
   is clipping, not a smaller city.
 
-**The result set is capped at about 58.** Two independent Tel Aviv searches
-both returned exactly 58 pins while Haifa returned 37. So a cell that comes
-back at the cap is truncated and must be subdivided, and a cell under it is
-probably complete. That is the whole saturation rule, and it costs one dump.
+**The result set is capped at 60.** Measured across seven cities on three
+continents: Portland 60, Reykjavik 60, Berlin 58, Tel Aviv 58, Jerusalem 45,
+Haifa 37, Eilat 16. So a cell that comes back near the cap is truncated and
+must be subdivided, and a cell well under it is probably complete. That is
+the whole saturation rule, and it costs one dump.
+
+Reykjavik has 130k people and still hits the ceiling, so **subdivision is the
+normal path for any real city**, not an edge case for dense ones.
 
 **Everything here is a pure function over a dump.** That is deliberate: the
 expensive part of this work by hand was a model reading screenshots to decide
@@ -45,14 +49,28 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
-# Measured: two independent Tel Aviv searches both returned exactly 58 unique
-# pins; Haifa returned 37. Treat >= this as "there is more here than you were
-# shown" rather than as a count.
+# The largest result set observed, across seven cities on three continents:
 #
-# It is a **threshold, not a hard ceiling**: a live sweep saw cells return 59
-# and 60. So the comparison is `>=`, and a count a little above this is
-# normal rather than a sign something is wrong.
-RESULT_SET_CAP = 58
+#   Portland 60, Reykjavik 60, Berlin 58, Tel Aviv 58,
+#   Jerusalem 45, Haifa 37, Eilat 16
+#
+# Portland and Reykjavik both land on 60, so that is the server's limit. The
+# 58s are almost certainly 60 raw results with two repeated names collapsed
+# by the dedup in `pins_in`.
+#
+# Reykjavik has 130k people and still hits the ceiling, so **subdivision is
+# the normal path for any real city**, not an edge case.
+RESULT_SET_CAP = 60
+
+# What counts as "this cell was truncated". Deliberately *below* the cap.
+#
+# Pins are deduplicated by name, so a full result set of 60 holding six
+# repeats yields 54 unique -- and a rule that tested `>= 60` would call that
+# cell complete and silently lose everything behind it. Erring low costs a
+# few extra cells; erring high loses venues invisibly, which is the failure
+# this whole subsystem is built to prevent. The lowest genuinely-complete
+# result set seen was Jerusalem at 45, so there is room for the margin.
+TRUNCATION_THRESHOLD = 55
 
 # Nodes on the map that carry a `content-desc` and are not venues. Without
 # this the sweep harvests the toolbar: `Google Map` and `Refresh search` look
@@ -217,11 +235,15 @@ def categories_in(xml: str) -> dict[str, Category]:
 def is_truncated(pin_count: int) -> bool:
     """Did this cell hit the result-set cap, and therefore hide venues?
 
+    Tested against `TRUNCATION_THRESHOLD`, which sits below the observed cap
+    on purpose -- see the constant for why a rule of `>= cap` would miss a
+    truncated cell whose duplicate names had been collapsed.
+
     Zero is not a truncation. An area with no venues is a real answer about a
     real place, and treating it as "subdivide further" would recurse forever
     over empty countryside.
     """
-    return pin_count >= RESULT_SET_CAP
+    return pin_count >= TRUNCATION_THRESHOLD
 
 
 def pin_displacement(
