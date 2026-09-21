@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -126,6 +127,43 @@ class PlaceMatch:
         )
 
 
+# Google's Places terms: a place ID may be stored indefinitely, but any other
+# content -- here display name, types and business status -- for at most 30
+# consecutive calendar days. After that an entry is cut back to its place ID
+# and the venue is asked about again.
+CONTENT_TTL_S = 30 * 24 * 60 * 60
+
+# Injected so the expiry is testable without waiting a month.
+_now = time.time
+
+
+def _is_fresh(entry: object, now: float) -> bool:
+    """Whether an entry still carries content that may be served.
+
+    An entry without `fetched_at` predates the expiry and has unknown age, so
+    it is not fresh -- the conservative reading of a 30-day limit.
+    """
+    if not isinstance(entry, dict):
+        return False
+    fetched_at = entry.get("fetched_at")
+    if not isinstance(fetched_at, int | float):
+        return False
+    return now - fetched_at < CONTENT_TTL_S
+
+
+def _expire(cache: dict[str, dict], now: float) -> dict[str, dict]:
+    """A NEW cache in which every stale entry keeps its place ID only."""
+    out: dict[str, dict] = {}
+    for query, entry in cache.items():
+        if not isinstance(entry, dict):
+            continue
+        if _is_fresh(entry, now):
+            out[query] = entry
+        elif entry.get("place_id"):
+            out[query] = {"place_id": entry["place_id"]}
+    return out
+
+
 def _load_cache() -> dict[str, dict]:
     """A corrupt cache costs money to rebuild. It must not stop the run.
 
@@ -143,12 +181,13 @@ def _load_cache() -> dict[str, dict]:
                     "This run will re-bill for venues already resolved.",
                     PLACES_CACHE, exc)
         return {}
-    return cached if isinstance(cached, dict) else {}
+    return _expire(cached, _now()) if isinstance(cached, dict) else {}
 
 
 def _save_cache(cache: dict[str, dict]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    PLACES_CACHE.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+    PLACES_CACHE.write_text(json.dumps(_expire(cache, _now()), indent=1),
+                            encoding="utf-8")
 
 
 def _query_for(v: Venue) -> str:
@@ -342,7 +381,7 @@ def resolve_closures(venues: list[Venue], s: Settings) -> list[Venue]:
                 query = _query_for(v)
                 if not query:
                     continue
-                if query in cache:
+                if _is_fresh(cache.get(query), _now()):
                     resolved[v.ref.venue_id] = _status_of(
                         PlaceMatch.from_cache(cache[query]))
                     continue
@@ -367,7 +406,7 @@ def resolve_closures(venues: list[Venue], s: Settings) -> list[Venue]:
                     resolved[v.ref.venue_id] = UNMATCHED
                     continue
                 if _CACHEABLE:
-                    cache[query] = match.to_cache()
+                    cache[query] = {**match.to_cache(), "fetched_at": _now()}
                 resolved[v.ref.venue_id] = _status_of(match)
     finally:
         # Written even when the loop aborts. Everything above this point has
