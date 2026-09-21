@@ -155,3 +155,34 @@ def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
         v.with_coords(*resolved[v.ref.venue_id]) if v.ref.venue_id in resolved else v
         for v in venues
     ]
+
+
+def geocode_place(query: str, s: Settings) -> tuple[float, float] | None:
+    """One place name -> `(lat, lng)`, or None when the geocoder has no match.
+
+    Used for a city, where the sweep needs a starting centre. A failure of the
+    geocoder itself raises `GeocoderUnavailable` rather than returning None:
+    "no such place" and "the service is down" want opposite remedies.
+    """
+    cache = _load_cache()
+    if query in cache:
+        lat, lng = cache[query]
+        return float(lat), float(lng)
+
+    contact = s.nominatim_email or "no-contact-set"
+    ua = {"User-Agent": f"beer-in-this-town/0.1.0 ({contact})"}
+    try:
+        with httpx.Client(timeout=20.0, headers=ua) as client:
+            if s.google_geocoding_key:
+                hit = _google(client, s.google_geocoding_key, query)
+            else:
+                hit = _nominatim(client, query, s.nominatim_email)
+    except GeocoderUnavailable:
+        raise
+    except Exception as exc:
+        raise GeocoderUnavailable(f"Could not geocode {query!r}: {exc}") from exc
+
+    if hit is None:
+        return None
+    _save_cache({**cache, query: [hit[0], hit[1]]})
+    return hit
