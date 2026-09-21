@@ -168,3 +168,67 @@ def test_locating_the_map_needs_at_least_one_point():
 
     with pytest.raises(ValueError):
         centre_from_known_points([], Scale(m_per_px=10.2))
+
+
+# --- the camera: where the map is looking, kept up to date as it pans ------
+#
+# A swept venue used to carry raw screen pixels and nothing else. Pixels only
+# mean something inside the dump they came from, so the moment the map panned
+# every stored position became a number with no referent -- and the venue list
+# looked exactly the same either way. These pin the conversion happening at
+# harvest time, while the viewport that produced the pin is still current.
+
+def test_camera_locates_a_pin_against_its_own_centre():
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    at_centre = cam.locate(Pin(name="x", x=450, y=750))
+    assert at_centre == pytest.approx((32.0853, 34.7818), abs=1e-9)
+
+
+def test_a_pan_moves_the_camera_the_other_way():
+    """Dragging the content east means the viewport travelled west.
+
+    The sign is the whole content of this: getting it backwards puts every
+    venue an equal distance on the wrong side of the city, which is a corpus
+    that looks entirely reasonable.
+    """
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    # Content dragged right and down: the camera moves west and north.
+    cam.pan_px(100, 100)
+    assert cam.centre[1] < 34.7818, "content east means the camera went west"
+    assert cam.centre[0] > 32.0853, "content south means the camera went north"
+
+
+def test_a_pan_and_its_opposite_return_the_camera_to_within_a_metre():
+    """Not exactly, and the residue is worth stating rather than hiding.
+
+    A degree of longitude shrinks with latitude, so a pan north and the same
+    pan back south do not cancel to the last decimal. Measured here: **0.75 m
+    over a 3.4 km round trip**, against a positional accuracy of 32 m median.
+    The asymmetry is real and two orders of magnitude below the noise; what
+    would matter is drift that grows with the number of cells, and this does
+    not.
+    """
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    cam.pan_px(220, -330)
+    cam.pan_px(-220, 330)
+    off_lat_m = abs(cam.centre[0] - 32.0853) * 110_540.0
+    off_lng_m = abs(cam.centre[1] - 34.7818) * 111_320.0
+    assert off_lat_m < 1.0
+    assert off_lng_m < 1.0
+
+
+def test_panning_a_quarter_viewport_moves_about_a_quarter_of_the_ground():
+    """A sanity bound in metres, so the scale cannot silently be per-degree."""
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    before = cam.centre
+    cam.pan_px(0, -331)  # one quarter-viewport step, as the sweep pans
+    moved_m = abs(cam.centre[0] - before[0]) * 110_540.0
+    assert moved_m == pytest.approx(331 * 10.2, rel=0.01)

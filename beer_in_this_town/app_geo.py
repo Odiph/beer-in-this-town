@@ -170,3 +170,51 @@ def scale_from_known_points(
             "known points are all at the same screen position; "
             "cannot fit a scale from a zero baseline")
     return Scale(m_per_px=best[1])
+
+
+@dataclass
+class Camera:
+    """Where the map is looking, kept current as the sweep pans it.
+
+    The one piece of mutable state in this module, and it is mutable on
+    purpose: the sweep is a recursion that pans between children, so the
+    viewport moves *between* calls and every branch has to see the same
+    updated answer. Threading an immutable centre through the recursion
+    would work only until a child returned, at which point the parent's copy
+    would be a kilometre stale with nothing to say so.
+
+    It exists because a swept `Venue` used to carry the screen pixels of
+    whichever dump produced it. Pixels mean something only inside their own
+    dump; once the map pans they are numbers with no referent -- and the
+    venue list reads identically either way, which is the shape of error
+    this project keeps finding.
+
+    The centre is established once, from the device GPS after `Reset
+    location` (24 m) or from pins whose coordinates are known
+    (`centre_from_known_points`), and then carried forward by measured pan
+    displacement.
+    """
+
+    centre: tuple[float, float]
+    scale: Scale
+
+    def locate(self, pin: Pin) -> tuple[float, float]:
+        return to_latlng(pin, self.centre, self.scale)
+
+    def viewport(self) -> Cell:
+        return cell_for_viewport(self.centre, self.scale)
+
+    def pan_px(self, dx: float, dy: float) -> None:
+        """Record that the *content* moved by `(dx, dy)` screen pixels.
+
+        The argument is the content's movement, not the camera's, because
+        that is what the caller has: `device.swipe` is given a content drag
+        and `pin_displacement` measures one. The camera travels the opposite
+        way -- drag the map east and the viewport has gone west -- and
+        getting that backwards puts every venue an equal distance on the
+        wrong side of the city, which produces a corpus that looks entirely
+        reasonable.
+        """
+        lat, lng = self.centre
+        self.centre = (lat + self.scale.deg_lat(dy),
+                       lng - self.scale.deg_lng(dx, lat))

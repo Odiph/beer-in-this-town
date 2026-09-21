@@ -45,10 +45,12 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from .app_categories import is_drinking_category, plan_category_taps
 from .app_map import (
@@ -62,7 +64,15 @@ from .app_map import (
 )
 from .config import STATE_DIR, scope_slug
 
+if TYPE_CHECKING:
+    # `app_geo` imports this module for `Cell` and the screen geometry, so a
+    # runtime import here would be a cycle. The sweep never builds a camera;
+    # the caller hands one in.
+    from .app_geo import Camera
+
 log = logging.getLogger(__name__)
+
+_BOUNDS = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
 MAP_PACKAGE = "com.untappdllc.app"
 
@@ -92,8 +102,14 @@ SHOW_RESULTS_BUTTON = (450, 1556) # "SHOW RESULTS"
 # as set. It scrolls, so one pass only reaches the visible rows.
 MAX_CATEGORY_PASSES = 10
 
-# Discover -> "View Map". Tapped by position; the row is stable in-session.
-VIEW_MAP_ROW = (450, 388)
+# Discover -> "View Map". Located by its text in the dump, never tapped by a
+# remembered position: recovery runs precisely when the screen is not what
+# was expected, which is the one moment a remembered position is least safe.
+VIEW_MAP_LABEL = "View Map"
+
+# How many looks a relaunch gets before the screen is declared wrong. At
+# half a settle apart that is roughly 20-30 s, well past a measured cold start.
+RELAUNCH_POLLS = 8
 SEARCH_BOX = (440, 82)
 CLEAR_SEARCH = (723, 82)
 
@@ -217,11 +233,19 @@ class Cell:
 
 @dataclass(frozen=True)
 class Venue:
-    """A venue as the map knows it, before any enrichment."""
+    """A venue as the map knows it, before any enrichment.
+
+    `x`/`y` are screen pixels **in the dump that found it** and mean nothing
+    outside that one viewport -- they are kept for debugging a single cell,
+    not for locating anything. `lat`/`lng` are where it is, and are `None`
+    when the sweep ran without a `Camera`: unknown, never guessed.
+    """
 
     name: str
     x: int
     y: int
+    lat: float | None = None
+    lng: float | None = None
 
 
 @dataclass
@@ -248,6 +272,22 @@ def _require_app(device: Device) -> None:
         raise WrongScreen(
             f"focused app is {focused!r}, not {MAP_PACKAGE}. "
             "Refusing to harvest a screen that is not Untappd.")
+
+
+def _find_label(xml: str, label: str) -> tuple[int, int] | None:
+    """The centre of the node whose text or description is exactly `label`."""
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+    for node in root.iter():
+        if label in ((node.get("text") or "").strip(),
+                     (node.get("content-desc") or "").strip()):
+            m = _BOUNDS.match(node.get("bounds") or "")
+            if m:
+                x1, y1, x2, y2 = (int(g) for g in m.groups())
+                return (x1 + x2) // 2, (y1 + y2) // 2
+    return None
 
 
 def _settle(lo: float, hi: float) -> None:
@@ -292,6 +332,12 @@ def _clear_origin(pins: list[Pin], dx: int, dy: int) -> tuple[int, int]:
         return min((point[0] - p.x) ** 2 + (point[1] - p.y) ** 2 for p in pins)
 
     return max(candidates, key=clearance)
+
+
+def _follow(camera: Camera | None, dx: float, dy: float) -> None:
+    """Move the camera with the content. A no-op when nobody is tracking."""
+    if camera is not None:
+        camera.pan_px(dx, dy)
 
 
 def _pan(device: Device, dx: int, dy: int, pins: list[Pin]) -> None:
@@ -344,7 +390,8 @@ def save_journal(city: str, result: SweepResult) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "city": city,
-        "venues": [{"name": v.name, "x": v.x, "y": v.y} for v in result.venues],
+        "venues": [{"name": v.name, "x": v.x, "y": v.y,
+                    "lat": v.lat, "lng": v.lng} for v in result.venues],
         "cells_visited": result.cells_visited,
         "truncated_cells": result.truncated_cells,
         "skipped_cells": result.skipped_cells,
@@ -381,7 +428,28 @@ def ensure_map_screen(device: Device, relaunch: bool = True,
     log.warning("Not on the map; relaunching the app to get there.")
     device.launch(MAP_PACKAGE)
     _settle(settle_min_s, settle_max_s)
-    device.tap(*VIEW_MAP_ROW)
+
+    # A force-stopped app cold-starts, and that takes longer than a settle:
+    # the first dump after relaunch was once a half-drawn splash. So poll,
+    # boundedly, for either the map itself or the way to it.
+    target = None
+    for _ in range(RELAUNCH_POLLS):
+        xml = device.dump()
+        try:
+            require_map_screen(xml)
+            return
+        except WrongScreen:
+            pass
+        target = _find_label(xml, VIEW_MAP_LABEL)
+        if target is not None:
+            break
+        _settle(settle_min_s / 2, settle_max_s / 2)
+    if target is None:
+        raise WrongScreen(
+            f"relaunched, but there is no {VIEW_MAP_LABEL!r} on screen to "
+            "reach the map from. Refusing to tap blind; open Discover -> "
+            "View Map by hand and re-run.")
+    device.tap(*target)
     _settle(settle_min_s, settle_max_s)
 
     _require_app(device)
@@ -466,6 +534,7 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
           min_depth: int = 0,
           verify_pans: bool = False, city: str | None = None,
           filter_drinking: bool = False,
+          camera: Camera | None = None,
           settle_min_s: float = SETTLE_MIN_S,
           settle_max_s: float = SETTLE_MAX_S,
           _depth: int = 0,
@@ -480,6 +549,12 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
     costs an extra dump per pan, which is why it is opt-in, and it is the
     difference between a sweep that covers a city and one that harvests the
     same rectangle repeatedly.
+
+    `camera` gives every venue a coordinate, converted while the viewport
+    that found it is still the live one, and is moved with every pan. With
+    `verify_pans` it follows the *measured* displacement; without, it follows
+    the requested one, which the fling makes 5% wrong either way at
+    `PAN_MS`. Without a camera, venues carry no coordinates at all.
 
     `settle_min_s`/`settle_max_s` are how long to wait after a gesture before
     believing the screen. Set them to 0 in tests; do not lower them against a
@@ -522,7 +597,9 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
     for pin in pins:
         if pin.name not in known:
             known.add(pin.name)
-            result.venues.append(Venue(name=pin.name, x=pin.x, y=pin.y))
+            lat, lng = camera.locate(pin) if camera else (None, None)
+            result.venues.append(
+                Venue(name=pin.name, x=pin.x, y=pin.y, lat=lat, lng=lng))
 
     if city:
         save_journal(city, result)
@@ -573,9 +650,19 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
         _pan(device, dx, dy, pins)
         _settle(settle_min_s, settle_max_s)
 
-        if verify_pans:
+        if not verify_pans:
+            _follow(camera, dx, dy)
+        else:
             after = _harvest_screen(device)
             moved_x, moved_y, shared = pin_displacement(before or [], after)
+            measured = (moved_x is not None and moved_y is not None
+                        and shared >= MIN_SHARED_FOR_PAN_CHECK)
+            # Believe the measurement when there is enough overlap to make
+            # one; otherwise the request is the best estimate there is.
+            if measured:
+                _follow(camera, moved_x, moved_y)
+            else:
+                _follow(camera, dx, dy)
             # Low overlap is evidence the map moved, not that it stalled,
             # so the guard only accuses when it has enough pins to be sure.
             stalled = (shared >= MIN_SHARED_FOR_PAN_CHECK
@@ -609,12 +696,13 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
                     log.info("Pan landed (%.0f,%.0f) px off target; correcting.",
                              err_x, err_y)
                     _pan(device, int(err_x), int(err_y), after)
+                    _follow(camera, int(err_x), int(err_y))
                     _settle(settle_min_s, settle_max_s)
 
         # The child re-searches on entry, so nothing is needed here.
         sweep(device, cell, max_depth=max_depth, min_depth=min_depth,
               verify_pans=verify_pans,
-              city=city, filter_drinking=filter_drinking,
+              city=city, filter_drinking=filter_drinking, camera=camera,
               settle_min_s=settle_min_s, settle_max_s=settle_max_s,
               _depth=_depth + 1, _result=result)
 
