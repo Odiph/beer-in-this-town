@@ -10,13 +10,30 @@ for anything browser-driven, a system Chrome.
 python -m venv .venv
 source .venv/bin/activate         # Windows: .venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev,browser]"
-pytest -q -m unit
+pytest -q -m "not integration"
+ruff check beer_in_this_town tests
 ```
+
+That is exactly what CI runs. **You do not need the emulator** (BlueStacks,
+`adb`) or a signed-in Chrome for the tests: `adb` and the app are faked, and
+nothing in the suite touches the network. The emulator is only needed to run
+a real `sweep`. Tests marked `integration` do touch a browser or the network
+and are never run in CI.
+
+New test files set `pytestmark = pytest.mark.unit` at the top.
+
+## Releasing
+
+The version lives in one place, `beer_in_this_town/__init__.py`
+(`__version__`); `pyproject.toml` and the User-Agent strings read it. Bump it,
+add a `CHANGELOG.md` entry, and push a `vX.Y.Z` tag matching it. The release
+workflow builds the sdist and wheel, checks the sdist carries nothing private,
+and attaches both to a GitHub Release. Nothing is published to PyPI.
 
 ## Ground rules
 
-**Tests are offline.** Anything marked `unit` must run with no network and no
-browser. CI never touches Untappd or Google. If you need a fixture, paste the
+**Tests are offline.** Anything not marked `integration` must run with no
+network, no browser and no emulator. CI never touches Untappd or Google. If you need a fixture, paste the
 markup into the test file rather than fetching it.
 
 **Check your change reaches the code path.** The most common bug in this repo
