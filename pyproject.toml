@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "beer-in-this-town"
-version = "0.1.0"
-description = "Where to get a beer in this town: scrape venue check-in stats, export CSV/KML, and put them on your map."
+dynamic = ["version"]
+description = "Make a craft-beer map of a city in a Google Maps saved list, from the venues the Untappd app shows."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -33,8 +33,30 @@ dev = ["pytest>=8.0", "ruff>=0.5"]
 [project.scripts]
 beertown = "beer_in_this_town.cli:main"
 
+[tool.hatch.version]
+path = "beer_in_this_town/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["beer_in_this_town"]
+
+# An allowlist, not a denylist. The repo root holds a signed-in Chrome profile,
+# storage_state.json, state/, data/ and cache/ -- none of it may ever ship, and
+# an allowlist cannot be defeated by a new private directory nobody excluded.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/beer_in_this_town",
+    "/tests",
+    "/docs",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/pyproject.toml",
+    "/requirements.txt",
+]
+exclude = [
+    "__pycache__",
+    "*.pyc",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
