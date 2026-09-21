@@ -4,7 +4,16 @@
 
 **The rule the sweep turns on.** A search returns a result set capped at
 about 58 venues, so a cell that comes back at the cap was truncated and hides
-more; a cell that comes back under it is taken as complete. Measured on the
+more; a cell that comes back under it is taken as complete.
+
+**The rule is about the result set, not the screen**, and that distinction
+bit on the first live run: a map left panned from earlier work showed 56 of a
+58-venue result set, `is_truncated(56)` said "complete", and the sweep
+declined to subdivide a cell that was in fact full. Pins are clipped to the
+viewport; the cap is not. So **every cell re-searches before it harvests** --
+`Refresh search` queries the current viewport, which puts the whole result
+set inside it by construction and makes the pin count mean what the rule
+assumes. Measured on the
 live app: two independent Tel Aviv searches both returned exactly 58, Haifa
 returned 37. That single number replaces every guess about grid spacing --
 density decides how deep to divide, and no requests are spent on empty
@@ -34,8 +43,10 @@ one, and so nothing here needs a model at runtime.
 from __future__ import annotations
 
 import logging
+import random
+import time
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from .app_map import (
     Pin,
@@ -67,7 +78,16 @@ PAN_MS = 1200
 # A pan that moves the map by fewer pixels than this did not really happen.
 MIN_PAN_PX = 20.0
 
+# How long to let the app settle after a gesture before believing the screen.
+# A `Refresh search` re-queries the network, and a dump taken too early
+# catches a half-drawn map -- which reads as a thinner city, not as an error.
+# Jittered, because a fixed interval is a tell and this drives a real
+# account; same reasoning as `http_client`'s min/max delay.
+SETTLE_MIN_S = 5.0
+SETTLE_MAX_S = 8.0
 
+
+@runtime_checkable
 class Device(Protocol):
     """Whatever can drive the phone. `adb` in production, a fake in tests."""
 
@@ -139,6 +159,11 @@ def _require_app(device: Device) -> None:
             "Refusing to harvest a screen that is not Untappd.")
 
 
+def _settle(lo: float, hi: float) -> None:
+    if hi > 0:
+        time.sleep(random.uniform(lo, hi))
+
+
 def _refresh(device: Device) -> None:
     """Re-query for the current viewport.
 
@@ -149,8 +174,36 @@ def _refresh(device: Device) -> None:
     device.tap(855, 315)
 
 
-def _pan(device: Device, dx: int, dy: int) -> None:
-    cx, cy = SCREEN_WIDTH // 2, (MAP_TOP + MAP_BOTTOM) // 2
+def _clear_origin(pins: list[Pin], dx: int, dy: int) -> tuple[int, int]:
+    """Somewhere to start a pan that is not on top of a marker.
+
+    Dragging a pin does not move the map -- found live, when a pan of
+    (225,331) px moved the map by (-2,0) and `DeadPan` stopped the sweep. The
+    candidates are spread across the map area, and whichever is furthest from
+    every pin wins. The chosen point also has to leave room for the gesture
+    without running off the map.
+    """
+    lo_x, hi_x = 80, SCREEN_WIDTH - 80
+    lo_y, hi_y = MAP_TOP + 80, MAP_BOTTOM - 80
+    candidates = [
+        (x, y)
+        for x in range(lo_x, hi_x + 1, 100)
+        for y in range(lo_y, hi_y + 1, 120)
+        if lo_x <= x + dx <= hi_x and lo_y <= y + dy <= hi_y
+    ]
+    if not candidates:
+        return SCREEN_WIDTH // 2, (MAP_TOP + MAP_BOTTOM) // 2
+
+    def clearance(point: tuple[int, int]) -> float:
+        if not pins:
+            return float("inf")
+        return min((point[0] - p.x) ** 2 + (point[1] - p.y) ** 2 for p in pins)
+
+    return max(candidates, key=clearance)
+
+
+def _pan(device: Device, dx: int, dy: int, pins: list[Pin]) -> None:
+    cx, cy = _clear_origin(pins, dx, dy)
     device.swipe(cx, cy, cx + dx, cy + dy, PAN_MS)
 
 
@@ -161,7 +214,10 @@ def _harvest_screen(device: Device) -> list[Pin]:
 
 
 def sweep(device: Device, cell: Cell, max_depth: int = 3,
-          verify_pans: bool = False, _depth: int = 0,
+          verify_pans: bool = False,
+          settle_min_s: float = SETTLE_MIN_S,
+          settle_max_s: float = SETTLE_MAX_S,
+          _depth: int = 0,
           _result: SweepResult | None = None) -> SweepResult:
     """Harvest `cell`, subdividing wherever the result set was truncated.
 
@@ -173,11 +229,22 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
     costs an extra dump per pan, which is why it is opt-in, and it is the
     difference between a sweep that covers a city and one that harvests the
     same rectangle repeatedly.
+
+    `settle_min_s`/`settle_max_s` are how long to wait after a gesture before
+    believing the screen. Set them to 0 in tests; do not lower them against a
+    real device, where a dump taken mid-redraw reads as a thinner city rather
+    than as an error.
     """
     result = _result if _result is not None else SweepResult()
 
     if _depth == 0:
         _require_app(device)
+
+    # Re-query for this exact viewport before believing what is drawn. A
+    # stale result set from a previous search is clipped to the screen, and a
+    # clipped count reads as a smaller city rather than as a truncation.
+    _refresh(device)
+    _settle(settle_min_s, settle_max_s)
 
     pins = _harvest_screen(device)
     result.cells_visited += 1
@@ -211,7 +278,8 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
     for dx, dy in ((-step_x, -step_y), (step_x, -step_y),
                    (-step_x, step_y), (step_x, step_y)):
         before = pins if verify_pans else None
-        _pan(device, dx, dy)
+        _pan(device, dx, dy, pins)
+        _settle(settle_min_s, settle_max_s)
 
         if verify_pans:
             after = _harvest_screen(device)
@@ -225,9 +293,9 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
                     f"({moved_x:.0f},{moved_y:.0f}) across {shared} shared "
                     "pin(s). The gesture is not reaching the map.")
 
-        # Without this the child shows a slice of the parent's result set.
-        _refresh(device)
+        # The child re-searches on entry, so nothing is needed here.
         sweep(device, cell, max_depth=max_depth, verify_pans=verify_pans,
+              settle_min_s=settle_min_s, settle_max_s=settle_max_s,
               _depth=_depth + 1, _result=result)
 
     return result
