@@ -302,7 +302,7 @@ def test_the_first_hint_names_the_dashboard_and_both_accounts(blank):
     said = " ".join(hints(inspect_state(blank), blank))
     assert "beertown ui" in said
     assert "Untappd" in said, "only Google was mentioned, which is the old bug"
-    assert "5 results" in said
+    assert "enrich" in said, "why the Untappd session matters went unsaid"
 
 
 @pytest.mark.unit

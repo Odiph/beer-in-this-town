@@ -14,7 +14,6 @@ CACHE_DIR = ROOT / "cache"
 DEBUG_DIR = ROOT / "debug"
 
 BASE = "https://untappd.com"
-SEARCH_URL = f"{BASE}/search"
 
 # A real Chrome UA. Chrome has frozen the minor/build/patch fields at 0.0.0
 # since v107, so the major version is the only part that varies.
@@ -163,6 +162,26 @@ def stage_path(city: str, name: str) -> Path:
     relocated install) is honoured.
     """
     return DATA_DIR / city_slug(city) / name
+
+
+# The file each stage writes, under data/<slug>/. Each stage reads the one
+# before it, so these names are the pipeline's only coupling.
+SWEEP_CSV = "1_sweep.csv"
+ENRICHED_CSV = "2_enriched.csv"
+VENUES_CSV = "3_venues.csv"
+EXCLUDED_CSV = "3_excluded.csv"
+EXPORT_STEM = "venues"
+
+
+def cli_arg(value: str) -> str:
+    """A user string as one double-quoted command-line argument.
+
+    Commands built from a city or list name are handed to an agent to run
+    verbatim, so a stray quote in the name must not be able to end the
+    argument and start another. Quotes are dropped rather than escaped:
+    escaping differs between PowerShell, cmd and POSIX shells.
+    """
+    return '"' + value.replace('"', "").replace("`", "") + '"'
 
 
 def ensure_dirs() -> None:

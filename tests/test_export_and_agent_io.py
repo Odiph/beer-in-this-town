@@ -224,28 +224,27 @@ def test_next_actions_never_carries_a_write_or_a_comment(tmp_path, monkeypatch):
     account write by the contract itself.
     """
     from beer_in_this_town import state
-    from beer_in_this_town.config import Settings
+    from beer_in_this_town.config import Settings, stage_path
 
-    data = tmp_path / "data"
-    data.mkdir()
-    (data / "venues_london_2026-09-20.csv").write_text("venue_id\n", encoding="utf-8")
-    (data / "venues_london_2026-09-20.kml").write_text("<kml/>", encoding="utf-8")
-    monkeypatch.setattr(state, "DATA_DIR", data)
+    for name in ("1_sweep.csv", "2_enriched.csv", "3_venues.csv"):
+        path = stage_path("london", name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("venue_id\n1\n", encoding="utf-8")
+    stage_path("london", "venues.kml").write_text("<kml/>", encoding="utf-8")
     session = tmp_path / "storage_state.json"
     session.write_text("{}", encoding="utf-8")
     s = Settings(storage_state=session)
 
     # A session file alone is not a working account, so the first action is
-    # to prove it. `run` before that is what builds a five-venue corpus on a
-    # machine whose Untappd session has expired.
+    # to prove it.
     assert state.next_actions(state.inspect_state(s), s) == [
         "python -m beer_in_this_town verify --json"
     ]
 
     state.record_verification({"google": {"ok": True}, "untappd": {"ok": True}},
                               ok=True)
-    # There is no default city any more, so one has to be chosen before a run
-    # is on offer at all.
+    # There is no default city any more, so one has to be chosen before a
+    # stage is on offer at all.
     state.record_intent("london")
 
     inspected = state.inspect_state(s)
@@ -255,14 +254,11 @@ def test_next_actions_never_carries_a_write_or_a_comment(tmp_path, monkeypatch):
 
     # And on a state that DOES produce actions -- the previous version looped
     # over the empty list above, so the forbidden-word check never ran.
-    (data / "venues_london_2026-09-20.kml").unlink()
+    stage_path("london", "venues.kml").unlink()
     pending = state.next_actions(state.inspect_state(s), s)
     assert pending, "a missing map file must still give the agent something to do"
     for command in pending:
         assert not command.lstrip().startswith("#")
-        if " run " in f" {command} ":
-            assert "--no-upload" in command, \
-                "a suggested run must not touch the account"
         for forbidden in (" pin ", " notes ", "bootstrap"):
             assert forbidden not in f" {command} "
 

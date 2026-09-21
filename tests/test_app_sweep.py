@@ -17,6 +17,8 @@ research is an assertion here instead:
 """
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 
 from beer_in_this_town.app_map import WrongScreen
@@ -25,8 +27,13 @@ from beer_in_this_town.app_sweep import (
     Cell,
     DeadPan,
     SweepResult,
-    sweep,
 )
+from beer_in_this_town.app_sweep import sweep as library_sweep
+
+# The library defaults are the measured ones (min_depth 1, filter on). Most
+# tests here exercise the recursion and the harvest in isolation, so they opt
+# out explicitly; the tests below that check the defaults use library_sweep.
+sweep = partial(library_sweep, min_depth=0, filter_drinking=False)
 
 CHROME = """
  <node class="android.view.View" content-desc="Google Map" bounds="[0,192][900,1516]"/>
@@ -535,6 +542,19 @@ def test_min_depth_does_not_inflate_the_truncated_count():
 def test_min_depth_zero_keeps_the_old_behaviour():
     dev = FakeDevice([dump_with(["a"])])
     assert sweep(dev, CELL, settle_max_s=0).cells_visited == 1
+
+
+def test_library_defaults_are_the_measured_ones():
+    """min_depth 1, max_depth 3, filter on -- the same as the CLI and the
+    census. A library default that differs is a second, unmeasured setting."""
+    import inspect
+
+    from beer_in_this_town import app_pipeline
+
+    params = inspect.signature(library_sweep).parameters
+    assert params["min_depth"].default == app_pipeline.DEFAULT_MIN_DEPTH == 1
+    assert params["max_depth"].default == app_pipeline.DEFAULT_MAX_DEPTH == 3
+    assert params["filter_drinking"].default is True
 
 
 # --- venues that know where they are --------------------------------------

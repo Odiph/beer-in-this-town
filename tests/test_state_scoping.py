@@ -134,11 +134,11 @@ def test_a_legacy_journal_is_adopted_by_exactly_one_list(state_dir):
 @pytest.mark.unit
 def test_status_reports_the_city_that_actually_ran(state_dir, tmp_path, monkeypatch):
     """The dangerous bug: status defaulted to Singapore whatever you scraped."""
-    data = tmp_path / "data"
-    data.mkdir()
-    csv = data / "venues_london_2026-09-20.csv"
-    csv.write_text("venue_id\n", encoding="utf-8")
-    monkeypatch.setattr(state, "DATA_DIR", data)
+    from beer_in_this_town.config import stage_path
+
+    csv = stage_path("london", "3_venues.csv")
+    csv.parent.mkdir(parents=True, exist_ok=True)
+    csv.write_text("venue_id\n1\n", encoding="utf-8")
     state.record_run(query="london", map_title="London Bars", csv_path=csv)
 
     # next_actions short-circuits to bootstrap when there is no session, so the
@@ -174,7 +174,6 @@ def test_status_still_sees_a_pre_upgrade_pin_journal(state_dir, tmp_path, monkey
     (tmp_path / "pinned.json").write_text(
         json.dumps({"Ghost Whale | None": "ok", "Smith Street | None": "failed"}),
         encoding="utf-8")
-    monkeypatch.setattr(state, "DATA_DIR", tmp_path)
 
     session = tmp_path / "storage_state.json"
     session.write_text("{}", encoding="utf-8")

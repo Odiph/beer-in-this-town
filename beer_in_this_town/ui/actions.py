@@ -186,7 +186,7 @@ def verify_accounts(s: Settings, say: Say, mark: Mark) -> dict:
 
 
 def check_selectors(s: Settings, say: Say, mark: Mark) -> dict:
-    """One request: is the tool still able to read an Untappd venue page?
+    """One request: is the tool still able to read Untappd's venue pages?
 
     Separate from the accounts, and worth its own button, because it fails for
     a completely different reason -- the site changed -- and the fix is a code
@@ -194,22 +194,15 @@ def check_selectors(s: Settings, say: Say, mark: Mark) -> dict:
     only: web search is gone from the flow, so probing it would test nothing
     the tool still uses.
     """
-    import inspect
-
     from ..cli import cmd_selfcheck
 
     say("Checking a known venue page.")
-    say("One paced request, parsed with the same selectors enrich uses.",
+    say("One paced request. Venue pages are what enrichment reads.",
         aside=True)
 
-    # `probe_search` goes away with web search; ask for the venue page only
-    # while it still exists, and do not break when it has been removed.
-    extra = ({"probe_search": False}
-             if "probe_search" in inspect.signature(cmd_selfcheck).parameters
-             else {})
-    env = cmd_selfcheck(s, "american-taproom-waterloo", "7480946", **extra)
+    env = cmd_selfcheck(s, "american-taproom-waterloo", "7480946")
     if env.ok:
-        say("The venue page parsed. Selectors are alive.")
+        say("The page parsed. Selectors are alive.")
     else:
         say(f"Failed: {env.error.message if env.error else 'unknown'}")
         say("This one is not something you can fix in a browser — it means "
