@@ -277,7 +277,7 @@ def cmd_doctor(s: Settings, emulator=None) -> Envelope:
         data["playwright"] = "ok"
     except ImportError:
         problems.append(
-            "playwright missing (only needed for bootstrap/pin) "
+            "playwright missing (needed for sign-in, enrich, pin and notes) "
             "-- pip install -e \".[browser]\""
         )
 
