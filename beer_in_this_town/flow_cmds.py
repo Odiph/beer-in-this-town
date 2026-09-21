@@ -41,6 +41,7 @@ from .export import (
     write_kml,
 )
 from .models import CSV_FIELDS, Venue, VenueRef
+from .parsers import StatsLoginRequired
 
 log = logging.getLogger(__name__)
 
@@ -160,13 +161,19 @@ def cmd_enrich(s: Settings, city: str, in_path: str | None = None, *,
         return src
     swept = [v for v, _ in read_stage(src)]
 
-    if search is not None and fetch is not None:
-        rows, report = _enrich(swept, city, search, fetch)
-    else:
-        outcome = _enrich_live(s, swept, city)
-        if isinstance(outcome, Envelope):
-            return outcome
-        rows, report = outcome
+    try:
+        if search is not None and fetch is not None:
+            rows, report = _enrich(swept, city, search, fetch)
+        else:
+            outcome = _enrich_live(s, swept, city)
+            if isinstance(outcome, Envelope):
+                return outcome
+            rows, report = outcome
+    except StatsLoginRequired as exc:
+        return fail("enrich", Problem(
+            code="not_signed_in",
+            message=f"The Untappd session is signed out or expired ({exc}).",
+            remedy=_SIGN_IN_REMEDY))
 
     out = write_stage(stage_path(city, ENRICHED_CSV), [
         {**v.to_row(), "sweep_name": res.name, "resolution": res.status,
@@ -198,14 +205,29 @@ def _enrich(swept: list[Venue], city: str, search: Search, fetch: Fetch):
     return enrich_rows(swept, city, search, fetch)
 
 
+_SIGN_IN_REMEDY = (
+    "Ask the human to sign in to untappd.com: run `beertown ui` and use the "
+    "Accounts step (it needs their password, so an agent cannot do it). Then "
+    "`verify --json`, then re-run this command. Nothing was written.")
+
+
 def _enrich_live(s: Settings, swept: list[Venue], city: str):
     """The real search and fetch, with the robots check `run` had."""
-    from .http_client import PoliteClient
+    from .http_client import PoliteClient, _cookies_from_storage_state
     from .resolve import BrowserNameSearch, page_fetcher
 
     if not any(v.has_coords for v in swept):
         # Nothing can be matched without a pin; do not open a browser for it.
         return _enrich(swept, city, lambda _q: [], _no_fetch)
+    # Signed out, Untappd hides the stats on every unverified venue page --
+    # measured: 4 of 7 Tel Aviv pages. Refuse before spending one request.
+    if not _cookies_from_storage_state(s.storage_state, "untappd.com"):
+        return fail("enrich", Problem(
+            code="not_signed_in",
+            message="No Untappd session: signed out, Untappd shows venue "
+                    "stats only for verified venues, so most of the map "
+                    "would come back without numbers.",
+            remedy=_SIGN_IN_REMEDY))
     with PoliteClient(s) as client:
         if s.respect_robots and client.robots_disallows_scraping():
             return fail("enrich", Problem(

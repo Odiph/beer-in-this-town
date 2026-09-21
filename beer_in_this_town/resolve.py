@@ -67,6 +67,7 @@ from .http_client import (
     TransportUnavailable,
 )
 from .models import Venue, VenueRef
+from .parsers import StatsLoginRequired
 
 log = logging.getLogger(__name__)
 
@@ -87,7 +88,10 @@ MAX_FETCHES_PER_NAME = 2
 # Deliberate stops, not per-venue failures. Same rule as `fetch_venues`:
 # swallowing one keeps firing a request per remaining venue into an active
 # rate limit, which is exactly what the client exists to prevent.
-_STOPS = (RateLimitTripped, BudgetExceeded, TransportUnavailable)
+# A login-gated venue page is a stop too: signed out, nearly every page is
+# gated, and carrying on spends the request budget on pages with no stats.
+_STOPS = (RateLimitTripped, BudgetExceeded, TransportUnavailable,
+          StatsLoginRequired)
 
 # The app's bilingual suffix, `Name (שם)`, and `Name - Branch`.
 _SECONDARY = re.compile(r"\s*(\(.*|\s-\s.*|\s–\s.*)$")
@@ -485,6 +489,12 @@ def page_fetcher(client: PoliteClient) -> Callable[[VenueRef], Venue]:
     from .parsers import parse_venue_stats
 
     def fetch(ref: VenueRef) -> Venue:
-        return parse_venue_stats(client.get(ref.url), ref)
+        try:
+            return parse_venue_stats(client.get(ref.url), ref)
+        except StatsLoginRequired:
+            # Cached, the gated page would outlive the sign-in by 12h and the
+            # re-run the remedy asks for would read it again.
+            client.forget(ref.url)
+            raise
 
     return fetch

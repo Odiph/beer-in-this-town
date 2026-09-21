@@ -272,6 +272,15 @@ class PoliteClient:
         key = url + ("?" + urlencode(sorted((params or {}).items())) if params else "")
         return CACHE_DIR / (hashlib.sha256(key.encode()).hexdigest() + ".html")
 
+    def forget(self, url: str, params: dict | None = None) -> None:
+        """Drop one cached page, so the next `get` fetches it again."""
+        try:
+            self._cache_path(url, params).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("Could not drop the cached copy of %s (%s).", url, exc)
+
     def _read_cache(self, path: Path) -> str | None:
         if not path.exists():
             return None

@@ -215,6 +215,8 @@ def test_enrich_refuses_when_robots_disallows(monkeypatch):
             return True
 
     monkeypatch.setattr(http_client, "PoliteClient", Client)
+    monkeypatch.setattr(http_client, "_cookies_from_storage_state",
+                        lambda path, domain: {"untappd_user_v3_e": "x"})
     write_sweep([swept("Lauter")])
     env = cmd_enrich(S, CITY)
     assert not env.ok and env.error.code == "robots_disallow"
