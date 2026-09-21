@@ -159,13 +159,22 @@ def _screen_size(serial: str, run: Runner) -> Check:
     want = f"{EXPECTED_SIZE[0]}x{EXPECTED_SIZE[1]}"
     if size == EXPECTED_SIZE:
         return Check("screen_size", True, want, "")
+    # BlueStacks' stock 1600x900 is the same screen on its side: `wm size`
+    # reports the physical landscape size, and Untappd, a portrait-only app,
+    # is drawn at 900x1600 on it. Measured 2026-09-22 -- with the app open,
+    # the display is cur=900x1600 and a screencap is 900x1600.
+    if size == EXPECTED_SIZE[::-1]:
+        return Check("screen_size", True,
+                     f"{size[0]}x{size[1]} (landscape); Untappd runs "
+                     f"portrait at {want}", "")
     detail = (f"the display is {size[0]}x{size[1]}, not {want}." if size
               else f"could not read the display size: {out.strip()[:200]}")
     return Check(
         "screen_size", False, detail,
-        f"In BlueStacks go to Settings -> Display, choose portrait and a "
-        f"custom resolution of {want}, then restart BlueStacks. The sweep's "
-        f"gestures are calibrated for exactly that size.")
+        f"In BlueStacks go to Settings -> Display and set the resolution to "
+        f"1600x900 (landscape, the default) or {want} (portrait), then "
+        f"restart BlueStacks. The sweep's gestures are calibrated for the "
+        f"portrait {want} screen Untappd is drawn on.")
 
 
 def check_emulator(serial: str | None = None, *,

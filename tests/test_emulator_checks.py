@@ -119,12 +119,22 @@ def test_a_package_that_merely_starts_with_the_name_does_not_count():
 
 
 @pytest.mark.parametrize("size", ["Physical size: 1080x1920\n",
-                                  "Physical size: 1600x900\n"])
+                                  "Physical size: 1920x1080\n"])
 def test_the_wrong_screen_size_is_refused(size):
     bad = first_failure(check_emulator(SERIAL, which=have_adb,
                                        run=runner(size=size)))
     assert bad.name == "screen_size"
     assert "900x1600" in bad.remedy
+
+
+def test_stock_landscape_bluestacks_is_accepted():
+    """BlueStacks' default 1600x900 draws the portrait Untappd app at
+    900x1600 -- the size the sweep is calibrated for. Refusing it failed a
+    working setup on the first live run."""
+    checks = check_emulator(SERIAL, which=have_adb,
+                            run=runner(size="Physical size: 1600x900\n"))
+    assert emulator_ready(checks)
+    assert "portrait" in checks[-1].detail
 
 
 def test_an_override_size_wins_over_the_physical_one():
