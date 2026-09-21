@@ -10,10 +10,11 @@ this module, and each one was expensive to learn:
 2. **A search returns a result set; the map draws the part of it inside the
    viewport.** Panning re-draws, it does not re-query. So a pin count falling
    after a pan means clipping, not a smaller city.
-3. **The result set is capped at about 58.** Two independent Tel Aviv
-   searches both returned exactly 58 while Haifa returned 37. A cell that
-   comes back at the cap is truncated and must be subdivided; one that comes
-   back under it is probably complete.
+3. **The result set is capped at 60**, measured across seven cities on three
+   continents: Portland 60, Reykjavik 60, Berlin 58, Tel Aviv 58, Jerusalem
+   45, Haifa 37, Eilat 16. A cell near the cap is truncated and must be
+   subdivided; one well under it is probably complete. Reykjavik has 130k
+   people and still hits it, so subdivision is the normal path.
 
 Everything here is a pure function over a dump, so it is testable without a
 device and costs no tokens at runtime -- which is the point. What made this
@@ -28,6 +29,7 @@ import pytest
 
 from beer_in_this_town.app_map import (
     RESULT_SET_CAP,
+    TRUNCATION_THRESHOLD,
     WrongScreen,
     categories_in,
     fit_transform,
@@ -110,11 +112,23 @@ def test_duplicate_pins_are_collapsed():
 # --- the truncation rule --------------------------------------------------
 
 def test_a_cell_at_the_cap_is_truncated():
-    """Two independent Tel Aviv searches both returned exactly 58; Haifa
-    returned 37. At the cap, assume there is more and subdivide."""
+    """Measured across seven cities: Portland 60, Reykjavik 60, Berlin 58,
+    Tel Aviv 58, Jerusalem 45, Haifa 37, Eilat 16. At the cap, assume there
+    is more and subdivide."""
     assert is_truncated(RESULT_SET_CAP) is True
     assert is_truncated(RESULT_SET_CAP + 5) is True
-    assert is_truncated(37) is False
+    assert is_truncated(58) is True
+    assert is_truncated(45) is False   # Jerusalem, genuinely complete
+    assert is_truncated(37) is False   # Haifa
+    assert is_truncated(16) is False   # Eilat
+
+
+def test_the_threshold_sits_below_the_cap_to_survive_dedup():
+    """Pins are deduplicated by name, so a full result set of 60 with six
+    repeats yields 54 unique. A rule of `>= cap` would call that complete and
+    lose everything behind it."""
+    assert TRUNCATION_THRESHOLD < RESULT_SET_CAP
+    assert is_truncated(RESULT_SET_CAP - 4) is True
 
 
 def test_the_cap_is_not_a_guess_about_emptiness():
