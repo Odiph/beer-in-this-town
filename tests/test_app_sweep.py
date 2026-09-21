@@ -65,6 +65,16 @@ class FakeDevice:
     def tap(self, x, y):
         self.actions.append(f"tap({x},{y})")
 
+    def type_text(self, text):
+        self.actions.append(f"type({text})")
+
+    def press_enter(self):
+        self.actions.append("enter")
+
+    def launch(self, package):
+        self.actions.append(f"launch({package})")
+        self.focus = MAP_PACKAGE
+
     def swipe(self, x1, y1, x2, y2, ms):
         self.actions.append(f"swipe({x2 - x1},{y2 - y1})")
 
@@ -303,3 +313,87 @@ def test_the_filter_stops_when_the_panel_stops_changing():
     dev = FakeDevice([_panel([("Bar", 6, True)])])
     apply_drinking_filter(dev, settle_max_s=0)
     assert sum(1 for a in dev.actions if a.startswith("swipe")) <= 1
+
+
+# --- navigation guards ----------------------------------------------------
+
+def test_navigation_refuses_to_act_on_the_wrong_screen():
+    """`require_map_screen` protects the harvest; this protects the
+    navigation. A measurement run once failed only *after* its search taps had
+    landed, because the app was on a venue page -- so a city name was typed
+    into whatever was focused."""
+    from beer_in_this_town.app_sweep import ensure_map_screen
+
+    venue = "<?xml version='1.0'?><hierarchy><node class='android.widget.TextView'"             " text='Venue' bounds='[1,1][2,2]'/></hierarchy>"
+    dev = FakeDevice([venue])
+    with pytest.raises(WrongScreen):
+        ensure_map_screen(dev, relaunch=False, settle_max_s=0)
+
+
+def test_navigation_relaunches_rather_than_pressing_back():
+    """Backing out of an unexpected screen emptied the app to the BlueStacks
+    launcher twice during the research. Relaunching is deterministic."""
+    from beer_in_this_town.app_sweep import ensure_map_screen
+
+    # The focus check fails before any dump is read, so the queue only needs
+    # what the app shows once it has been relaunched.
+    dev = FakeDevice([dump_with(["Lauter"])], focus="com.uncube.launcher3")
+    ensure_map_screen(dev, settle_max_s=0)
+    assert any(a.startswith("launch(") for a in dev.actions)
+    assert not any("keyevent" in a for a in dev.actions)
+
+
+def test_a_city_search_checks_the_screen_before_typing():
+    from beer_in_this_town.app_sweep import search_city
+
+    dev = FakeDevice([dump_with(["Lauter"])])
+    search_city(dev, "Tel Aviv", settle_max_s=0)
+    order = [a for a in dev.actions if a.startswith(("tap", "type", "enter"))]
+    assert "type(Tel Aviv)" in order
+    assert order.index("type(Tel Aviv)") < order.index("enter")
+
+
+# --- the resume journal ---------------------------------------------------
+
+def test_a_sweep_resumes_from_its_journal(tmp_path, monkeypatch):
+    """A sweep is minutes of real gestures against a real account. Losing it
+    to a crash on the nineteenth cell is expensive."""
+    from beer_in_this_town import app_sweep
+
+    monkeypatch.setattr(app_sweep, "STATE_DIR", tmp_path)
+    app_sweep.save_journal("Tel Aviv", app_sweep.SweepResult(
+        venues=[app_sweep.Venue("Lauter", 1, 2)], cells_visited=3))
+
+    dev = FakeDevice([dump_with(["Ursa"])])
+    out = sweep(dev, CELL, settle_max_s=0, city="Tel Aviv")
+    assert {v.name for v in out.venues} == {"Lauter", "Ursa"}
+    assert out.cells_visited == 4
+
+
+def test_the_journal_is_written_after_every_cell(tmp_path, monkeypatch):
+    """Writing once at the end makes the journal useless for the only case
+    it exists to serve."""
+    from beer_in_this_town import app_sweep
+
+    monkeypatch.setattr(app_sweep, "STATE_DIR", tmp_path)
+    dev = FakeDevice([dump_with(["Lauter"])])
+    sweep(dev, CELL, settle_max_s=0, city="Tel Aviv")
+    assert app_sweep.journal_path("Tel Aviv").exists()
+    assert "Lauter" in app_sweep.journal_path("Tel Aviv").read_text(encoding="utf-8")
+
+
+def test_journals_are_scoped_per_city(tmp_path, monkeypatch):
+    """An unscoped journal would let a Haifa sweep resume into a Tel Aviv
+    corpus, the same trap `pinned_<list>.json` is scoped against."""
+    from beer_in_this_town import app_sweep
+
+    monkeypatch.setattr(app_sweep, "STATE_DIR", tmp_path)
+    assert app_sweep.journal_path("Tel Aviv") != app_sweep.journal_path("Haifa")
+
+
+def test_an_unreadable_journal_starts_fresh_rather_than_crashing(tmp_path, monkeypatch):
+    from beer_in_this_town import app_sweep
+
+    monkeypatch.setattr(app_sweep, "STATE_DIR", tmp_path)
+    app_sweep.journal_path("Tel Aviv").write_text("{ broken", encoding="utf-8")
+    assert app_sweep.load_journal("Tel Aviv").venues == []

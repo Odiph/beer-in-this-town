@@ -22,7 +22,11 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
+from .adb_device import AdbUnavailable
 from .agent_io import Envelope, Problem, emit, fail, log_to_stderr
+from .app_categories import CategoryPanelError
+from .app_map import WrongScreen
+from .app_sweep import DeadPan
 from .config import DATA_DIR, SEARCH_URL, Settings, ensure_dirs
 from .export import (
     commit_run,
@@ -57,6 +61,7 @@ from .mymaps_upload import manual_instructions, upload_kml
 from .notes import MAX_GAP_S as NOTES_MAX_GAP
 from .notes import MIN_GAP_S as NOTES_MIN_GAP
 from .notes import add_notes, notes_from_csv
+from .overpass import OverpassUnavailable
 from .parsers import (
     ClientRenderedSearch,
     ParseError,
@@ -1550,6 +1555,49 @@ def main(argv: list[str] | None = None) -> int:
             code="places_unavailable",
             message=str(exc),
             remedy=_PLACES_REMEDY,
+        ))
+    except OverpassUnavailable as exc:
+        env = fail(args.cmd, Problem(
+            code="overpass_unavailable",
+            message=str(exc),
+            remedy="Overpass is volunteer-run and sheds load; wait and "
+                   "re-run, or set OVERPASS_URL to a mirror such as "
+                   "https://overpass.kumi.systems/api/interpreter. Nothing "
+                   "was written.",
+        ))
+    except AdbUnavailable as exc:
+        env = fail(args.cmd, Problem(
+            code="adb_unavailable",
+            message=str(exc),
+            remedy="Check the emulator is running and `adb devices` lists "
+                   "it. Nothing was written.",
+        ))
+    except DeadPan as exc:
+        env = fail(args.cmd, Problem(
+            code="app_pan_failed",
+            message=str(exc),
+            remedy="Gestures are not reaching the map. Bring the Untappd map "
+                   "to the front, dismiss any dialog, and re-run; progress "
+                   "is journalled, so the sweep resumes.",
+        ))
+    except CategoryPanelError as exc:
+        env = fail(args.cmd, Problem(
+            code="app_screen_unexpected",
+            message=str(exc),
+            remedy="The category filter was not open where it was expected. "
+                   "Re-run; the sweep re-checks the screen before acting.",
+        ))
+    except WrongScreen as exc:
+        # Last of the app handlers, because it is the most general of them.
+        # All five of these subclass RuntimeError, so without these clauses
+        # the fall-through below answers "re-run with -v" -- which is wrong
+        # advice for every one of them. Same reasoning as PlacesUnavailable
+        # above.
+        env = fail(args.cmd, Problem(
+            code="app_screen_unexpected",
+            message=str(exc),
+            remedy="The Untappd app was not showing the map. Open it on "
+                   "Discover -> View Map and re-run; progress is journalled.",
         ))
     except Exception as exc:
         log.error("Run aborted: %s", exc, exc_info=verbose)

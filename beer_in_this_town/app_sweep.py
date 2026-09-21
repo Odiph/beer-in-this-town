@@ -42,10 +42,12 @@ one, and so nothing here needs a model at runtime.
 """
 from __future__ import annotations
 
+import json
 import logging
 import random
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from .app_categories import is_drinking_category, plan_category_taps
@@ -58,6 +60,7 @@ from .app_map import (
     pins_in,
     require_map_screen,
 )
+from .config import STATE_DIR, scope_slug
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +90,11 @@ SHOW_RESULTS_BUTTON = (450, 1556) # "SHOW RESULTS"
 # How many tap-and-rescan passes the category panel gets before we accept it
 # as set. It scrolls, so one pass only reaches the visible rows.
 MAX_CATEGORY_PASSES = 10
+
+# Discover -> "View Map". Tapped by position; the row is stable in-session.
+VIEW_MAP_ROW = (450, 388)
+SEARCH_BOX = (440, 82)
+CLEAR_SEARCH = (723, 82)
 
 # `Refresh search`, found by content-desc in the live app. Kept as a constant
 # so a layout change is one edit rather than a hunt through the sweep.
@@ -135,6 +143,9 @@ class Device(Protocol):
     def dump(self) -> str: ...
     def tap(self, x: int, y: int) -> None: ...
     def swipe(self, x1: int, y1: int, x2: int, y2: int, ms: int) -> None: ...
+    def type_text(self, text: str) -> None: ...
+    def press_enter(self) -> None: ...
+    def launch(self, package: str) -> None: ...
 
 
 class DeadPan(RuntimeError):
@@ -250,6 +261,112 @@ def _pan(device: Device, dx: int, dy: int, pins: list[Pin]) -> None:
     device.swipe(cx, cy, cx + dx, cy + dy, PAN_MS)
 
 
+def journal_path(city: str) -> Path:
+    """Where a sweep of `city` records what it has already found.
+
+    Scoped by city, like `pinned_<list>.json` and `previous_run_<query>.json`
+    before it: an unscoped journal would let a Haifa sweep resume into a Tel
+    Aviv corpus.
+    """
+    return STATE_DIR / f"swept_{scope_slug(city)}.json"
+
+
+def load_journal(city: str) -> SweepResult:
+    """Resume a sweep, or start one.
+
+    A sweep is minutes of real gestures against a real account, so losing it
+    to a crash on the nineteenth cell is expensive. What is *not* recorded is
+    which cells were visited: the geometry is cheap to redo and a resumed
+    sweep re-walking a cell costs one dump, while a wrongly-skipped cell
+    costs venues silently.
+    """
+    path = journal_path(city)
+    if not path.exists():
+        return SweepResult()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        log.warning("Sweep journal for %s was unreadable; starting fresh.", city)
+        return SweepResult()
+    return SweepResult(
+        venues=[Venue(**v) for v in raw.get("venues", [])],
+        cells_visited=raw.get("cells_visited", 0),
+        truncated_cells=raw.get("truncated_cells", 0),
+        skipped_cells=raw.get("skipped_cells", 0),
+        hit_depth_limit=raw.get("hit_depth_limit", False),
+        warnings=list(raw.get("warnings", [])))
+
+
+def save_journal(city: str, result: SweepResult) -> None:
+    """Write progress after every cell, not at the end.
+
+    Writing once at the end would make the journal useless for the only case
+    it exists to serve.
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "city": city,
+        "venues": [{"name": v.name, "x": v.x, "y": v.y} for v in result.venues],
+        "cells_visited": result.cells_visited,
+        "truncated_cells": result.truncated_cells,
+        "skipped_cells": result.skipped_cells,
+        "hit_depth_limit": result.hit_depth_limit,
+        "warnings": result.warnings,
+    }
+    journal_path(city).write_text(
+        json.dumps(payload, indent=1, ensure_ascii=False), encoding="utf-8")
+
+
+def ensure_map_screen(device: Device, relaunch: bool = True,
+                      settle_min_s: float = SETTLE_MIN_S,
+                      settle_max_s: float = SETTLE_MAX_S) -> None:
+    """Refuse to act until the map is actually in front of us.
+
+    `require_map_screen` protects the *harvest*; this protects the
+    *navigation*, which is a separate hole. A measurement run once failed
+    only after its search taps had already landed, because the app was on a
+    venue page from earlier work -- so a city name was typed into whatever
+    happened to be focused. Unattended, that is how a sweep searches nothing
+    and reports a small city.
+
+    Recovering by pressing Back is what emptied the app to the BlueStacks
+    launcher twice during the research, so this relaunches instead.
+    """
+    try:
+        _require_app(device)
+        require_map_screen(device.dump())
+        return
+    except WrongScreen:
+        if not relaunch:
+            raise
+
+    log.warning("Not on the map; relaunching the app to get there.")
+    device.launch(MAP_PACKAGE)
+    _settle(settle_min_s, settle_max_s)
+    device.tap(*VIEW_MAP_ROW)
+    _settle(settle_min_s, settle_max_s)
+
+    _require_app(device)
+    require_map_screen(device.dump())
+
+
+def search_city(device: Device, query: str,
+                settle_min_s: float = SETTLE_MIN_S,
+                settle_max_s: float = SETTLE_MAX_S) -> None:
+    """Move the viewport by name, from a screen known to be the map."""
+    ensure_map_screen(device, settle_min_s=settle_min_s,
+                      settle_max_s=settle_max_s)
+    device.tap(*CLEAR_SEARCH)
+    _settle(settle_min_s / 2, settle_max_s / 2)
+    device.tap(*SEARCH_BOX)
+    _settle(settle_min_s / 2, settle_max_s / 2)
+    device.type_text(query)
+    _settle(settle_min_s / 2, settle_max_s / 2)
+    device.press_enter()
+    # A search is a network round trip, so it gets longer than a gesture.
+    _settle(settle_min_s * 2, settle_max_s * 2)
+
+
 def apply_drinking_filter(device: Device,
                           settle_min_s: float = 1.0,
                           settle_max_s: float = 2.0) -> list[str]:
@@ -304,7 +421,7 @@ def _harvest_screen(device: Device) -> list[Pin]:
 
 
 def sweep(device: Device, cell: Cell, max_depth: int = 3,
-          verify_pans: bool = False,
+          verify_pans: bool = False, city: str | None = None,
           settle_min_s: float = SETTLE_MIN_S,
           settle_max_s: float = SETTLE_MAX_S,
           _depth: int = 0,
@@ -325,7 +442,15 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
     real device, where a dump taken mid-redraw reads as a thinner city rather
     than as an error.
     """
-    result = _result if _result is not None else SweepResult()
+    if _result is not None:
+        result = _result
+    elif city:
+        result = load_journal(city)
+        if result.venues:
+            log.info("Resuming sweep of %s with %d venue(s) already found.",
+                     city, len(result.venues))
+    else:
+        result = SweepResult()
 
     if _depth == 0:
         _require_app(device)
@@ -344,6 +469,9 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
         if pin.name not in known:
             known.add(pin.name)
             result.venues.append(Venue(name=pin.name, x=pin.x, y=pin.y))
+
+    if city:
+        save_journal(city, result)
 
     if not is_truncated(len(pins)):
         log.info("Cell complete: %d venue(s).", len(pins))
@@ -399,7 +527,7 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
 
         # The child re-searches on entry, so nothing is needed here.
         sweep(device, cell, max_depth=max_depth, verify_pans=verify_pans,
-              settle_min_s=settle_min_s, settle_max_s=settle_max_s,
+              city=city, settle_min_s=settle_min_s, settle_max_s=settle_max_s,
               _depth=_depth + 1, _result=result)
 
     return result

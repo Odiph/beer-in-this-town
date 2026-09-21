@@ -109,3 +109,19 @@ class AdbDevice:
     def swipe(self, x1: int, y1: int, x2: int, y2: int, ms: int) -> None:
         self._adb("shell", "input", "swipe",
                   str(x1), str(y1), str(x2), str(y2), str(ms))
+
+    def type_text(self, text: str) -> None:
+        """`input text` takes %s for a space and nothing for a newline."""
+        self._adb("shell", "input", "text", text.replace(" ", "%s"))
+
+    def press_enter(self) -> None:
+        self._adb("shell", "input", "keyevent", "KEYCODE_ENTER")
+
+    def launch(self, package: str) -> None:
+        """Start the app fresh.
+
+        `monkey` is used rather than `am start` because it needs no activity
+        name, and the activity has changed between app versions.
+        """
+        self._adb("shell", "monkey", "-p", package,
+                  "-c", "android.intent.category.LAUNCHER", "1")
