@@ -154,12 +154,22 @@ class ReadBudget:
         if time.time() - self.window_start >= 3600:
             self.window_start, self.count = time.time(), 0
 
-    def remaining(self) -> int:
+    def _refresh(self) -> None:
+        """Take the count from disk, not from memory.
+
+        Two budgets over one file each kept their own count and overwrote the
+        other's: 20 requests alternating between them persisted as 10, so the
+        hourly ceiling under-counted by half. The file is the budget.
+        """
+        self.window_start, self.count = self._read()
         self._roll()
+
+    def remaining(self) -> int:
+        self._refresh()
         return max(0, self.s.hourly_budget - self.count)
 
     def record(self) -> None:
-        self._roll()
+        self._refresh()
         self.count += 1
         self._write()
 

@@ -235,7 +235,8 @@ def _enrich_live(s: Settings, swept: list[Venue], city: str):
                 message="Untappd's robots.txt disallows the venue pages.",
                 remedy="Stop and ask a human. Nothing was fetched.",
             ))
-        with BrowserNameSearch(s) as search:
+        # One budget for the searches and the page fetches.
+        with BrowserNameSearch(s, budget=client._budget) as search:
             return _enrich(swept, city, search, page_fetcher(client))
 
 

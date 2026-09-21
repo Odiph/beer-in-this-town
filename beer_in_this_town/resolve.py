@@ -194,7 +194,8 @@ def _search(search: Callable[[str], list[VenueRef]], query: str
             ) -> list[VenueRef] | Resolution:
     try:
         return search(query)
-    except _STOPS:
+    except _STOPS as exc:
+        log.error("Stopping enrich at the search for %r: %s", query, exc)
         raise
     except Exception as exc:  # one failed search must not end the run
         return Resolution(query, "search_failed", detail=str(exc)[:200])
@@ -244,7 +245,8 @@ def resolve_one(swept: Located,
     for ref in candidates[:MAX_FETCHES_PER_NAME]:
         try:
             page = fetch(ref)
-        except _STOPS:
+        except _STOPS as exc:
+            log.error("Stopping enrich at %s: %s", ref.url, exc)
             raise
         except Exception as exc:
             last = Resolution(swept.name, "fetch_failed",

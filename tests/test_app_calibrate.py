@@ -23,7 +23,7 @@ from beer_in_this_town.app_calibrate import (
 )
 from beer_in_this_town.app_sweep import Venue
 
-ORIGIN = (32.075318, 34.808611)
+ORIGIN = (32.080900, 34.780600)
 KX = 111_320.0 * math.cos(math.radians(ORIGIN[0]))
 KY = 110_540.0
 

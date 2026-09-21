@@ -73,3 +73,16 @@ def test_selfcheck_points_back_at_status_not_run(client):
     client()
     env = cli.cmd_selfcheck(Settings(), "ghost-whale", "1")
     assert env.next_actions == ["python -m beer_in_this_town status --json"]
+
+
+@pytest.mark.unit
+def test_a_signed_out_page_is_an_account_problem_not_stale_selectors(client):
+    """`StatsLoginRequired` is a ParseError by type. Caught as one, a
+    signed-out session told the user to fix selectors from a debug dump that
+    was never written."""
+    client(venue_html=(
+        '<div class="stats"><h3>Venue Stats</h3><div>'
+        '<a href="/login?go_to=x">Log In</a> to view Venue Stats</div></div>'))
+    env = cli.cmd_selfcheck(Settings(), "ghost-whale", "1")
+    assert env.ok is False
+    assert env.error.code == "not_signed_in"
