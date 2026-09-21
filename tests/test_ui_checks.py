@@ -40,6 +40,12 @@ def capable(monkeypatch):
         checks, "_playwright_check",
         lambda: checks.Check("playwright", "Browser automation", OK,
                              "Playwright ready", verified=True))
+    # The emulator gates the accounts step in v0.2. It is checked by a job,
+    # never detected, so a capable machine is one whose check has passed.
+    monkeypatch.setattr(
+        checks, "_emulator_check",
+        lambda result: checks.Check("emulator", "Android emulator", OK,
+                                    "ready", verified=True))
 
 
 def _row(rows, key):
@@ -367,13 +373,13 @@ def test_only_a_verified_setup_asks_for_the_city(blank, capable):
     command that builds a five-venue corpus.
     """
     half = {"google": VerifyResult(True, "ok")}
-    assert _steps_for(blank, half).key != "run"
+    assert _steps_for(blank, half).key != "city"
 
     both = {"google": VerifyResult(True, "ok"),
             "untappd": VerifyResult(True, "ok")}
     step = _steps_for(blank, both)
-    assert step.key == "run"
-    assert step.done is True
+    assert step.key == "city"
+    assert step.done is False, "choosing a city is not the end any more"
     assert "city" in step.title.lower()
 
 
@@ -386,17 +392,18 @@ def test_the_page_offers_a_way_to_make_an_account(blank):
     assert "accounts.google.com/signup" in page
 
 
-# --- the three-stage wizard ----------------------------------------------
+# --- the six-stage wizard ------------------------------------------------
 
-def _wizard_for(s, proven=None):
+def _wizard_for(s, proven=None, **kw):
     from beer_in_this_town.ui.checks import wizard
-    return wizard(checks.next_step(checks.collect(s, proven)))
+    return wizard(checks.next_step(checks.collect(s, proven), **kw))
 
 
 @pytest.mark.unit
-def test_the_wizard_is_three_stages(blank):
+def test_the_wizard_is_the_whole_flow(blank):
     stages = _wizard_for(blank)
-    assert [g.key for g in stages] == ["ready", "accounts", "city"]
+    assert [g.key for g in stages] == [
+        "ready", "emulator", "accounts", "city", "build", "maps"]
 
 
 @pytest.mark.unit
@@ -411,14 +418,17 @@ def test_every_step_belongs_to_exactly_one_stage():
 
     owned = [k for _, _, keys in WIZARD for k in keys]
     assert sorted(owned) == sorted(set(owned)), "a step is claimed twice"
-    for step_key in ("chrome", "playwright", "connect", "verify", "run"):
+    for step_key in ("chrome", "playwright", "emulator", "connect", "verify",
+                     "city", "build", "maps"):
         assert step_key in owned, f"{step_key} belongs to no stage"
 
 
 @pytest.mark.unit
 def test_a_fresh_machine_sits_on_accounts_with_ready_behind_it(blank, capable):
     by_key = {g.key: g.state for g in _wizard_for(blank)}
-    assert by_key == {"ready": "done", "accounts": "current", "city": "todo"}
+    assert by_key == {"ready": "done", "emulator": "done",
+                      "accounts": "current", "city": "todo",
+                      "build": "todo", "maps": "todo"}
 
 
 @pytest.mark.unit
@@ -431,10 +441,50 @@ def test_a_machine_without_chrome_sits_on_ready(blank, monkeypatch):
 
 
 @pytest.mark.unit
-def test_both_accounts_verified_finishes_every_stage(blank, capable):
+def test_verified_accounts_lead_through_city_and_build_to_maps(blank, capable):
+    """Each later stage is reached from disk, not from anything clicked."""
     proven = {"google": VerifyResult(True, "ok"),
               "untappd": VerifyResult(True, "ok")}
-    assert all(g.state == "done" for g in _wizard_for(blank, proven))
+
+    def at(**kw):
+        return next(g.key for g in _wizard_for(blank, proven, **kw)
+                    if g.state == "current")
+
+    assert at() == "city"
+    intent = {"query": "Tel Aviv", "map_title": "Tel Aviv Bars"}
+    assert at(intent=intent) == "build"
+    stages = _wizard_for(blank, proven, intent=intent, venues_ready=True)
+    assert all(g.state == "done" for g in stages),         "the last step is manual, so reaching it is the end of the wizard"
+
+
+@pytest.mark.unit
+def test_an_unchecked_emulator_comes_before_the_accounts(blank, monkeypatch):
+    monkeypatch.setattr(
+        checks, "_playwright_check",
+        lambda: checks.Check("playwright", "Browser automation", OK,
+                             "ready", verified=True))
+    step = _steps_for(blank)
+    assert step.key == "emulator"
+    assert step.action == "emulator", "no way to run the check from the card"
+
+
+@pytest.mark.unit
+def test_a_failing_emulator_check_names_the_first_thing_to_fix(blank):
+    result = {"ready": False, "checks": [
+        {"name": "adb_on_path", "ok": True, "detail": "adb found.",
+         "remedy": ""},
+        {"name": "device_connected", "ok": False,
+         "detail": "127.0.0.1:5555 is not connected.",
+         "remedy": "Run adb connect 127.0.0.1:5555."},
+    ]}
+    row = _row(checks.collect(blank, {"emulator": result}), "emulator")
+    assert row.state == ATTENTION
+    assert "not connected" in row.detail
+    assert "adb connect" in row.fix
+
+    ok = _row(checks.collect(blank, {"emulator": {"ready": True,
+                                                  "checks": []}}), "emulator")
+    assert ok.state == OK and ok.verified
 
 
 @pytest.mark.unit

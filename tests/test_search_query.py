@@ -65,12 +65,13 @@ def test_the_city_step_explains_what_the_query_decides():
     rows = (
         Check("chrome", "Chrome", OK, "Version 151", verified=True),
         Check("playwright", "Browser automation", OK, "ready", verified=True),
+        Check("emulator", "Android emulator", OK, "ready", verified=True),
         Check("google", "Google account", OK, "signed in", verified=True),
         Check("untappd", "Untappd account", OK, "signed in", verified=True),
     )
     step = next_step(rows)
 
-    assert step.key == "run"
+    assert step.key == "city"
     assert step.notes, "the step that asks for a city explains nothing about it"
 
 
@@ -81,12 +82,14 @@ def test_the_notes_describe_mechanics_not_taste():
     Advice about what makes a good night out ages badly and nobody can verify
     it; "this names the diff baseline" is either true or a bug.
     """
-    from beer_in_this_town.ui.checks import SEARCH_NOTES
+    from beer_in_this_town.ui.checks import CITY_NOTES
 
-    headings = [h for h, _ in SEARCH_NOTES]
+    headings = [h for h, _ in CITY_NOTES]
     assert len(headings) == len(set(headings))
-    bodies = " ".join(b for _, b in SEARCH_NOTES)
-    for claim in ("venue search", "diff", "Bars"):
+    bodies = " ".join(b for _, b in CITY_NOTES)
+    # v0.2: the city names the data folder, centres the sweep, and suggests
+    # the list name. Web search and the diff baseline are gone.
+    for claim in ("data/", "sweep", "Bars"):
         assert claim.lower() in bodies.lower() or \
             any(claim.lower() in h.lower() for h in headings), \
             f"the notes never mention {claim}"

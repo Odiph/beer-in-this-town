@@ -2,9 +2,9 @@
 
 Each function here is the `work` half of a `jobs.Job`: it takes a `say`
 callback and returns a result dict. Nothing in this module writes to a Google
-account -- the dashboard's scope stops at getting a user connected, so `pin`
-and `notes` have no entry point here at all, and that is a deliberate absence
-rather than an oversight.
+account -- the dashboard's scope stops at getting a user set up and showing
+them the commands, so `pin`, `notes` and `sweep` have no entry point here,
+and that is a deliberate absence rather than an oversight.
 
 The narration is the feature. A person watching a blank screen for four
 minutes cannot tell a working sign-in from a hung one, and the two need
@@ -186,22 +186,30 @@ def verify_accounts(s: Settings, say: Say, mark: Mark) -> dict:
 
 
 def check_selectors(s: Settings, say: Say, mark: Mark) -> dict:
-    """Two requests: is the tool still able to read Untappd's pages?
+    """One request: is the tool still able to read an Untappd venue page?
 
     Separate from the accounts, and worth its own button, because it fails for
     a completely different reason -- the site changed -- and the fix is a code
-    change rather than anything the user can do in a browser.
+    change rather than anything the user can do in a browser. Venue pages
+    only: web search is gone from the flow, so probing it would test nothing
+    the tool still uses.
     """
+    import inspect
+
     from ..cli import cmd_selfcheck
 
-    say("Checking the venue page and the search page.")
-    say("Two paced requests. The gap between them is deliberate — a fixed, "
-        "fast cadence is what makes a client look like a script.", aside=True)
+    say("Checking a known venue page.")
+    say("One paced request, parsed with the same selectors enrich uses.",
+        aside=True)
 
-    env = cmd_selfcheck(s, "american-taproom-waterloo", "7480946",
-                        probe_search=True)
+    # `probe_search` goes away with web search; ask for the venue page only
+    # while it still exists, and do not break when it has been removed.
+    extra = ({"probe_search": False}
+             if "probe_search" in inspect.signature(cmd_selfcheck).parameters
+             else {})
+    env = cmd_selfcheck(s, "american-taproom-waterloo", "7480946", **extra)
     if env.ok:
-        say("Both pages parsed. Selectors are alive.")
+        say("The venue page parsed. Selectors are alive.")
     else:
         say(f"Failed: {env.error.message if env.error else 'unknown'}")
         say("This one is not something you can fix in a browser — it means "
@@ -211,8 +219,42 @@ def check_selectors(s: Settings, say: Say, mark: Mark) -> dict:
             "error": env.error.code if env.error else ""}
 
 
+def check_emulator(s: Settings, say: Say, mark: Mark) -> dict:
+    """Run the emulator checks and narrate each one. Reads only, via adb.
+
+    A job rather than part of the page poll: it shells out to adb four
+    times, which is fine once on request and wrong once a second.
+    """
+    from ..emulator_checks import check_emulator as run_checks
+    from ..emulator_checks import emulator_ready
+
+    serial = getattr(s, "adb_serial", None)
+    say(f"Checking the emulator at {serial or 'the default address'}.")
+    say("Four read-only adb calls: is adb installed, is BlueStacks "
+        "connected, is Untappd installed, is the screen 900x1600.", aside=True)
+    try:
+        found = run_checks(serial)
+    except Exception as exc:  # the contract says it never raises; be sure
+        log.error("emulator checks raised: %s", exc)
+        return {"emulator": {"ready": False, "checks": [], "at": time.time(),
+                             "error": f"The check itself failed: {exc}"}}
+    rows = []
+    for c in found:
+        say(("OK: " if c.ok else "Not yet: ") + f"{c.name} — {c.detail}")
+        if not c.ok and c.remedy:
+            say(c.remedy, aside=True)
+        rows.append({"name": c.name, "ok": c.ok, "detail": c.detail,
+                     "remedy": c.remedy})
+    ready = emulator_ready(found)
+    say("The emulator is ready." if ready
+        else "Not ready yet — the first row that failed says what to do.")
+    return {"emulator": {"ready": ready, "checks": rows, "at": time.time(),
+                         "error": ""}}
+
+
 ACTIONS: dict[str, tuple[str, Callable[..., dict]]] = {
     "connect": ("Connecting your accounts", connect),
     "verify": ("Testing both accounts", verify_accounts),
-    "selectors": ("Checking Untappd's pages", check_selectors),
+    "selectors": ("Checking Untappd's venue page", check_selectors),
+    "emulator": ("Checking the emulator", check_emulator),
 }
