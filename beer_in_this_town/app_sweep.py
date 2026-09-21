@@ -82,6 +82,7 @@ CARD_TOP = 1242
 # Controls on the map and in the filter panel. Tapped by position because
 # their bounds are stable within a session; the descriptions record what each
 # one is, so a layout change is a lookup rather than a hunt.
+REFRESH_BUTTON = (855, 315)      # content-desc "Refresh search"
 FILTERS_BUTTON = (774, 81)        # content-desc "filters"
 CATEGORY_ROW = (450, 185)         # "Filter by Category"
 APPLY_BUTTON = (845, 78)          # "APPLY"
@@ -224,7 +225,7 @@ def _refresh(device: Device) -> None:
     session; `REFRESH_DESC` records what it is so a future reader can find it
     by description instead if the layout moves.
     """
-    device.tap(855, 315)
+    device.tap(*REFRESH_BUTTON)
 
 
 def _clear_origin(pins: list[Pin], dx: int, dy: int) -> tuple[int, int]:
@@ -422,6 +423,7 @@ def _harvest_screen(device: Device) -> list[Pin]:
 
 def sweep(device: Device, cell: Cell, max_depth: int = 3,
           verify_pans: bool = False, city: str | None = None,
+          filter_drinking: bool = False,
           settle_min_s: float = SETTLE_MIN_S,
           settle_max_s: float = SETTLE_MAX_S,
           _depth: int = 0,
@@ -458,8 +460,18 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
     # Re-query for this exact viewport before believing what is drawn. A
     # stale result set from a previous search is clipped to the screen, and a
     # clipped count reads as a smaller city rather than as a truncation.
-    _refresh(device)
-    _settle(settle_min_s, settle_max_s)
+    #
+    # `Refresh search` **clears the category filter** -- measured: 9 categories
+    # checked before, all 17 after. So a filtered sweep runs the filter pass
+    # *instead of* the refresh, because `SHOW RESULTS` is itself a search of
+    # the current viewport. Refreshing and then filtering would work too and
+    # costs an extra query; refreshing *after* filtering silently undoes it,
+    # which is what made a whole filtered sweep come back unfiltered.
+    if filter_drinking:
+        apply_drinking_filter(device, settle_min_s, settle_max_s)
+    else:
+        _refresh(device)
+        _settle(settle_min_s, settle_max_s)
 
     pins = _harvest_screen(device)
     result.cells_visited += 1
@@ -527,7 +539,8 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
 
         # The child re-searches on entry, so nothing is needed here.
         sweep(device, cell, max_depth=max_depth, verify_pans=verify_pans,
-              city=city, settle_min_s=settle_min_s, settle_max_s=settle_max_s,
+              city=city, filter_drinking=filter_drinking,
+              settle_min_s=settle_min_s, settle_max_s=settle_max_s,
               _depth=_depth + 1, _result=result)
 
     return result
