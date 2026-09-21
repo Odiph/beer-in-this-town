@@ -1,0 +1,234 @@
+"""Turning screen positions into ground, so a cell is a place and not a guess.
+
+The sweep subdivides in *pixels* -- quarter-viewport pans -- which works and
+tells you nothing about where you have been. Without ground coordinates:
+
+- coverage cannot be reported ("we swept Tel Aviv" is unverifiable)
+- a resumed sweep cannot tell which ground it already covered
+- venues arrive with names and screen positions but no location
+
+All three need the same thing: the scale of the map, in metres per pixel.
+
+**Panning cannot supply it.** A swipe tells you how many pixels the map
+moved, with no external reference to convert pixels to degrees. Calibration
+therefore needs one known point, and the app gives one for free: a city
+search centres the map on that city, which `geocode.py` can resolve.
+
+No device, no network.
+"""
+from __future__ import annotations
+
+import pytest
+
+from beer_in_this_town.app_geo import (
+    CITY_ZOOM_M_PER_PX,
+    MAP_CENTRE_Y,
+    Scale,
+    cell_for_viewport,
+    scale_from_known_points,
+    to_latlng,
+)
+from beer_in_this_town.app_map import Pin
+from beer_in_this_town.app_sweep import Cell
+
+TLV = (32.0853, 34.7818)
+
+
+# --- the scale ------------------------------------------------------------
+
+def test_the_default_scale_is_the_measured_one():
+    """10.2 m/px at the zoom a city search lands on, measured on the live
+    app from pins whose coordinates were known."""
+    assert pytest.approx(10.2, abs=0.5) == CITY_ZOOM_M_PER_PX
+
+
+def test_scale_can_be_refitted_from_two_known_points():
+    """The constant is zoom-dependent. Two pins with known coordinates are
+    enough to replace it, which is how a different zoom gets calibrated."""
+    a = (Pin("a", 100, 500), 32.0853, 34.7818)
+    b = (Pin("b", 600, 500), 32.0853, 34.8318)   # 500 px east, 0.05 deg
+    scale = scale_from_known_points([a, b])
+    # 0.05 deg lng at this latitude is about 4.7 km over 500 px.
+    assert scale.m_per_px == pytest.approx(9.4, abs=1.0)
+
+
+def test_refitting_needs_two_separated_points():
+    a = (Pin("a", 100, 500), 32.0853, 34.7818)
+    with pytest.raises(ValueError):
+        scale_from_known_points([a])
+    with pytest.raises(ValueError):
+        scale_from_known_points([a, (Pin("b", 100, 500), 32.0853, 34.7818)])
+
+
+# --- pixels to ground -----------------------------------------------------
+
+def test_the_camera_centre_is_not_the_geometric_centre_of_the_view():
+    """Measured twice independently: solving the centre from known pins put
+    it 1060 m south of the device GPS after `Reset location`, and 1085 m
+    south of the geocoded centroid after a city search. Same size, same
+    direction -- a property of the view, not of either reference.
+
+    1060 m at 10.2 m/px is ~104 px. Moving the centre *down* doubled the
+    error to 2127 m, which confirmed the magnitude and settled the sign: the
+    camera looks ~104 px **above** the middle of the view bounds. With
+    y=750 the solved centre lands 24 m from the device GPS."""
+    assert MAP_CENTRE_Y < (192 + 1516) / 2
+    scale = Scale(m_per_px=10.2)
+    lat, lng = to_latlng(Pin("x", 450, MAP_CENTRE_Y), TLV, scale)
+    assert lat == pytest.approx(TLV[0], abs=1e-6)
+    assert lng == pytest.approx(TLV[1], abs=1e-6)
+
+
+def test_moving_right_increases_longitude_and_down_decreases_latitude():
+    """Screen y grows downward while latitude grows northward. Getting this
+    backwards puts every venue in the wrong hemisphere of the city."""
+    scale = Scale(m_per_px=10.2)
+    east = to_latlng(Pin("e", 550, MAP_CENTRE_Y), TLV, scale)
+    south = to_latlng(Pin("s", 450, MAP_CENTRE_Y + 100), TLV, scale)
+    assert east[1] > TLV[1]
+    assert south[0] < TLV[0]
+
+
+def test_a_hundred_pixels_is_about_a_kilometre():
+    scale = Scale(m_per_px=10.2)
+    lat, _lng = to_latlng(Pin("s", 450, MAP_CENTRE_Y + 100), TLV, scale)
+    metres = (TLV[0] - lat) * 110_540
+    assert metres == pytest.approx(1020, abs=60)
+
+
+# --- the cell -------------------------------------------------------------
+
+def test_a_viewport_becomes_a_real_rectangle():
+    """The map area is about 900x1324 px, so at 10.2 m/px it covers roughly
+    9.2 x 13.5 km."""
+    cell = cell_for_viewport(TLV, Scale(m_per_px=10.2))
+    assert isinstance(cell, Cell)
+    width_km = (cell.right - cell.left) * 111.32 * 0.845
+    height_km = (cell.top - cell.bottom) * 110.54
+    assert width_km == pytest.approx(9.2, abs=1.0)
+    assert height_km == pytest.approx(13.5, abs=1.5)
+
+
+def test_the_cell_is_centred_on_the_search():
+    cell = cell_for_viewport(TLV, Scale(m_per_px=10.2))
+    assert (cell.left + cell.right) / 2 == pytest.approx(TLV[1], abs=1e-6)
+    assert (cell.bottom + cell.top) / 2 == pytest.approx(TLV[0], abs=1e-6)
+
+
+def test_quartering_a_real_cell_gives_four_real_cells():
+    """`Cell.quarters` was already there; this is what makes it mean
+    something on the ground rather than in pixels."""
+    cell = cell_for_viewport(TLV, Scale(m_per_px=10.2))
+    quarters = cell.quarters()
+    assert len(quarters) == 4
+    assert all(q.right > q.left and q.top > q.bottom for q in quarters)
+    # Together they cover the parent exactly.
+    assert min(q.left for q in quarters) == cell.left
+    assert max(q.right for q in quarters) == cell.right
+
+
+def test_a_deeper_cell_is_about_half_plus_an_overlap_margin():
+    """Children are half the parent plus a deliberate margin, because cells
+    that tile exactly lose venues at the seams -- the pan is not pixel-exact,
+    edge markers may not render, and dense markers are drawn displaced."""
+    from beer_in_this_town.app_sweep import CELL_OVERLAP
+
+    cell = cell_for_viewport(TLV, Scale(m_per_px=10.2))
+    child = cell.quarters()[0]
+    expected_w = (cell.right - cell.left) / 2 * (1 + CELL_OVERLAP)
+    expected_h = (cell.top - cell.bottom) / 2 * (1 + CELL_OVERLAP)
+    assert (child.right - child.left) == pytest.approx(expected_w)
+    assert (child.top - child.bottom) == pytest.approx(expected_h)
+
+
+# --- where the map actually is --------------------------------------------
+
+def test_the_map_centre_must_be_derived_not_assumed():
+    """Measured: after searching "Tel Aviv" every known pin sat an almost
+    identical 1085 m from where the geocoded centroid predicted -- a constant
+    offset, while the scale itself refitted to exactly 10.20 m/px. The app
+    centres on its own idea of the place.
+
+    A constant offset is the kindest error available: invisible in the venue
+    list, consistent enough to look right, and it would put every cell
+    boundary a kilometre from where the coverage report claims."""
+    from beer_in_this_town.app_geo import centre_from_known_points
+
+    scale = Scale(m_per_px=10.2)
+    truth = (32.0700, 34.7846)
+    pins = [Pin("a", 300, 600), Pin("b", 700, 1100)]
+    known = [(p, *to_latlng(p, truth, scale)) for p in pins]
+    got = centre_from_known_points(known, scale)
+    assert got[0] == pytest.approx(truth[0], abs=1e-6)
+    assert got[1] == pytest.approx(truth[1], abs=1e-6)
+
+
+def test_locating_the_map_needs_at_least_one_point():
+    from beer_in_this_town.app_geo import centre_from_known_points
+
+    with pytest.raises(ValueError):
+        centre_from_known_points([], Scale(m_per_px=10.2))
+
+
+# --- the camera: where the map is looking, kept up to date as it pans ------
+#
+# A swept venue used to carry raw screen pixels and nothing else. Pixels only
+# mean something inside the dump they came from, so the moment the map panned
+# every stored position became a number with no referent -- and the venue list
+# looked exactly the same either way. These pin the conversion happening at
+# harvest time, while the viewport that produced the pin is still current.
+
+def test_camera_locates_a_pin_against_its_own_centre():
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    at_centre = cam.locate(Pin(name="x", x=450, y=750))
+    assert at_centre == pytest.approx((32.0853, 34.7818), abs=1e-9)
+
+
+def test_a_pan_moves_the_camera_the_other_way():
+    """Dragging the content east means the viewport travelled west.
+
+    The sign is the whole content of this: getting it backwards puts every
+    venue an equal distance on the wrong side of the city, which is a corpus
+    that looks entirely reasonable.
+    """
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    # Content dragged right and down: the camera moves west and north.
+    cam.pan_px(100, 100)
+    assert cam.centre[1] < 34.7818, "content east means the camera went west"
+    assert cam.centre[0] > 32.0853, "content south means the camera went north"
+
+
+def test_a_pan_and_its_opposite_return_the_camera_to_within_a_metre():
+    """Not exactly, and the residue is worth stating rather than hiding.
+
+    A degree of longitude shrinks with latitude, so a pan north and the same
+    pan back south do not cancel to the last decimal. Measured here: **0.75 m
+    over a 3.4 km round trip**, against a positional accuracy of 32 m median.
+    The asymmetry is real and two orders of magnitude below the noise; what
+    would matter is drift that grows with the number of cells, and this does
+    not.
+    """
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    cam.pan_px(220, -330)
+    cam.pan_px(-220, 330)
+    off_lat_m = abs(cam.centre[0] - 32.0853) * 110_540.0
+    off_lng_m = abs(cam.centre[1] - 34.7818) * 111_320.0
+    assert off_lat_m < 1.0
+    assert off_lng_m < 1.0
+
+
+def test_panning_a_quarter_viewport_moves_about_a_quarter_of_the_ground():
+    """A sanity bound in metres, so the scale cannot silently be per-degree."""
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.2))
+    before = cam.centre
+    cam.pan_px(0, -331)  # one quarter-viewport step, as the sweep pans
+    moved_m = abs(cam.centre[0] - before[0]) * 110_540.0
+    assert moved_m == pytest.approx(331 * 10.2, rel=0.01)

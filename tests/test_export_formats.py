@@ -7,6 +7,7 @@ not to automate. This is the third option, and it is the only one that is both.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 from xml.etree import ElementTree as ET
 
@@ -99,3 +100,18 @@ def test_formats_are_validated_at_the_boundary():
         parse_formats("kmz")
     with pytest.raises(ValueError):
         parse_formats("  ")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("writer,suffix", [(write_geojson, ".geojson"),
+                                           (write_gpx, ".gpx")])
+def test_a_venue_with_no_page_carries_no_empty_link(writer, suffix, tmp_path):
+    """An empty href renders as a link back to the page you are already on."""
+    v = _venue("Ghost Whale", 51.4626, -0.1385)
+    stripped = dataclasses.replace(
+        v, ref=dataclasses.replace(v.ref, slug="", venue_id="Ghost Whale"))
+    args = ([stripped], tmp_path / f"out{suffix}")
+    path = writer(*args, "London Bars") if writer is write_gpx else writer(*args)
+    body = path.read_text(encoding="utf-8")
+    assert "Ghost Whale" in body
+    assert 'href=""' not in body

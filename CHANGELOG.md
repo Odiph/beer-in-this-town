@@ -7,6 +7,157 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Removed the default city, and the default list name.** `run` used to
+  default to `singapore` and `pin`/`notes` to `"Singapore Bars"`. A default
+  there saves nobody a keystroke; it silently answers a question only the user
+  can answer, and answers it with a scrape of somewhere they have never been —
+  or, for `pin`, a write into a list they did not name. `run` now refuses with
+  `no_city`, `pin`/`notes` with `no_list`, and `status` reports
+  `blocked_on: "choose_city"` until somebody says where. Same reasoning as
+  `logged_in`: a stand-in for a decision reads exactly like the decision
+  having been made.
+- **The browser search path did not encode the query.** It built the URL with
+  an f-string, so `&` in a city started a new parameter and `#` turned the
+  rest into a fragment — "rock & roll" searched for "rock ", returned results,
+  and looked perfectly healthy. The HTTP path always passed `params=`; the
+  browser path is the one that actually runs now that Untappd's search is
+  client-rendered.
+- The city step explains what the query decides: it is Untappd's venue search,
+  it names the diff baseline for next time, and it derives the Maps list name.
+  Every line is a mechanical consequence someone can check, not advice about
+  what makes a good night out.
+- README covers the wizard, with a screenshot of the first screen and a GIF of
+  the last step.
+- **The city typed in the dashboard reaches the agent.** It used to live in
+  `localStorage` and nowhere else, so the wizard would hand a person a London
+  command while `status` went on offering Singapore — both halves behaving
+  correctly and disagreeing, with nothing able to see it. "Use this city" now
+  records it in `state/intent.json`, which `status` resolves through, and the
+  map title follows the city rather than aiming a London CSV at a Singapore
+  list. Deliberately not `last_run.json`: `recorded` there means a run
+  happened, and an intention is not a run.
+- **`run` is no longer offered on an unverified session.** `status` used
+  `logged_in` — which only means `storage_state.json` exists — and on a
+  machine whose Google and Untappd sessions had both expired it reported
+  `blocked_on: null` and handed an agent `run`. Signed out of Untappd that
+  builds a five-venue corpus and reports a finished scrape. The first action
+  is now `verify`, and `run` waits for it to pass. `verify` records its
+  verdict in `state/verification.json` so the loop terminates; the record
+  expires after 12 hours, and a probe that could not run records nothing.
+- `status`'s hints are keyed off `blocked_on` rather than the session file,
+  so a tested-and-expired session tells the person what to do instead of
+  naming the right error code and then talking about ledger locks.
+- The dashboard opens as a three-step wizard: **Ready → Accounts → City**.
+  The panel has six rows because six things can be wrong; a person setting
+  this up for the first time has three questions, and the panel is now
+  reference behind an "All checks" disclosure rather than the interface. The
+  stepper and the card are derived from the same step, because two functions
+  deciding where the user is, from the same data, is two chances to disagree
+  — and they did: the card counted its own list of five and read "Step 4 of
+  5" under a stepper showing 2 of 3.
+- `ui --detach`: start the dashboard in its own process and return at once.
+  Without it, an agent-driven setup dead-ended — `ui` blocked, so AGENTS.md
+  told agents never to start it, so the one thing built to tell a user what to
+  do next was the one thing nothing was allowed to open. The install finished,
+  the agent reported "ready", and the user was left needing to already know
+  the answer. It is now the first action when `blocked_on` is `sign_in`, and
+  the loop ends once a dashboard is serving. Idempotent per checkout.
+- The dashboard refuses to share a port. `http.server` sets
+  `allow_reuse_address`, which let a second dashboard bind a port another was
+  already LISTENING on — two servers, two different keys, requests going to
+  whichever. A collision now fails loudly.
+- Every setup row carries links and a "Why this matters" explanation: where to
+  sign in, where to create an account, what a key costs, and what actually
+  breaks when that row is red.
+- `verify`: test both accounts for real from the CLI — headless, read-only,
+  always returns. The dashboard blocks on a person, which is right for a
+  sign-in and wrong for everything else: an agent still needs to know whether
+  the sign-in took, and had no way to ask. `ran` is reported beside `ok`, so
+  "the check could not run" is never read as "signed out".
+- **Fixed a non-terminating agent loop.** `status` handed a signed-out user
+  `selfcheck`, and nothing selfcheck does changes the session — so the loop in
+  AGENTS.md ran it forever. It now returns an empty `next_actions`, which that
+  document already defines as the end of the loop, plus a new
+  `data.blocked_on` naming *why* it ended: `null` for finished, `"sign_in"`
+  for waiting on a human. Additive field, no schema bump.
+- A bare `beertown` opens the dashboard. Typing the program's name is the
+  first thing a new user does, and it used to answer with an argparse error --
+  a poor first impression from a tool whose whole first-run story is a
+  dashboard that explains itself. Guarded three ways, because `ui` blocks
+  forever: never with `--json`, never when output is piped, and never in place
+  of a real command or a typo, which still gets the error it asked for.
+- `ui` leads rather than reports: one directive at a time — install Chrome,
+  sign in, test, then name your city — chosen server-side in `next_step` so
+  the ordering is testable. Sign-*up* links sit beside sign-in, because
+  someone with no Untappd account cannot sign in to one. The last step takes
+  a city and hands over the exact `run` command, `--no-upload` included; the
+  run itself stays in the terminal where it can be watched and stopped.
+- `status` no longer sends a brand-new user to `run`. The old first action
+  assumed a session was only needed for the YOU column; signed out of
+  Untappd, search stops at 5 results, so that run built a five-venue corpus
+  and reported a finished scrape — with the diff, baseline and KML all wrong
+  together. `selfcheck` is the first action now, and `ui` is the hint.
+- `doctor` reports a saved session as `present (untested)` and says so, rather
+  than implying a file on disk is a working login.
+- `ui`: a localhost setup dashboard for a first-time user. Connects Google and
+  Untappd in one Chrome window, then **verifies both with a real round-trip**
+  before calling either connected — a headless Maps load for Google, one
+  authenticated request for Untappd. Detection and verification are separate
+  tiers and the panel says which one a row rests on, because a cookie on disk
+  is evidence a login once happened, not that the account works now. Until
+  this, a stale Untappd session first announced itself as
+  `search_login_required` a hundred requests into a run.
+
+  Every slow action narrates itself as it runs — including the pacing waits,
+  so a deliberate delay does not read as a hang. One job at a time: two
+  sign-ins sharing one Chrome profile can corrupt it.
+
+  `profile_has_untappd_session` is new, and answers yes/no/**unknown**: the
+  cookie-name list behind it is a guess rather than something verified against
+  a live login, so a miss reports as unknown instead of as "signed out".
+
+  The server can capture a Google session, so it is locked down accordingly:
+  `127.0.0.1` only, a per-start key required on every API call and delivered
+  in the URL fragment, a `Host` allow-list against DNS rebinding, and
+  cross-site `Origin` refused. No route on it can `pin` or write `notes` —
+  that absence is the guardrail the other four back up. Stdlib only.
+- `closures`, and `run --check-closed`: ask the Google Places API whether a
+  venue still trades, and record it in a new `business_status` CSV column.
+  Untappd's venue database is append-only in practice, so a bar that shut in
+  2019 keeps its stats and outranks a good one that opened last year — the
+  authoritative second tier `classify.looks_closed` was written waiting for.
+  Opt-in behind `GOOGLE_PLACES_KEY`, deliberately separate from
+  `GOOGLE_GEOCODING_KEY`: sending an address to place a pin and sending it to
+  ask what business is there are different disclosures.
+
+  The load-bearing rule is that **a missing match is not a closure**. Only an
+  explicit `CLOSED_PERMANENTLY` or `CLOSED_TEMPORARILY` closes a venue;
+  no match, a timeout, or a status Google adds later all leave it visible and
+  recorded as `unmatched`. A failed lookup collapses four cases that want
+  opposite outcomes, and a false closure silently deletes a real bar from the
+  map — the failure the quality gate and the fail-closed guardrails exist to
+  prevent. Closed venues are flagged, never dropped: `run` uploads to My Maps,
+  so a silent deletion would be invisible.
+
+  Internals are shaped for #20 rather than for #7 alone — one lookup, one
+  cache, one set of failure semantics. `types` and the place id are fetched
+  and cached alongside the status at no extra cost (they are Essentials
+  fields; `businessStatus` is what makes the request Pro), so #6 and #8 need
+  no second call and no second cache. Cached in `state/places_cache.json`,
+  written even when a run aborts, because those lookups were already billed.
+  Closes #7.
+- `label` and `score`: a measurement harness for the venue heuristics, so
+  thresholds stop being guesses with numbers attached. `classify.py` holds
+  candidate rules for venue kind, closed venues and private spaces, and is
+  deliberately **not** wired into `run` — a classifier merged without
+  measurement produces plausible output, is wrong at an unknown rate, and
+  nothing raises, which is the failure `corpus_quality_gate` and the raising
+  selectors exist to prevent. Sampling takes a fixed quota per bucket, rare
+  ones included, and scoring reweights by inverse sampling probability so the
+  numbers describe the whole scrape. Error rates are reported by direction —
+  a private space kept is someone's front door on a shared map; a real venue
+  dropped costs one bar to re-add — and never averaged into one accuracy
+  figure.
 - `--format kml,geojson,gpx` on `run`. The everyday-map use case — the thing
   the project is actually for — had only two routes: a My Maps layer that gives
   up the everyday-map pins, or `pin`, which gets them back by automating a UI
@@ -17,6 +168,87 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   at the boundary with `bad_format` rather than writing no map quietly.
 
 ### Fixed
+- `notes` had no pre-flight. Signed-out Google Maps loads perfectly happily, so
+  a signed-out profile either read every place as "not in the list" — a hundred
+  page loads, `ok: true`, and a warning telling the user to run `pin` first,
+  which was the wrong diagnosis — or tripped the block detector and started a
+  six-hour cool-off that also blocks `pin`, for a condition `pin` itself
+  reports as `not_signed_in` with no cool-off at all. It now runs the same
+  pre-flight `pin` does, and maps its errors the same way.
+- `robots_disallows_scraping` swallowed a 403. That is a block already in
+  progress, and swallowing it read as "robots does not forbid this", so the run
+  carried on requesting into the block — the one move the module's own 403 rule
+  says never to make.
+- A dead network made `run` sleep instead of stopping: three retries over
+  60/180/600s per venue, swallowed per venue, so a hundred venues meant roughly
+  twenty-three hours of sleeping before the corpus gate failed. Three
+  consecutive transport failures now stop the run with `network_unavailable`.
+- Nominatim's rate limit was skipped exactly when it mattered. The pause sat
+  after the call inside the `try`, so a timeout or a 429 skipped it and
+  consecutive failures hit OSM back to back.
+- `status` could not see the write guardrails that several error remedies send
+  the caller to it to check — cool-off, budget, and whether another run holds
+  the lock. It reports all three now, and the contended-lock message no longer
+  ends by inviting a manual delete of the lock `AGENTS.md` says not to delete.
+- The agent contract steered an agent into the account write it forbids.
+  `AGENTS.md` says to run the first `next_action` and repeat until the list is
+  empty, and also that `pin` must never run without a human asking. `pin` was
+  listed in `next_actions` and was the only entry that ever emptied it, so
+  following the contract led an agent into the ToS-crossing write. `pin`,
+  `notes` and `bootstrap` are out of `next_actions` entirely; an empty list
+  now genuinely means the safe work is finished.
+- `next_actions` no longer carries `#` comments. It promises literal runnable
+  commands, and an agent passing argv as a list got `#` as an argument while
+  one that shelled out silently no-opped and looped on the same suggestion.
+  Prose moved to a new additive `hints` field that nothing executes.
+- `--region` defaulted to "Singapore" for every city, so a London CSV searched
+  Maps for "..., London, Singapore". The guard exists precisely so a bare name
+  cannot match a venue in the wrong country. It is now read from the CSV's own
+  city column, and when that cannot be established the run says the guard is
+  off rather than quietly appending nothing. An explicit `--region ''` still
+  switches it off and is no longer collapsed back into re-derivation.
+- `pin` identified the target saved list by substring, in all three places it
+  checks one: picking the row in the list picker, verifying what Maps said
+  afterwards, and confirming the list exists at all. An account holding both
+  "Bars" and "London Bars" could therefore have a place saved into the wrong
+  one **and have that verified as correct** — `"bars" in "london bars"` is
+  True — after which the run journalled `ok` and never retried it. That is the
+  wrong-list failure `pin_to_list.py`'s own docstring says the module exists to
+  prevent. All three now compare whole names, ignoring only case, padding and a
+  trailing place count. A name that matches no list, or several, raises
+  `list_ambiguous` and saves nothing rather than clicking the nearest label.
+  `notes` used the same substring test and is fixed with it.
+- `score` reported numbers that did not mean what they said. A dropped venue
+  was judged by "was this a real venue", which every café in the `non_beer`
+  bucket is — so with every label correct the harness reported that 100% of
+  dropped venues were dropped wrongly. A drop is now judged against the claim
+  the classifier actually made about that bucket. Found by an independent
+  review of the harness; caught nothing because the tests only ever built two
+  buckets, neither of them `non_beer`.
+- Every rate's denominator is now the rows that answered *that* question. A
+  blank counted as "no error", so a sheet where only `true_kind` was filled
+  reported a clean corpus nobody had looked at.
+- `?` is an abstention rather than a verdict. It counted as "private",
+  inflating the expensive rate, while an unrecognised value like `closed`
+  counted as "not closed" and deflated the cheap one — silently, in the tool
+  built to stop exactly that. Unknown values now fail `labels_unusable`
+  naming the row and the cell.
+- `unsettled` predictions are excluded from kind accuracy instead of scored as
+  wrong, so the metric stops measuring how often the category line was blank.
+- The labelling sheet survives a spreadsheet. The bucket sizes rode in a `#`
+  comment on line 1; Excel and Sheets parse that as CSV and write it back
+  mangled, after which `score` failed with a remedy that failed the same way.
+  They now ride in a `_stratum_size` column, and a sheet saved in the system
+  codepage is read as cp1252 rather than crashing.
+- `selfcheck` could not see a search outage. It fetched one venue detail page,
+  which is server-rendered and was unaffected when Untappd moved search to
+  Algolia, so it returned `ok: true` for the whole time every `run` was
+  failing. `AGENTS.md` sells it as the cheap early warning for
+  `selectors_stale` and the agent loop leans on it before committing to a run;
+  an early warning that cannot see the most likely failure turns "I don't know"
+  into a false "fine". It now also probes the search page and asserts it is one
+  of the two shapes the code handles. `--skip-search` keeps the old
+  one-request behaviour.
 - State artifacts were global where they describe one city or one list, so a
   second city could not be scraped without damage. `previous_run.json` was a
   single baseline: a London run diffed itself against Singapore — every venue

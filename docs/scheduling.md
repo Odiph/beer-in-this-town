@@ -5,7 +5,7 @@ Two jobs are worth running unattended, for different reasons:
 | Script | Cadence | Why |
 |---|---|---|
 | `run_catchup.ps1` | nightly | Drains a pin/notes backlog that the write guardrails deliberately spread over several days. |
-| `run_weekly.ps1` | weekly | Re-scrapes, so the check-in numbers and the new-venue diff stay current. |
+| `run_weekly.ps1` | weekly | Refreshes the data, so the check-in numbers and the new-venue diff stay current. |
 
 Both wrappers log to `logs/`, prune their own old logs, and preserve the exit
 code so a failed run shows up as a failed task rather than a silent no-op.
@@ -80,7 +80,7 @@ asking whether unattended UI automation is what you want at all — see
 
 ## Keeping the data current
 
-`run_weekly.ps1` re-runs the scrape with the query and count baked into the
+`run_weekly.ps1` re-runs the collection with the query and count baked into the
 script, so the CSV, the KML and the new-venue diff stay current. Edit the
 script to change the city.
 

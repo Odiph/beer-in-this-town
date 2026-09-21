@@ -64,6 +64,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import random
 import time
 from pathlib import Path
@@ -71,7 +72,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from .config import CACHE_DIR, Settings
+from .config import CACHE_DIR, STATE_DIR, Settings
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +92,90 @@ def _retry_after_seconds(header: str | None, fallback: int) -> float:
         return max(0.0, when.timestamp() - time.time()) or fallback
     except Exception:
         return fallback
+
+
+# Consecutive URLs that failed at the transport before the run stops.
+# Mirrors max_consecutive_429: a handful of dead URLs is a flaky page,
+# a run of them is a network that is not there.
+READ_BUDGET = STATE_DIR / "read_budget.json"
+
+
+class ReadBudget:
+    """The hourly request ceiling, persisted like the write ledger is.
+
+    The README calls 600/hour a hard cap. It lived in memory on the client, so
+    restarting the process handed back a full allowance -- which makes it the
+    one protection an ordinary retry loop could reset, while the write ledger
+    beside it is on disk precisely so that cannot happen. A ceiling you can
+    clear by starting again is a speed bump.
+    """
+
+    def __init__(self, s: Settings, path: Path | None = None) -> None:
+        self.s = s
+    # Resolved at call time, not bound as a default: a default is
+    # evaluated once at import, so anything that redirects the module
+    # constant afterwards (tests, a relocated state dir) never reaches
+    # it and the write lands in the real tree.
+        self.path = path if path is not None else READ_BUDGET
+        self.window_start, self.count = self._read()
+
+    def _read(self) -> tuple[float, int]:
+        if not self.path.exists():
+            return time.time(), 0
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            start = float(raw["window_start"])
+            count = int(raw["count"])
+        except (OSError, ValueError, TypeError, KeyError):
+            # Fail CLOSED, like the write ledger this is modelled on. Reading
+            # a damaged budget as "nothing spent" hands back a full allowance
+            # for the price of one truncated write -- and this file is
+            # rewritten up to 600 times an hour, so truncation is not exotic.
+            log.warning("%s is unreadable; assuming the hour's budget is spent.",
+                        self.path.name)
+            return time.time(), self.s.hourly_budget
+        if time.time() - start >= 3600:
+            return time.time(), 0
+        return start, count
+
+    def _write(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic: a crash mid-write left a truncated file, which the reader
+        # above now (correctly) treats as a spent hour. Better not to produce
+        # one in the first place.
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps({"window_start": self.window_start, "count": self.count}),
+            encoding="utf-8",
+        )
+        os.replace(tmp, self.path)
+
+    def _roll(self) -> None:
+        if time.time() - self.window_start >= 3600:
+            self.window_start, self.count = time.time(), 0
+
+    def remaining(self) -> int:
+        self._roll()
+        return max(0, self.s.hourly_budget - self.count)
+
+    def record(self) -> None:
+        self._roll()
+        self.count += 1
+        self._write()
+
+
+MAX_CONSECUTIVE_TRANSPORT_ERRORS = 3
+
+
+class TransportUnavailable(RuntimeError):
+    """The connection itself is gone, repeatedly. Stop rather than sleep.
+
+    There is a deliberate trip for consecutive 429s but there was none for a
+    transport that simply is not there. Each venue retried three times over
+    60/180/600s and `fetch_venues` swallowed the result per venue, so a dead
+    network turned a hundred-venue run into roughly twenty-three hours of
+    sleeping before the corpus gate finally failed on an empty result.
+    """
 
 
 class RateLimitTripped(RuntimeError):
@@ -146,9 +231,10 @@ class PoliteClient:
             },
         )
         self._last_request_at = 0.0
-        self._window_start = time.time()
-        self._window_count = 0
+        # On disk, so restarting does not refill the ceiling.
+        self._budget = ReadBudget(self.s)
         self._consecutive_429 = 0
+        self._consecutive_transport_errors = 0
 
     def __enter__(self) -> PoliteClient:
         return self
@@ -164,9 +250,7 @@ class PoliteClient:
         turns a transient error into a block.
         """
         now = time.time()
-        if now - self._window_start >= 3600:
-            self._window_start, self._window_count = now, 0
-        if self._window_count >= self.s.hourly_budget:
+        if self._budget.remaining() <= 0:
             # Raise rather than sleep until the window rolls. A ceiling that
             # you can wait out is not a ceiling: it would quietly convert an
             # oversized job into an all-night crawl with nobody watching.
@@ -181,7 +265,7 @@ class PoliteClient:
         elapsed = now - self._last_request_at
         if elapsed < wait:
             time.sleep(wait - elapsed)
-        self._window_count += 1
+        self._budget.record()
 
     @staticmethod
     def _cache_path(url: str, params: dict | None) -> Path:
@@ -228,10 +312,14 @@ class PoliteClient:
             except httpx.HTTPError as exc:
                 last_error = exc
                 log.warning("transport error (%s), attempt %d", exc, attempt + 1)
-                time.sleep(self.s.backoff_ladder_s[min(attempt, 2)])
+                # Not after the last attempt: sleeping there buys nothing and
+                # delayed the trip by the full ladder on every dead URL.
+                if attempt < self.s.max_retries - 1:
+                    time.sleep(self.s.backoff_ladder_s[min(attempt, 2)])
                 continue
 
             self._last_request_at = time.time()
+            self._consecutive_transport_errors = 0
 
             if resp.status_code in (429, 503):
                 self._consecutive_429 += 1
@@ -265,6 +353,18 @@ class PoliteClient:
                 cache_path.write_text(html, encoding="utf-8")
             return html
 
+        # Every attempt for this URL failed at the transport. Count it: one
+        # unreachable host looks the same as a hundred, and only the run of
+        # them tells you the network is gone rather than a page being flaky.
+        self._consecutive_transport_errors += 1
+        if self._consecutive_transport_errors >= MAX_CONSECUTIVE_TRANSPORT_ERRORS:
+            raise TransportUnavailable(
+                f"{self._consecutive_transport_errors} consecutive URLs failed "
+                f"at the transport ({last_error}). The network or the host is "
+                f"gone; continuing would sleep through the backoff ladder once "
+                f"per remaining venue."
+            ) from last_error
+
         raise RuntimeError(
             f"GET failed after {self.s.max_retries} attempts: {url}"
         ) from last_error
@@ -281,6 +381,21 @@ class PoliteClient:
 
         try:
             txt = self.get("https://untappd.com/robots.txt", use_cache=False)
+        except (RateLimitTripped, TransportUnavailable):
+            # A 403 here is a block already in progress. Swallowing it read as
+            # "robots does not forbid this" and carried on requesting into the
+            # block -- the one move this module's 403 rule says never to make.
+            raise
+        except RuntimeError as exc:
+            # Every attempt failed at the transport. TransportUnavailable
+            # cannot fire here -- it needs three prior failed URLs and this is
+            # the first request of a run -- so this branch is what a dead
+            # network actually looks like at this point. Treating it as "no
+            # prohibition" let the run proceed on a connection that is gone.
+            raise TransportUnavailable(
+                f"Could not reach robots.txt ({exc}). Refusing to start: a run "
+                f"that cannot read the rules should not assume there are none."
+            ) from exc
         except Exception:  # absence of robots.txt is not a prohibition
             return False
 

@@ -212,11 +212,13 @@ def add_notes(
 
     from .pin_to_list import (
         _abort_if_blocked,
+        _assert_ready,
         _open_place,
         _place_heading,
         _saved_in,
         journal_key,
         place_matches,
+        saved_in_target,
     )
 
     limits = limits or Limits()
@@ -252,12 +254,28 @@ def add_notes(
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
+            # The same pre-flight `pin` runs, and for the same reason:
+            # signed-out Google Maps loads perfectly happily. Without it a
+            # signed-out profile read every place as "not in the list",
+            # journalled a hundred rows `not-in-list`, reported ok: true and
+            # told the user to run pin first -- a wrong diagnosis reached by
+            # loading a hundred pages while signed out. The other outcome was
+            # worse: the block detector recognised the signed-out page and
+            # started a six-hour cool-off, which also blocks `pin`, for a
+            # condition `pin` itself reports as not_signed_in with no cool-off.
+            _assert_ready(page, list_name)
+
             for i, (name, address, note) in enumerate(todo, 1):
                 key = journal_key(name, address)
                 log.info("[%3d/%d] %s", i, len(todo), name)
 
                 _abort_if_blocked(page, ledger)
                 if breaker.is_tripped:
+                    # Clear it as the cool-off begins: the cool-off is the
+                    # punishment, and a count that outlives it trips the next
+                    # run before it can earn a success to clear it -- a
+                    # permanent lockout rather than a pause.
+                    breaker.reset()
                     ledger.start_cooloff(
                         f"{breaker.consecutive} consecutive failures"
                     )
@@ -291,7 +309,7 @@ def add_notes(
                 # Only annotate places that are actually in the target list;
                 # otherwise the note field may not even be present.
                 saved_in = _saved_in(page)
-                if saved_in is None or list_name.lower() not in saved_in.lower():
+                if saved_in is None or not saved_in_target(saved_in, list_name):
                     journal[key] = "not-in-list"
                     log.warning("  not in %s -- pin it first", list_name)
                     _save_journal(journal, list_name)
@@ -320,6 +338,17 @@ def add_notes(
                 else:
                     journal[key] = "failed"
                     breaker.record_failure()
+                    if breaker.is_tripped:
+                        # Same as pin: checked only at the top of the loop, a
+                        # run that fails its last three notes trips nothing.
+                        breaker.reset()
+                        ledger.start_cooloff(
+                            f"{limits.max_consecutive_failures} consecutive failures"
+                        )
+                        raise Tripped(
+                            f"Stopped after {limits.max_consecutive_failures} "
+                            f"consecutive failures; a cool-off has started."
+                        )
                     log.error("  note did not stick (reads %r)", written)
 
                 _save_journal(journal, list_name)

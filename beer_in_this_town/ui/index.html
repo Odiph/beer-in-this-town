@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>beer in this town — setup</title>
+<style>
+  /* No external anything: the page's CSP is default-src 'none'. System
+     fonts only, which is also why nothing here waits on a webfont. */
+  :root{
+    --ground:#F7F5F1; --surface:#FFFFFF; --sunk:#EFEBE4;
+    --ink:#1B1814; --muted:#6B6257; --line:#DFD8CD;
+    --accent:#A6631B; --accent-ink:#FFFFFF;
+    --ok:#2F6F43; --ok-wash:#E6F0E8;
+    --warn:#9A4A16; --warn-wash:#F8E8DC;
+    --unknown:#6B6257; --unknown-wash:#EFEBE4;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#14120F; --surface:#1D1A16; --sunk:#26221C;
+      --ink:#EFEAE2; --muted:#A1978A; --line:#332E27;
+      --accent:#E0A050; --accent-ink:#1B1409;
+      --ok:#6FC58C; --ok-wash:#17281D;
+      --warn:#E3915F; --warn-wash:#2E1E13;
+      --unknown:#A1978A; --unknown-wash:#26221C;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:0 16px 64px; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:15px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:720px; margin:0 auto}
+
+  header{padding-block:28px 6px}
+  h1{font-size:22px; margin:0 0 4px; letter-spacing:-.01em}
+  .sub{color:var(--muted); font-size:14px; margin:0}
+
+  .banner{
+    margin-top:18px; padding:12px 14px; border-radius:10px;
+    background:var(--sunk); border:1px solid var(--line); font-size:14px;
+  }
+  .banner.good{background:var(--ok-wash); border-color:var(--ok); color:var(--ok)}
+  .banner.bad{background:var(--warn-wash); border-color:var(--warn); color:var(--warn)}
+
+  h2{
+    font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--muted); margin:26px 0 8px; font-weight:600;
+  }
+
+  ul.checks{list-style:none; margin:0; padding:0;
+    border:1px solid var(--line); border-radius:12px; overflow:hidden;
+    background:var(--surface)}
+  ul.checks li{
+    display:flex; gap:12px; align-items:flex-start;
+    padding:13px 14px; border-top:1px solid var(--line);
+  }
+  ul.checks li:first-child{border-top:0}
+  .dot{
+    flex:none; width:9px; height:9px; border-radius:50%; margin-top:6px;
+    background:var(--unknown);
+  }
+  li[data-s="ok"] .dot{background:var(--ok)}
+  li[data-s="attention"] .dot{background:var(--warn)}
+  li[data-s="off"] .dot{background:var(--line)}
+  .body{flex:1; min-width:0}
+  .label{font-weight:600; font-size:14.5px}
+  .detail{color:var(--muted); font-size:13.5px; overflow-wrap:anywhere}
+  .fix{font-size:13.5px; margin-top:3px}
+  .tag{
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.04em;
+    text-transform:uppercase; padding:2px 6px; border-radius:4px;
+    background:var(--unknown-wash); color:var(--muted); margin-left:8px;
+    white-space:nowrap;
+  }
+  .tag.tested{background:var(--ok-wash); color:var(--ok)}
+
+  /* per-row: somewhere to go, and the longer answer on request */
+  .rowgo{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px}
+  .rowgo a{
+    color:var(--accent); font-size:13px; font-weight:600; text-decoration:none;
+    border-bottom:1px solid transparent;
+  }
+  .rowgo a:hover{border-bottom-color:var(--accent)}
+  .rowgo a:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  .rowgo button{padding:7px 12px; font-size:13px; border-radius:8px}
+  .rowgo button.go{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
+  li details{margin-top:7px}
+  li summary{
+    cursor:pointer; font-size:12.5px; color:var(--muted); width:fit-content;
+  }
+  li summary:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:4px}
+  li details p{margin:6px 0 0; font-size:13px; color:var(--muted); max-width:60ch}
+
+  .actions{display:flex; gap:10px; flex-wrap:wrap; margin-top:16px}
+  button{
+    font:inherit; font-weight:600; font-size:14px; cursor:pointer;
+    border-radius:10px; padding:11px 16px; border:1.5px solid var(--line);
+    background:var(--surface); color:var(--ink);
+  }
+  button.primary{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
+  button:disabled{opacity:.45; cursor:default}
+  button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+  /* activity: the point of the page while something is running */
+  .job{
+    margin-top:14px; background:var(--surface); border:1px solid var(--line);
+    border-radius:12px; padding:14px;
+  }
+  .jobhead{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+  .jobhead strong{font-size:14.5px}
+  .clock{font-family:var(--mono); font-size:12.5px; color:var(--muted); margin-left:auto;
+         font-variant-numeric:tabular-nums}
+  .pulse{
+    display:inline-block; width:7px; height:7px; border-radius:50%;
+    background:var(--accent); margin-right:6px; animation:beat 1.1s infinite;
+  }
+  @keyframes beat{0%,100%{opacity:1}50%{opacity:.25}}
+  ol.steps{list-style:none; margin:12px 0 0; padding:0; font-size:13.5px}
+  ol.steps li{display:flex; gap:9px; padding:3px 0}
+  ol.steps li .t{font-family:var(--mono); font-size:11.5px; color:var(--muted);
+                 flex:none; padding-top:2px; font-variant-numeric:tabular-nums}
+  ol.steps li.aside{color:var(--muted)}
+  ol.steps li.aside .txt::before{content:"— "}
+  .err{color:var(--warn); font-size:13.5px; margin-top:10px}
+
+  /* stepper: where you are, in three dots */
+  .stepper{display:flex; align-items:center; gap:0; margin-top:22px}
+  .stg{display:flex; align-items:center; gap:8px}
+  .stg .bead{
+    width:26px; height:26px; border-radius:50%; flex:none;
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--mono); font-size:12px; font-weight:600;
+    border:1.5px solid var(--line); background:var(--surface); color:var(--muted);
+  }
+  .stg .nm{font-size:13.5px; color:var(--muted)}
+  .stg[data-s="current"] .bead{border-color:var(--accent); background:var(--accent); color:var(--accent-ink)}
+  .stg[data-s="current"] .nm{color:var(--ink); font-weight:600}
+  .stg[data-s="done"] .bead{border-color:var(--ok); background:var(--ok-wash); color:var(--ok)}
+  .stg[data-s="done"] .nm{color:var(--ok)}
+  .rail{flex:1 1 16px; min-width:14px; height:1.5px; background:var(--line); margin:0 10px}
+  .rail.lit{background:var(--ok)}
+
+  /* the panel is reference now, not the interface */
+  .panel{margin-top:22px}
+  .panel > summary{
+    cursor:pointer; font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--muted); font-weight:600; width:fit-content;
+  }
+  .panel > summary:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
+  .panel ul.checks{margin-top:10px}
+
+  /* The lead: one instruction, impossible to miss. */
+  .lead{
+    margin-top:18px; background:var(--surface); border:1px solid var(--line);
+    border-left:4px solid var(--accent); border-radius:12px; padding:18px;
+  }
+  .lead .step{
+    font-family:var(--mono); font-size:11px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--accent); font-weight:600;
+  }
+  .lead h2{font-size:19px; margin:4px 0 6px; letter-spacing:-.01em;
+           text-transform:none; color:var(--ink); font-weight:700}
+  .lead p{margin:0; color:var(--muted); font-size:14px}
+  .lead .go{margin-top:14px}
+  .lead.done{border-left-color:var(--ok)}
+  .lead.done .step{color:var(--ok)}
+
+  .notes{margin-top:14px}
+  .notes > summary{
+    cursor:pointer; font-size:13px; color:var(--accent); font-weight:600;
+    width:fit-content;
+  }
+  .notes > summary:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px}
+  .notes dl{margin:10px 0 0; display:grid; gap:10px}
+  .notes dt{font-weight:600; font-size:13.5px}
+  .notes dd{margin:2px 0 0; font-size:13px; color:var(--muted); max-width:62ch}
+
+  .signup{margin-top:12px; font-size:13px; color:var(--muted)}
+  .signup a{color:var(--accent); font-weight:600}
+  .signup a+a{margin-left:14px}
+
+  .cityform{display:flex; gap:8px; margin-top:14px; flex-wrap:wrap}
+  .cityform input{
+    font:inherit; font-size:15px; flex:1 1 180px; min-width:0;
+    padding:11px 12px; border-radius:10px; border:1.5px solid var(--line);
+    background:var(--ground); color:var(--ink);
+  }
+  .cityform input:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .cmd{
+    margin-top:12px; background:var(--sunk); border:1px solid var(--line);
+    border-radius:10px; padding:12px; font-family:var(--mono); font-size:12.5px;
+    overflow-x:auto; white-space:pre; color:var(--ink);
+  }
+  .cmdrow{display:flex; gap:10px; align-items:center; margin-top:8px; flex-wrap:wrap}
+  .cmdnote{font-size:12.5px; color:var(--muted); flex:1 1 220px}
+
+  footer{margin-top:28px; color:var(--muted); font-size:13px}
+  code{font-family:var(--mono); font-size:12.5px; background:var(--sunk);
+       padding:1px 5px; border-radius:4px}
+  @media (prefers-reduced-motion:reduce){.pulse{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>beer in this town</h1>
+    <p class="sub">Three steps, once. Everything after this runs from your terminal.</p>
+  </header>
+
+  <div class="stepper" id="stepper"></div>
+
+  <div class="lead" id="lead">
+    <div class="step" id="leadstep">Checking…</div>
+    <h2 id="leadtitle">Reading your setup</h2>
+    <p id="leadbody">One moment.</p>
+    <div class="go" id="leadgo"></div>
+  </div>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <details class="panel" id="panel">
+    <summary>All checks</summary>
+    <ul class="checks" id="checks"></ul>
+    <div class="actions">
+      <button id="connect" type="button">Sign in again</button>
+      <button id="verify" type="button">Test both accounts</button>
+      <button id="selectors" type="button">Check Untappd's pages</button>
+    </div>
+  </details>
+
+  <div id="activity"></div>
+
+  <footer>
+    This page only reads your setup and signs you in. It can't save anything to
+    your Google Maps lists — <code>pin</code> and <code>notes</code> have no
+    button here and no route on this server.
+  </footer>
+</div>
+
+<script>
+// The key arrives in the URL fragment, which browsers never send in a Referer
+// header or write to a server log. Read it once, then clear it from the bar.
+const TOKEN = location.hash.slice(1);
+if (TOKEN) history.replaceState(null, "", location.pathname);
+
+const $ = id => document.getElementById(id);
+const BUTTONS = ["connect", "verify", "selectors"];
+let busy = false, lastJobId = null;
+
+async function api(path, options) {
+  const res = await fetch(path, {
+    ...options,
+    headers: { "Content-Type": "application/json", "X-Beertown-Token": TOKEN },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.message || ("HTTP " + res.status));
+  return body;
+}
+
+function clock(seconds) {
+  const s = Math.floor(seconds % 60), m = Math.floor(seconds / 60);
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+function renderChecks(rows) {
+  const host = $("checks");
+  host.textContent = "";
+  for (const c of rows) {
+    const li = document.createElement("li");
+    li.dataset.s = c.state;
+
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    li.appendChild(dot);
+
+    const body = document.createElement("div");
+    body.className = "body";
+
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = c.label;
+    // "Tested" is the whole distinction this page is built around: a cookie
+    // on disk is not a working account.
+    if (c.key === "google" || c.key === "untappd") {
+      const tag = document.createElement("span");
+      tag.className = "tag" + (c.verified ? " tested" : "");
+      tag.textContent = c.verified ? "tested" : "not tested";
+      label.appendChild(tag);
+    }
+    body.appendChild(label);
+
+    const detail = document.createElement("div");
+    detail.className = "detail";
+    detail.textContent = c.detail;
+    body.appendChild(detail);
+
+    if (c.fix) {
+      const fix = document.createElement("div");
+      fix.className = "fix";
+      fix.textContent = c.fix;
+      body.appendChild(fix);
+    }
+
+    // Somewhere to act, and somewhere to go. A row that names a problem and
+    // leaves you to find the page yourself is the work this page removes.
+    const needsAction = c.action && c.state !== "ok";
+    if (needsAction || (c.links && c.links.length)) {
+      const go = document.createElement("div");
+      go.className = "rowgo";
+      if (needsAction) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "go";
+        b.id = "row-" + c.key + "-" + c.action;
+        b.textContent = c.action === "connect" ? "Sign in" : "Test it";
+        b.disabled = busy;
+        b.addEventListener("click", () => start(c.action));
+        go.appendChild(b);
+      }
+      for (const link of c.links || []) {
+        const a = document.createElement("a");
+        a.href = link.url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = link.label + " ↗";
+        go.appendChild(a);
+      }
+      body.appendChild(go);
+    }
+
+    if (c.why) {
+      const d = document.createElement("details");
+      const s = document.createElement("summary");
+      s.textContent = "Why this matters";
+      const para = document.createElement("p");
+      para.textContent = c.why;
+      d.append(s, para);
+      body.appendChild(d);
+    }
+
+    li.appendChild(body);
+    host.appendChild(li);
+  }
+}
+
+// Someone with no Untappd account cannot sign in to one, and "sign in" is
+// the wrong word for them. Both paths, named plainly.
+const SIGNUP = {
+  connect: [
+    ["https://accounts.google.com/signup", "Create a Google account"],
+    ["https://untappd.com/signup", "Create an Untappd account"],
+  ],
+};
+
+// The eyebrow counts the stepper's stages, not the underlying steps. It used
+// to count its own list of five, so the card said "Step 4 of 5" under a
+// stepper reading 2 of 3 -- two numbering systems on one screen, and the
+// reader has no way to know which is the real one.
+
+function renderStepper(stages) {
+  const host = $("stepper");
+  if (!stages) return;
+  const sig = stages.map(s => s.key + s.state).join("|");
+  if (host.dataset.sig === sig) return;
+  host.dataset.sig = sig;
+  host.textContent = "";
+
+  stages.forEach((s, i) => {
+    if (i > 0) {
+      const rail = document.createElement("div");
+      rail.className = "rail" + (s.state !== "todo" ? " lit" : "");
+      host.appendChild(rail);
+    }
+    const stg = document.createElement("div");
+    stg.className = "stg";
+    stg.dataset.s = s.state;
+    const bead = document.createElement("span");
+    bead.className = "bead";
+    bead.textContent = s.state === "done" ? "✓" : String(i + 1);
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = s.label;
+    stg.append(bead, nm);
+    host.appendChild(stg);
+  });
+}
+
+function renderLead(state) {
+  const step = state.next_step;
+  if (!step) return;
+  const lead = $("lead");
+  lead.className = "lead" + (step.done ? " done" : "");
+
+  const stages = state.stages || [];
+  const at = stages.findIndex(s => s.state === "current");
+  $("leadstep").textContent = step.done
+    ? "Last step"
+    : at >= 0 ? "Step " + (at + 1) + " of " + stages.length : "Setup";
+  $("leadtitle").textContent = step.title;
+  $("leadbody").textContent = step.body;
+
+  const go = $("leadgo");
+  // Rebuilt only when the step changes, so typing in the city field is not
+  // wiped out by the one-second poll.
+  if (go.dataset.key === step.key && !state.busy) return;
+  go.dataset.key = step.key;
+  go.textContent = "";
+
+  if (step.cta && step.action) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "primary";
+    b.id = "lead-" + step.action;
+    b.textContent = step.cta;
+    b.disabled = !!state.busy;
+    b.addEventListener("click", () => start(step.action));
+    go.appendChild(b);
+  }
+
+  for (const [href, text] of SIGNUP[step.key] || []) {
+    const row = go.querySelector(".signup") || document.createElement("div");
+    row.className = "signup";
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = text;
+    row.appendChild(a);
+    go.appendChild(row);
+  }
+
+  if (step.done) renderCityForm(go, state);
+
+  if (step.notes && step.notes.length) {
+    const d = document.createElement("details");
+    d.className = "notes";
+    const s = document.createElement("summary");
+    s.textContent = "What the city name decides";
+    const dl = document.createElement("dl");
+    for (const n of step.notes) {
+      const dt = document.createElement("dt");
+      dt.textContent = n.heading;
+      const dd = document.createElement("dd");
+      dd.textContent = n.body;
+      dl.append(dt, dd);
+    }
+    d.append(s, dl);
+    go.appendChild(d);
+  }
+}
+
+const UNSAVED = "Press “Use this city” so the agent picks it up, or "
+  + "copy the command and run it yourself. --no-upload writes the files "
+  + "without touching your Google Maps.";
+
+function renderCityForm(go, state) {
+  const form = document.createElement("div");
+  form.className = "cityform";
+
+  const input = document.createElement("input");
+  input.id = "city";
+  input.type = "text";
+  input.placeholder = "London";
+  input.setAttribute("aria-label", "City to collect venues for");
+  // The server's record wins over this browser's: it is what the agent will
+  // actually use, and a stale localStorage value would show a city that is
+  // not the one in play. Nothing is prefilled beyond that -- there is no
+  // default city, so an empty box is the honest starting state.
+  let saved = "";
+  try { saved = localStorage.getItem("beertown.city") || ""; } catch (e) {}
+  input.value = (state.intent && state.intent.query) || saved || "";
+  form.appendChild(input);
+  go.appendChild(form);
+
+  const cmd = document.createElement("div");
+  cmd.className = "cmd";
+  cmd.id = "cmd";
+  go.appendChild(cmd);
+
+  const row = document.createElement("div");
+  row.className = "cmdrow";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "Copy command";
+  const note = document.createElement("span");
+  note.className = "cmdnote";
+  note.textContent = state.intent
+    ? "Saved. The agent will use “" + state.intent.query
+      + "”, saving to “" + state.intent.map_title + "”."
+    : UNSAVED;
+  row.append(copy, note);
+  go.appendChild(row);
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "go";
+  save.textContent = "Use this city";
+
+  const build = () => {
+    const city = (input.value || "").trim();
+    // No city, no command. Showing one built from a placeholder is how
+    // somebody copies a run for a place they never named.
+    cmd.hidden = !city;
+    cmd.textContent = city
+      ? 'beertown run --query "' + city + '" --count '
+        + state.defaults.count + " --no-upload"
+      : "";
+    save.disabled = !city;
+    try { localStorage.setItem("beertown.city", city); } catch (e) {}
+  };
+  input.addEventListener("input", () => { build(); note.textContent = UNSAVED; });
+
+  // Saving is what makes the city reach the agent. Without it this field
+  // only ever fed the command above, so a person could type London here and
+  // an agent reading `status` would go on offering something else.
+  save.addEventListener("click", async () => {
+    const city = (input.value || "").trim();
+    if (!city) { input.focus(); return; }
+    save.disabled = true;
+    try {
+      const body = await api("/api/city", {
+        method: "POST", body: JSON.stringify({ city }),
+      });
+      note.textContent = "Saved. The agent will use “"
+        + body.intent.query + "”, saving to “"
+        + body.intent.map_title + "”.";
+    } catch (e) {
+      note.textContent = e.message;
+    } finally {
+      save.disabled = false;
+    }
+  });
+  form.appendChild(save);
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(cmd.textContent);
+      copy.textContent = "Copied";
+      setTimeout(() => { copy.textContent = "Copy command"; }, 1600);
+    } catch (e) {
+      // Clipboard can be refused; selecting the text still works.
+      copy.textContent = "Select it above";
+    }
+  });
+  build();
+}
+
+function renderBanner(state) {
+  const el = $("banner");
+  el.className = "banner";
+  el.hidden = !state.busy;
+  if (state.busy) el.textContent = "Working — the log below says what's happening.";
+}
+
+async function start(action) {
+  if (busy) return;
+  renderButtons({ busy: true });
+  try {
+    await api("/api/run", { method: "POST", body: JSON.stringify({ action }) });
+  } catch (e) {
+    const el = $("banner");
+    el.hidden = false;
+    el.className = "banner bad";
+    el.textContent = e.message;
+    renderButtons({ busy: false });
+    return;
+  }
+  tick();
+}
+
+function renderJob(job) {
+  const host = $("activity");
+  if (!job) { host.textContent = ""; return; }
+
+  // Rebuild only when the job or its step count changes, so the clock can
+  // tick without the log flickering under the reader.
+  const sig = job.id + ":" + job.steps.length + ":" + job.state;
+  if (host.dataset.sig !== sig) {
+    host.dataset.sig = sig;
+    host.textContent = "";
+
+    const box = document.createElement("div");
+    box.className = "job";
+
+    const head = document.createElement("div");
+    head.className = "jobhead";
+    const title = document.createElement("strong");
+    if (job.state === "running") {
+      const p = document.createElement("span");
+      p.className = "pulse";
+      title.appendChild(p);
+    }
+    title.appendChild(document.createTextNode(
+      job.state === "running" ? job.title
+      : job.state === "done" ? job.title + " — finished"
+      : job.title + " — stopped"));
+    head.appendChild(title);
+
+    const c = document.createElement("span");
+    c.className = "clock";
+    c.id = "clock";
+    c.textContent = clock(job.elapsed);
+    head.appendChild(c);
+    box.appendChild(head);
+
+    const steps = document.createElement("ol");
+    steps.className = "steps";
+    const t0 = job.steps.length ? job.steps[0].at : 0;
+    for (const s of job.steps) {
+      const li = document.createElement("li");
+      if (s.aside) li.className = "aside";
+      const t = document.createElement("span");
+      t.className = "t";
+      t.textContent = clock(s.at - t0);
+      const txt = document.createElement("span");
+      txt.className = "txt";
+      txt.textContent = s.text;
+      li.append(t, txt);
+      steps.appendChild(li);
+    }
+    box.appendChild(steps);
+
+    if (job.error) {
+      const e = document.createElement("div");
+      e.className = "err";
+      e.textContent = job.error;
+      box.appendChild(e);
+    }
+    host.appendChild(box);
+  } else {
+    const c = $("clock");
+    if (c) c.textContent = clock(job.elapsed);
+  }
+}
+
+function renderButtons(state) {
+  busy = state.busy;
+  for (const id of BUTTONS) $(id).disabled = busy;
+  const lead = $("leadgo").querySelector("button.primary");
+  if (lead) lead.disabled = busy;
+  for (const b of document.querySelectorAll(".rowgo button")) b.disabled = busy;
+}
+
+async function tick() {
+  try {
+    const state = await api("/api/state");
+    renderChecks(state.checks);
+    renderStepper(state.stages);
+    renderLead(state);
+    renderBanner(state);
+    renderJob(state.job);
+    renderButtons(state);
+    if (state.job) lastJobId = state.job.id;
+  } catch (e) {
+    const el = $("banner");
+    el.hidden = false;
+    el.className = "banner bad";
+    el.textContent = TOKEN
+      ? "Lost contact with the dashboard: " + e.message
+      : "This page is missing its key. Open the link the terminal printed.";
+  }
+}
+
+for (const id of BUTTONS) {
+  $(id).addEventListener("click", () => start(id));
+}
+
+tick();
+// One second is fast enough to feel live and slow enough that a fifteen
+// minute sign-in does not make a thousand requests.
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

@@ -10,9 +10,15 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from urllib.parse import urlencode
 
 from .config import SEARCH_URL, Settings
-from .http_client import BudgetExceeded, PoliteClient, RateLimitTripped
+from .http_client import (
+    BudgetExceeded,
+    PoliteClient,
+    RateLimitTripped,
+    TransportUnavailable,
+)
 from .models import Venue, VenueRef
 from .parsers import (
     ClientRenderedSearch,
@@ -20,6 +26,11 @@ from .parsers import (
     parse_search_page,
     parse_venue_stats,
 )
+
+# Shared with the account verifier rather than written twice: two lists
+# of markers for one question is two things to keep in step, and the
+# one that drifts is whichever nobody is looking at.
+from .ui.checks import _UNTAPPD_SIGNED_IN
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +44,16 @@ PAGE_SIZE_GUESS = 25
 LOGIN_GATE_RE = re.compile(
     r"algolia-login-gate|please sign in to view more", re.IGNORECASE
 )
+
+
+def signed_in(html: str) -> bool:
+    """Does this page show a signed-in session?
+
+    The difference between "Untappd stopped us" and "there were only 14
+    venues". Both produce a short result set; only one is a problem, and only
+    one has a remedy the user can act on.
+    """
+    return any(marker in html for marker in _UNTAPPD_SIGNED_IN)
 
 
 class PaginationUnsupported(RuntimeError):
@@ -54,6 +75,19 @@ def assert_not_login_gated(
     nothing was blocking the way.
     """
     if len(refs) >= target_count or not LOGIN_GATE_RE.search(html):
+        return
+    if signed_in(html):
+        # The gate markup is on the page and we are demonstrably signed in,
+        # so it is not a wall -- Untappd renders it when the results simply
+        # run out. Raising here told a signed-in user to sign in, which is
+        # the worst kind of error: confident, actionable, and impossible to
+        # act on. A narrow query legitimately returns few venues.
+        log.info(
+            "Search returned %d of %d requested. The page carries login-gate "
+            "markup, but this session is signed in -- treating it as the "
+            "query running out of venues rather than a wall.",
+            len(refs), target_count,
+        )
         return
     raise SearchLoginRequired(
         f"Search stopped at {len(refs)} of {target_count} requested venues "
@@ -109,12 +143,24 @@ def search_via_http(client: PoliteClient, s: Settings) -> list[VenueRef]:
     )
 
 
+def search_url_for(query: str) -> str:
+    """Untappd's venue search for this query, correctly encoded.
+
+    urlencode, not an f-string. Interpolating the query raw meant an `&` in it
+    started a new parameter and a `#` turned the rest into a fragment -- so
+    "rock & roll" searched for "rock ", returned results, and gave no sign
+    anything was wrong. The HTTP path has always passed `params=`; this is the
+    path that actually runs now that search is client-rendered.
+    """
+    return f"{SEARCH_URL}?{urlencode({'q': query, 'type': 'venues'})}"
+
+
 def search_via_browser(s: Settings) -> list[VenueRef]:
     """Fallback: drive real Chrome and click Show More until we have enough."""
     from playwright.sync_api import TimeoutError as PWTimeout
     from playwright.sync_api import sync_playwright
 
-    url = f"{SEARCH_URL}?q={s.query}&type=venues"
+    url = search_url_for(s.query)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             user_data_dir=str(s.profile_dir),
@@ -208,11 +254,16 @@ def fetch_venues(
         try:
             html = client.get(ref.url)
             out.append(parse_venue_stats(html, ref))
-        except (RateLimitTripped, BudgetExceeded):
+        except (RateLimitTripped, BudgetExceeded, TransportUnavailable):
             # These are deliberate stops, not per-venue failures. Swallowing
             # them meant a run that hit a 429 wall kept firing one real request
             # per remaining venue into an active rate-limit -- the exact
             # behaviour PoliteClient exists to prevent.
+            #
+            # TransportUnavailable belongs here for the same reason and was
+            # missed: it is a plain RuntimeError, so the broad handler below
+            # caught it and the trip added to the client never reached the
+            # caller. The run still slept its way through every venue.
             log.error("Rate limit reached at venue %d/%d -- aborting the run.",
                       i, len(refs))
             raise

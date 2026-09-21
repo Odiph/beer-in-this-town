@@ -54,6 +54,10 @@ def write_csv(venues: list[Venue], path: Path) -> Path:
     return path
 
 
+def _or_na(n: int | None) -> str:
+    return "n/a" if n is None else str(n)
+
+
 def write_kml(venues: list[Venue], path: Path, title: str) -> Path:
     """KML beats CSV for My Maps import: exact coordinates, no re-geocoding by
     Google, and a rich info-window body carrying the check-in stats."""
@@ -80,11 +84,14 @@ def write_kml(venues: list[Venue], path: Path, title: str) -> Path:
             f"<b>{html_mod.escape(v.ref.category or '')}</b><br/>"
             f"{html_mod.escape(v.ref.address or '')}<br/>"
             f"{html_mod.escape(v.ref.city or '')}<br/><br/>"
-            f"Total check-ins: {v.total}<br/>"
-            f"Unique: {v.unique}<br/>"
-            f"Monthly: {v.monthly}<br/>"
+            # Unknown reads as unknown. A map-swept venue has no counts yet,
+            # and `None` in a popup looks like a bug; `0` would be a lie.
+            f"Total check-ins: {_or_na(v.total)}<br/>"
+            f"Unique: {_or_na(v.unique)}<br/>"
+            f"Monthly: {_or_na(v.monthly)}<br/>"
             f"You: {v.you if v.you is not None else '-'}<br/>"
-            f'<a href="{v.ref.url}">View on Untappd</a>'
+            # An empty href would render as a link back to the current page.
+            + (f'<a href="{v.ref.url}">View on Untappd</a>' if v.ref.url else "")
         )
         ET.SubElement(pm, "description").text = desc
 
@@ -179,7 +186,8 @@ def write_gpx(venues: list[Venue], path: Path, title: str) -> Path:
         wpt = ET.SubElement(gpx, "wpt", {"lat": f"{v.lat:.6f}", "lon": f"{v.lng:.6f}"})
         ET.SubElement(wpt, "name").text = v.ref.name
         ET.SubElement(wpt, "desc").text = _stats_line(v)
-        ET.SubElement(wpt, "link", {"href": v.ref.url})
+        if v.ref.url:
+            ET.SubElement(wpt, "link", {"href": v.ref.url})
 
     path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(gpx).write(path, encoding="utf-8", xml_declaration=True)
