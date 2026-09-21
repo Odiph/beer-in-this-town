@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import re
+import unicodedata
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -89,6 +91,27 @@ class Settings:
             google_geocoding_key=os.environ.get("GOOGLE_GEOCODING_KEY") or None,
             nominatim_email=os.environ.get("NOMINATIM_EMAIL") or None,
         )
+
+
+SCOPE_FALLBACK = "unnamed"
+
+
+def scope_slug(value: str) -> str:
+    """Turn a city or list name into a filename-safe key.
+
+    State files are named after the thing they describe, which means a user
+    string reaches the filesystem. Stripping everything that is not a letter,
+    digit or hyphen is what stops a list called "../../etc/passwd" from writing
+    outside `state/`; collapsing case and spaces is what stops "Singapore Bars"
+    and "singapore bars" from keeping two half-complete journals of the same
+    list.
+    """
+    normalised = unicodedata.normalize("NFKD", value)
+    ascii_only = normalised.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_only.lower()).strip("-")
+    # A name of pure punctuation would otherwise produce "", and every such
+    # list would then share one journal named after nothing.
+    return slug or SCOPE_FALLBACK
 
 
 def ensure_dirs() -> None:

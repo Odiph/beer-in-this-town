@@ -20,6 +20,17 @@ from .models import Venue
 
 log = logging.getLogger(__name__)
 
+
+class GeocoderUnavailable(RuntimeError):
+    """The geocoder itself is not working -- key, quota, billing or network.
+
+    Distinct from a venue that simply has no match. The difference decides
+    whether one venue loses its pin or the whole run should stop, and
+    collapsing the two is how a rejected API key ships a KML with four
+    placemarks instead of a hundred and still reports success.
+    """
+
+
 GEOCACHE = STATE_DIR / "geocache.json"
 GOOGLE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
@@ -51,7 +62,7 @@ def _google(client: httpx.Client, key: str, query: str) -> tuple[float, float] |
     if status != "OK":
         # REQUEST_DENIED / OVER_QUERY_LIMIT are configuration or billing
         # problems -- surface them, do not quietly degrade.
-        raise RuntimeError(
+        raise GeocoderUnavailable(
             f"Google Geocoding returned {status}: {data.get('error_message')}"
         )
     loc = data["results"][0]["geometry"]["location"]
@@ -84,6 +95,7 @@ def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
     log.info("Geocoding %d/%d venues without embedded coordinates",
              len(todo), len(venues))
     resolved: dict[str, tuple[float, float, str]] = {}
+    attempted = errored = 0
 
     contact = s.nominatim_email or "no-contact-set"
     ua = {"User-Agent": f"beer-in-this-town/1.0 ({contact})"}
@@ -96,6 +108,7 @@ def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
                 lat, lng = cache[query]
                 resolved[v.ref.venue_id] = (lat, lng, "cache")
                 continue
+            attempted += 1
             try:
                 if s.google_geocoding_key:
                     hit = _google(client, s.google_geocoding_key, query)
@@ -104,8 +117,13 @@ def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
                     hit = _nominatim(client, query, s.nominatim_email)
                     source = "nominatim"
                     time.sleep(s.nominatim_delay_s)  # OSM policy: <= 1 req/sec
+            except GeocoderUnavailable:
+                # Never per-venue: the next hundred lookups would fail the same
+                # way. Stop instead of dropping a pin a hundred times.
+                raise
             except Exception as exc:
                 log.error("geocode failed for %r: %s", query, exc)
+                errored += 1
                 continue
             if hit is None:
                 log.warning("no geocode result for %r", query)
@@ -114,6 +132,17 @@ def geocode_missing(venues: list[Venue], s: Settings) -> list[Venue]:
             resolved[v.ref.venue_id] = (hit[0], hit[1], source)
 
     _save_cache(cache)
+
+    # Every single lookup erroring is not a hundred unlucky addresses; it is
+    # the geocoder being unreachable, blocked or rate-limited. A venue with no
+    # match does not reach this count -- that path returns None rather than
+    # raising -- so this cannot fire on a genuinely hard batch.
+    if attempted and errored == attempted:
+        raise GeocoderUnavailable(
+            f"All {attempted} geocoding request(s) failed. The geocoder is "
+            f"unreachable, blocked or misconfigured."
+        )
+
     return [
         v.with_coords(*resolved[v.ref.venue_id]) if v.ref.venue_id in resolved else v
         for v in venues
