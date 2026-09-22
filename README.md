@@ -4,21 +4,29 @@
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Make a craft-beer map of any city, in a Google Maps saved list.**
+**Every good beer place in a city, on the map already in your pocket.**
 
-Point it at a city and you get its beer venues as a saved list on your everyday
-Google Maps, each place's note carrying its Untappd numbers:
+Name a city. Get its beer venues as a saved list in Google Maps -- the app you
+already open when you are standing on a street deciding where to go -- with
+each place's Untappd numbers written into its note:
 
 ```
 Untappd #45 | 2,628 check-ins | 807 unique | 10/month | as of 2026-08-20
 ```
 
-so the map itself tells you which of the four bars on this street is the one
-people keep going back to.
+Four bars on this street, and the map tells you which one people keep coming
+back to. No new app, no tab to keep open, and it works on the phone in your
+hand when you land somewhere new.
 
-It is an open-source tool, built to be followed by a stranger and to be driven
-by a coding agent: one command per step, every command speaks JSON, and
-`status` always says what to do next.
+- **Any city.** London came back with 611 venues in 40 minutes.
+- **Real numbers, not vibes.** Check-ins, unique drinkers and this month's
+  activity, straight from each venue's Untappd page.
+- **Yours to keep.** Also exports KML, GPX and GeoJSON, so the same map opens
+  in Organic Maps, OsmAnd or anything else -- no account required.
+- **Free.** No API keys, no billing; the geocoding is OpenStreetMap.
+- **Built for people and for coding agents.** One command per step, every
+  command speaks JSON, and `status` always says what to run next -- so you can
+  follow it yourself or hand the whole thing to Claude Code.
 
 ## How it works
 
@@ -190,42 +198,43 @@ into Organic Maps or OsmAnd (bookmarks on the everyday map, no account), or
 add the places to a list by hand using Maps' own multi-select on Android and
 then share the list. Saved lists cap at 3000 places.
 
-## Where the lines are
+## Using other people's services
 
-This project automates two services' own apps, and both say no to it. Here it
-is in one place, plainly: **automating the Untappd app and the Untappd website
-is against Untappd's terms of service, and automating Google Maps is against
-Google's.** Using those parts is your choice, made with that knowledge.
+This tool works by using three services the way you would, only faster and
+without getting bored: it reads the Untappd app's map, reads Untappd venue
+pages, and saves places into Google Maps. It is worth a minute of your
+thought, because the accounts involved are yours.
 
-| Surface | Commands | Status |
+| What it touches | Commands | Worth knowing |
 |---|---|---|
-| Automating the Untappd Android app over adb | `sweep` | **Against Untappd's ToS**, which prohibits automated access. Drives your signed-in app account. |
-| Reading Untappd venue pages | `enrich`, `selfcheck` | **Against Untappd's ToS**, same clause. |
-| Driving the Google Maps UI | `pin`, `notes` | **Against Google's ToS** — "do not access the Services through automated means". Writes to your account. |
-| OpenStreetMap geocoding and Overpass | `sweep` | **Permitted**, within OSM's usage policies; paced accordingly. |
-| Google Places API | `closures` (optional) | **Supported API**, billed to your key. |
-| GPX / GeoJSON / KML files | `export` | Local files. No line crossed. |
+| The Untappd Android app, over adb | `sweep` | Untappd's terms are written for people tapping, not scripts; automated access is not something they invite. The sweep reads the map and never taps a venue, checks in or posts anything. |
+| Untappd venue pages | `enrich`, `selfcheck` | Same terms, same thought. Public pages, read at reading speed, signed in as you. |
+| Google Maps saved lists | `pin`, `notes` | Google's terms ask you not to use the service through automated means. [There is no API for saved lists](#there-is-no-api-for-saved-lists-we-checked), so this drives the interface the way you would. Your account, your call. |
+| OpenStreetMap: Nominatim and Overpass | `sweep` | Fine within their usage policies, which the tool follows: a contact header, modest queries, results cached. Data is © OpenStreetMap contributors (ODbL). |
+| Google Places API | `closures` (optional) | A supported API, billed to your own key. |
+| KML / GPX / GeoJSON files | `export` | Files on your disk. Nothing to consider. |
 
-**On the Untappd side**, the pacing is a mitigation, not an exemption: the
-sweep waits 5–8 seconds after every search and never taps a venue; venue pages
-are read over one connection with jittered 2–4.5 s gaps, a 600-per-hour
-ceiling persisted to disk, and a 12h cache. It stays far below what a person
-using the app or the site generates. That reduces the chance of causing anyone
-a problem. It does not make it permitted.
+**How the tool tries to be a good guest.** Every request is paced and
+jittered, with a 600-an-hour ceiling and a 12-hour cache, so a whole city
+generates less traffic than an enthusiastic evening of browsing. The sweep
+waits 5-8 seconds after each search. `enrich` pauses between venues and takes
+a break every twenty or so. None of this makes automated use *permitted* --
+it makes it considerate, and keeps you well clear of looking like a problem.
 
-**On the Google side**, `pin` and `notes` exist only because
-[no API for this exists](#there-is-no-api-for-saved-lists-we-checked). They
-never run as part of anything else, never create a list, and are never offered
-to an agent as a next step. The realistic failure mode is not a crash but a
-**ban**, which is why their guardrails — a 100-per-day write budget, a circuit
-breaker, CAPTCHA detection and a 6-hour cool-off, all persisted to disk — fail
-closed.
+**The account-writing parts are opt-in, and stay that way.** `pin` and `notes`
+never run as part of anything else, are never offered to a coding agent as a
+next step, and never create a list -- you make it yourself. They are wrapped
+in guardrails that fail closed: 100 writes a day, a circuit breaker, CAPTCHA
+detection, and a six-hour cool-off, all persisted to disk. Start with
+`--limit 3` and look at the result before doing more.
 
-If none of that sits right, `export` gives you the same venues as files for
-Organic Maps or OsmAnd, and your Google account is never touched.
+**If you would rather not touch Google at all**, stop after `export`: the same
+venues come out as KML, GPX and GeoJSON for Organic Maps, OsmAnd or any other
+map app, and your Google account is never opened.
 
-This project is not affiliated with Untappd, Google or BlueStacks, and none of
-the above is legal advice. You are responsible for your own use of it.
+Read [Untappd's terms](https://untappd.com/terms) and [Google's](https://policies.google.com/terms)
+and decide what you are comfortable running. This project is not affiliated
+with Untappd, Google or BlueStacks, and nothing here is legal advice.
 
 ## Commands
 
@@ -301,4 +310,4 @@ see [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules,
 MIT. See [LICENSE](LICENSE).
 
 Where this project stands with Untappd's and Google's terms is set out in
-[Where the lines are](#where-the-lines-are).
+[Using other people's services](#using-other-peoples-services).

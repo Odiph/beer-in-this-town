@@ -275,3 +275,29 @@ def test_only_the_list_this_attempt_added_is_undone(tmp_path, loop):
                  pin_once=lambda p, ln: "London MTP25 & Bars")
     _run(tmp_path, breaker_limit=99)
     assert set(calls["unsaved"]) == {"Bars"}, calls["unsaved"]
+
+
+# --- reading the result of a write -----------------------------------------
+@pytest.mark.unit
+def test_a_save_is_not_called_lost_because_the_line_rendered_late(monkeypatch):
+    """Live, with a fixed 1.5 s wait, most places read "not saved" on attempt
+    1 and stuck on 2 or 3 -- ~2.5 writes each against a 100-a-day budget."""
+    answers = iter(["", "", "London Bars Test"])
+    monkeypatch.setattr(pin_to_list, "_saved_in", lambda p: next(answers))
+    got = pin_to_list._saved_in_settled(types.SimpleNamespace(), timeout_s=10,
+                                        sleep=lambda s: None)
+    assert got == "London Bars Test"
+
+
+@pytest.mark.unit
+def test_a_place_that_really_is_unsaved_still_answers_empty(monkeypatch):
+    monkeypatch.setattr(pin_to_list, "_saved_in", lambda p: "")
+    assert pin_to_list._saved_in_settled(types.SimpleNamespace(), timeout_s=0.1,
+                                         sleep=lambda s: None) == ""
+
+
+@pytest.mark.unit
+def test_an_unreadable_panel_still_answers_unknown(monkeypatch):
+    monkeypatch.setattr(pin_to_list, "_saved_in", lambda p: None)
+    assert pin_to_list._saved_in_settled(types.SimpleNamespace(), timeout_s=0.1,
+                                         sleep=lambda s: None) is None
