@@ -199,10 +199,11 @@ def cmd_enrich(s: Settings, city: str, in_path: str | None = None, *,
     )
 
 
-def _enrich(swept: list[Venue], city: str, search: Search, fetch: Fetch):
+def _enrich(swept: list[Venue], city: str, search: Search, fetch: Fetch,
+            rest=None):
     from .resolve import enrich_rows
 
-    return enrich_rows(swept, city, search, fetch)
+    return enrich_rows(swept, city, search, fetch, rest=rest)
 
 
 _SIGN_IN_REMEDY = (
@@ -214,7 +215,7 @@ _SIGN_IN_REMEDY = (
 def _enrich_live(s: Settings, swept: list[Venue], city: str):
     """The real search and fetch, with the robots check `run` had."""
     from .http_client import PoliteClient, _cookies_from_storage_state
-    from .resolve import BrowserNameSearch, page_fetcher
+    from .resolve import BrowserNameSearch, ReadingRhythm, page_fetcher
 
     if not any(v.has_coords for v in swept):
         # Nothing can be matched without a pin; do not open a browser for it.
@@ -237,7 +238,8 @@ def _enrich_live(s: Settings, swept: list[Venue], city: str):
             ))
         # One budget for the searches and the page fetches.
         with BrowserNameSearch(s, budget=client._budget) as search:
-            return _enrich(swept, city, search, page_fetcher(client))
+            return _enrich(swept, city, search, page_fetcher(client),
+                           rest=ReadingRhythm())
 
 
 def _no_fetch(ref: VenueRef) -> Venue:  # pragma: no cover - never reached
