@@ -267,7 +267,8 @@ def make_handler(board: Dashboard):
             return result
 
         def _state(self) -> dict:
-            rows = checks.collect(board.settings, board.proven)
+            rows = checks.collect(board.settings,
+                                  {**_recorded_failures(), **board.proven})
             job = board.runner.current
             intent = _intent()
             city = intent.get("query") if intent else None
@@ -338,6 +339,28 @@ class _Server(ThreadingHTTPServer):
     """
 
     allow_reuse_address = False
+
+
+def _recorded_failures() -> dict:
+    """Failed accounts from the last `verify`, as if this page had run it.
+
+    The dashboard keeps its own results in memory on purpose: a restart
+    should re-prove a success rather than trust a file. A *failure* is
+    different -- re-proving it costs a browser launch and tells the person
+    nothing they do not already know. Found live 2026-09-22: `verify` on the
+    command line had just shown both accounts signed out, and the page still
+    offered "Test both accounts" and hid the sign-in button behind it.
+    """
+    from ..state import last_verification
+
+    record = last_verification() or {}
+    out = {}
+    for key, raw in (record.get("accounts") or {}).items():
+        if isinstance(raw, dict) and raw.get("ran") and not raw.get("ok"):
+            out[key] = checks.VerifyResult(
+                ok=False, detail=raw.get("detail", ""),
+                evidence=raw.get("evidence", ""))
+    return out
 
 
 def build(s: Settings, port: int = DEFAULT_PORT) -> tuple[_Server, str]:
