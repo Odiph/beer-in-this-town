@@ -669,3 +669,15 @@ def test_relaunch_waiting_is_bounded():
     with pytest.raises(WrongScreen):
         ensure_map_screen(dev, settle_max_s=0)
     assert dev.dumps_served <= RELAUNCH_POLLS + 1
+
+
+def test_each_venue_records_the_cell_that_found_it(tmp_path, monkeypatch):
+    """Placement is corrected per cell, so a venue must know its cell --
+    through the journal too, or a resumed sweep loses it."""
+    from beer_in_this_town import app_sweep
+
+    monkeypatch.setattr(app_sweep, "STATE_DIR", tmp_path)
+    out = sweep(FakeDevice([dump_with(["Lauter", "Ursa"])]), CELL,
+                settle_max_s=0, city="Tel Aviv")
+    assert {v.cell for v in out.venues} == {1}
+    assert {v.cell for v in app_sweep.load_journal("Tel Aviv").venues} == {1}

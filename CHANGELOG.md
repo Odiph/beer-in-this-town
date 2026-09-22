@@ -6,6 +6,45 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-22
+
+### Fixed
+- **`pin` could not find any saved list.** Google Maps' picker rows now
+  read "<icon> / <name> / Private · 0 places", and the whole text was
+  compared to the name. The name line is taken now, and still matched
+  exactly.
+- **`pin` could undo a save the person made themselves.** Google joins list
+  names as "A & B"; split on commas alone, a correct save into a place that
+  was already in another list read as a wrong-list save, and the undo path
+  aimed at that other list. Joined names are read, and an undo now removes
+  only a list the same attempt added.
+- **A pre-scoping `pinned.json` was adopted by whichever list ran first,**
+  silently relabelling one list's history as another's (live: a Singapore
+  journal of 103 places became a London list's). It is never adopted now;
+  `pin` says how to rename it by hand.
+- **A large sweep could misplace most of a city.** Found on London: in
+  dense areas the pan measurement is wrong often enough that the camera
+  drifted, and from a quarter of the way in every cell was 6-15 km off. The
+  global fit dropped those venues as outliers but still exported them where
+  the camera thought they were. Each venue now records its cell, and each
+  cell is shifted by the offset its own OpenStreetMap matches agree on
+  before the global fit; sparse cells carry the last measured shift. The
+  sweep result reports `cells_anchored`, `cells_carried` and
+  `max_cell_shift_m`.
+
+### Added
+- **`enrich --limit N`, and a journal.** Every venue is saved as it
+  resolves, so a stopped enrich continues where it stopped and looks nothing
+  up twice; `--limit` runs a city in batches, each repeating itself in
+  `next_actions` until `remaining` is 0. Found live: a London enrich was
+  stopped three times, once at venue 391 of 629, with nothing written.
+
+### Changed
+- **`enrich` paces like a person looking venues up.** Between venues it
+  pauses 6-15 s, and every 20-40 venues it takes a 2-6 minute break. It only
+  slows the run; the per-request floors and the hourly ceiling are unchanged.
+  A large city takes hours.
+
 ## [0.2.0] - 2026-09-22
 
 The source and the destination both changed. Venues now come from a sweep of

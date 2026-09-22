@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .agent_io import Envelope
-from .app_calibrate import Calibration, calibrate
+from .app_calibrate import Calibration, CellAnchoring, anchor_cells, calibrate
 from .app_export import to_venues
 from .app_geo import CITY_ZOOM_M_PER_PX, Camera, Scale
 from .app_sweep import (
@@ -98,6 +98,7 @@ class Census:
     centre: tuple[float, float]
     centre_source: str
     osm_radius_km: float
+    anchoring: CellAnchoring | None = None
 
 
 def _find_desc(xml: str, desc: str) -> tuple[int, int] | None:
@@ -203,11 +204,13 @@ def census(device: Device, city: str, s: Settings, *, here: bool = False,
                     "at %.1f km.", radius)
         found = known_near(centre, radius, s)
     known = [(o.name, o.lat, o.lng) for o in found]
-    fixed, cal = calibrate(result.venues, known, centre)
+    anchored, anchoring = anchor_cells(result.venues, known, centre)
+    fixed, cal = calibrate(anchored, known, centre)
 
     return Census(venues=to_venues(SweepResult(venues=fixed), city),
                   sweep=result, calibration=cal, centre=centre,
-                  centre_source=source, osm_radius_km=radius)
+                  centre_source=source, osm_radius_km=radius,
+                  anchoring=anchoring)
 
 
 def write_census(c: Census, city: str, title: str,
@@ -275,6 +278,11 @@ def census_envelope(c: Census, city: str, list_name: str, csv_path: Path,
                 "rotation_deg": round(cal.rotation_deg, 2),
                 "median_residual_m": round(cal.median_residual_m, 1),
                 "osm_radius_km": round(c.osm_radius_km, 1),
+                "cells_anchored": (c.anchoring.anchored if c.anchoring
+                                   else None),
+                "cells_carried": c.anchoring.carried if c.anchoring else None,
+                "max_cell_shift_m": (round(c.anchoring.max_shift_m)
+                                     if c.anchoring else None),
                 "inliers": list(cal.inliers),
                 "dropped": list(cal.dropped),
             },
