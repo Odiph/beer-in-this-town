@@ -17,6 +17,13 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   sweep result reports `cells_anchored`, `cells_carried` and
   `max_cell_shift_m`.
 
+### Added
+- **`enrich --limit N`, and a journal.** Every venue is saved as it
+  resolves, so a stopped enrich continues where it stopped and looks nothing
+  up twice; `--limit` runs a city in batches, each repeating itself in
+  `next_actions` until `remaining` is 0. Found live: a London enrich was
+  stopped three times, once at venue 391 of 629, with nothing written.
+
 ### Changed
 - **`enrich` paces like a person looking venues up.** Between venues it
   pauses 6-15 s, and every 20-40 venues it takes a 2-6 minute break. It only
