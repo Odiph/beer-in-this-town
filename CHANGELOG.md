@@ -6,6 +6,27 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **`verify` reported Google signed out while `pin` was signed in.** Two
+  places hold the session -- the cookie snapshot `enrich` reads with, and
+  the Chrome profile `pin` drives -- and Google rotates its cookies, so the
+  snapshot goes stale. `verify` now asks the profile when the snapshot says
+  no, refreshes the snapshot from it when the profile is signed in, and
+  still treats a locked profile as "could not check" rather than a verdict.
+- **The dashboard asked you to re-prove a failure.** With `verify` having
+  just shown both accounts signed out, the page still offered "Test both
+  accounts" and hid the sign-in button behind it. A recorded *failure* now
+  seeds the page; a recorded success is still re-proved.
+- **Refreshing the dashboard logged you out of it** (401): the key is read
+  from the URL fragment, which is cleared from the address bar. It is kept
+  for the tab now.
+- The account rows said "NOT TESTED" beside the result of a test. A failed
+  check reads "tested — signed out".
+- `test_writing_through_a_redirected_constant_lands_in_the_sandbox` asserted
+  that the real `state/last_run.json` does not exist, which is only true on
+  a machine that has never run the tool. It now asserts the real file is
+  untouched.
+
 ## [0.3.1] - 2026-09-22
 
 ### Fixed
