@@ -290,10 +290,42 @@ def _located(sv: Located | Venue) -> Located:
     return sv
 
 
+class ReadingRhythm:
+    """Pause the way a person looking venues up would, between venues.
+
+    The per-request gap (2-4.5s) paces requests. It says nothing about the
+    run: a whole city at one page every four seconds, for hours, is the
+    shape of a script. So between venues there is a longer jittered pause,
+    and every 20-40 venues a break of a few minutes. It only ever slows the
+    run down -- the per-request floors and the hourly ceiling still apply.
+    """
+
+    VENUE_GAP_S = (6.0, 15.0)
+    BREAK_EVERY = (20, 40)
+    BREAK_S = (120.0, 360.0)
+
+    def __init__(self, sleep: Callable[[float], None] = time.sleep,
+                 rng: random.Random | None = None) -> None:
+        self._sleep = sleep
+        self._rng = rng or random.Random()
+        self._until_break = self._rng.randint(*self.BREAK_EVERY)
+
+    def __call__(self, done: int) -> None:
+        self._until_break -= 1
+        if self._until_break <= 0:
+            pause = self._rng.uniform(*self.BREAK_S)
+            log.info("Taking a %.0fs break after %d venue(s).", pause, done)
+            self._until_break = self._rng.randint(*self.BREAK_EVERY)
+        else:
+            pause = self._rng.uniform(*self.VENUE_GAP_S)
+        self._sleep(pause)
+
+
 def enrich_rows(swept: list, city: str,
                 search: Callable[[str], list[VenueRef]],
                 fetch: Callable[[VenueRef], Venue],
                 progress: Callable[[int, int, str], None] | None = None,
+                rest: Callable[[int], None] | None = None,
                 ) -> tuple[list[tuple[Venue, Resolution]], Report]:
     """Every swept venue paired with how it resolved, duplicates merged.
 
@@ -311,6 +343,8 @@ def enrich_rows(swept: list, city: str,
         if progress:
             progress(i, len(swept), sv.name)
         res = resolve_one(sv, search, fetch, city)
+        if rest is not None and i < len(swept):
+            rest(i)
         if res.venue is not None and res.venue.ref.venue_id in seen_ids:
             res = Resolution(sv.name, "duplicate", detail=res.venue.ref.url)
         report.resolutions.append(res)
