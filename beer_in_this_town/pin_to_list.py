@@ -37,6 +37,7 @@ import logging
 import random
 import re
 import time
+import unicodedata
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -94,17 +95,15 @@ def _load_journal(list_name: str) -> dict[str, str]:
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
     if LEGACY_JOURNAL.exists():
-        # The pre-scoping journal does not record which list it was built for,
-        # so adopting it is a guess. Make it exactly once, by renaming: a
-        # second list inheriting "already saved" entries it never earned would
-        # skip real work and under-deliver in silence.
+        # The pre-scoping journal does not record which list it was built for.
+        # It used to be adopted by whichever list ran first -- found live
+        # 2026-09-22: a Singapore journal of 103 places was renamed to be the
+        # journal of "London Bars Test". Never guess; say how to adopt it.
         log.warning(
-            "Adopting the pre-scoping pinned.json as the journal for %r, on the "
-            "assumption it was built for that list. Any other list starts "
-            "empty. Rename it back if that assumption is wrong.", list_name,
+            "state/pinned.json predates per-list journals and names no list, "
+            "so it is not used for %r. If it belongs to that list, rename it "
+            "to %s.", list_name, path.name,
         )
-        LEGACY_JOURNAL.replace(path)
-        return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
@@ -170,10 +169,31 @@ def saved_in_target(text: str, list_name: str) -> bool:
     return any(_list_key(n) == want for n in saved_in_names(text))
 
 
+# The other lines of a picker row. Found live 2026-09-22: a row's text is
+# now an icon-font glyph (U+E896), the list name, and a line such as
+# "Private · 0 places", one per line -- and comparing the whole text
+# refused every list, including the one that existed.
+_ROW_META = re.compile(
+    r"^(private|shared|public|only you|anyone with the link)\b"
+    r"|^·?\s*\d+\s+places?$", re.I)
+
+
+def row_list_name(text: str) -> str:
+    """The list's name out of a picker row's text: its first line that is
+    neither an icon glyph nor the visibility/count line."""
+    for line in (text or "").splitlines():
+        line = "".join(c for c in line
+                       if unicodedata.category(c) != "Co").strip()
+        if line and not _ROW_META.search(line):
+            return line
+    return ""
+
+
 def pick_list_row(row_names: list[str], list_name: str) -> int:
     """Index of the row that IS the requested list. Never the nearest one."""
     want = _list_key(list_name)
-    hits = [i for i, n in enumerate(row_names) if _list_key(n) == want]
+    hits = [i for i, n in enumerate(row_names)
+            if _list_key(row_list_name(n)) == want]
     if len(hits) == 1:
         return hits[0]
     if not hits:

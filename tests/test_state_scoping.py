@@ -115,20 +115,19 @@ def test_note_journals_are_per_list(state_dir):
 
 
 @pytest.mark.unit
-def test_a_legacy_journal_is_adopted_by_exactly_one_list(state_dir):
-    """Its list is unrecorded, so the guess is made once and never repeated.
+def test_a_legacy_journal_is_never_adopted_by_guessing(state_dir):
+    """Its list is unrecorded, so no list may claim it.
 
-    Letting a second list inherit "already saved" entries it never earned
-    would skip real work and report success -- the silent under-delivery this
-    project exists to refuse.
+    It used to be adopted by whichever list ran first: live, a Singapore
+    journal of 103 places became the journal of "London Bars Test". The file
+    stays where it is, untouched, for a person to rename.
     """
-    (state_dir / "pinned.json").write_text(
-        json.dumps({"Ghost Whale | None": "ok"}), encoding="utf-8")
+    legacy = state_dir / "pinned.json"
+    legacy.write_text(json.dumps({"Ghost Whale | None": "ok"}), encoding="utf-8")
 
-    assert pin_to_list._load_journal("Singapore Bars") == {"Ghost Whale | None": "ok"}
-    # The adoption consumed the legacy file, so nothing else can inherit it.
-    assert not (state_dir / "pinned.json").exists()
-    assert pin_to_list._load_journal("Singapore Breweries") == {}
+    assert pin_to_list._load_journal("London Bars Test") == {}
+    assert legacy.exists()
+    assert not pin_to_list.journal_path("London Bars Test").exists()
 
 
 @pytest.mark.unit
