@@ -454,7 +454,7 @@ Saved lists hold at most 3000 places.
 `pin` drives Google Maps in the tool's Chrome profile to save each venue into
 your list. **This automates the Google Maps UI, which Google's terms of
 service do not allow.** It is your choice whether to use it; see
-[Where the lines are](../README.md#where-the-lines-are).
+[Using other people's services](../README.md#using-other-peoples-services).
 
 ### Trial
 

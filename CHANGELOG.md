@@ -6,6 +6,22 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-22
+
+### Fixed
+- **`pin` spent about 2.5 writes per place.** After saving it waited a fixed
+  1.5 s and read the "Saved in ..." line; when Maps rendered that line a
+  moment later, a successful save read as "not saved" and was retried --
+  against a 100-a-day budget. It now waits for the line (up to 15 s) instead
+  of guessing, and the list picker and place panel get longer to appear
+  (25 s and 40 s): both timed out on real London places.
+
+### Changed
+- The README leads with what the tool is for rather than how it works, and
+  "Where the lines are" is now "Using other people's services": the same
+  facts, framed as what to think about before running the parts that touch
+  your accounts.
+
 ## [0.3.0] - 2026-09-22
 
 ### Fixed
