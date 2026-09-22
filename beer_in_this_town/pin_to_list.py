@@ -37,6 +37,7 @@ import logging
 import random
 import re
 import time
+import unicodedata
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -94,17 +95,15 @@ def _load_journal(list_name: str) -> dict[str, str]:
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
     if LEGACY_JOURNAL.exists():
-        # The pre-scoping journal does not record which list it was built for,
-        # so adopting it is a guess. Make it exactly once, by renaming: a
-        # second list inheriting "already saved" entries it never earned would
-        # skip real work and under-deliver in silence.
+        # The pre-scoping journal does not record which list it was built for.
+        # It used to be adopted by whichever list ran first -- found live
+        # 2026-09-22: a Singapore journal of 103 places was renamed to be the
+        # journal of "London Bars Test". Never guess; say how to adopt it.
         log.warning(
-            "Adopting the pre-scoping pinned.json as the journal for %r, on the "
-            "assumption it was built for that list. Any other list starts "
-            "empty. Rename it back if that assumption is wrong.", list_name,
+            "state/pinned.json predates per-list journals and names no list, "
+            "so it is not used for %r. If it belongs to that list, rename it "
+            "to %s.", list_name, path.name,
         )
-        LEGACY_JOURNAL.replace(path)
-        return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
@@ -153,9 +152,17 @@ def _list_key(name: str) -> str:
     return _COUNT_SUFFIX.sub("", (name or "").strip()).strip().casefold()
 
 
+# Google joins list names as "A & B" and "A, B & C". Found live: a place
+# saved to "London Bars Test" that was already in "London MTP25" read as
+# "London Bars Test & London MTP25", and splitting on commas alone called a
+# correct save a wrong-list save.
+_LIST_JOIN = re.compile(r"\s*,\s*|\s+&\s+")
+
+
 def saved_in_names(text: str) -> set[str]:
     """The list names out of a "Saved in ..." line, which may name several."""
-    return {part.strip() for part in (text or "").split(",") if part.strip()}
+    return {part.strip() for part in _LIST_JOIN.split(text or "")
+            if part.strip()}
 
 
 def saved_in_target(text: str, list_name: str) -> bool:
@@ -167,13 +174,40 @@ def saved_in_target(text: str, list_name: str) -> bool:
     then journals `ok` and never retries it.
     """
     want = _list_key(list_name)
-    return any(_list_key(n) == want for n in saved_in_names(text))
+    names = saved_in_names(text)
+    if any(_list_key(n) == want for n in names):
+        return True
+    # A target whose own name has " & " in it is split like a join; it is
+    # there if every one of its parts is.
+    parts = {_list_key(p) for p in saved_in_names(list_name)}
+    return len(parts) > 1 and parts <= {_list_key(n) for n in names}
+
+
+# The other lines of a picker row. Found live 2026-09-22: a row's text is
+# now an icon-font glyph (U+E896), the list name, and a line such as
+# "Private · 0 places", one per line -- and comparing the whole text
+# refused every list, including the one that existed.
+_ROW_META = re.compile(
+    r"^(private|shared|public|only you|anyone with the link)\b"
+    r"|^·?\s*\d+\s+places?$", re.I)
+
+
+def row_list_name(text: str) -> str:
+    """The list's name out of a picker row's text: its first line that is
+    neither an icon glyph nor the visibility/count line."""
+    for line in (text or "").splitlines():
+        line = "".join(c for c in line
+                       if unicodedata.category(c) != "Co").strip()
+        if line and not _ROW_META.search(line):
+            return line
+    return ""
 
 
 def pick_list_row(row_names: list[str], list_name: str) -> int:
     """Index of the row that IS the requested list. Never the nearest one."""
     want = _list_key(list_name)
-    hits = [i for i, n in enumerate(row_names) if _list_key(n) == want]
+    hits = [i for i, n in enumerate(row_names)
+            if _list_key(row_list_name(n)) == want]
     if len(hits) == 1:
         return hits[0]
     if not hits:
@@ -601,10 +635,14 @@ def pin_places(
                         outcome = "ok"
                         log.info("  saved (verified: %r)", landed)
                         break
-                    if landed and landed != already:
-                        # Landed somewhere unintended -- undo before retrying so
-                        # we never leave debris in someone else's list.
-                        _unsave(page, landed)
+                    # Undo only what THIS attempt added. A list the place
+                    # was already in is the person's own save, and is never
+                    # touched; nor is the target.
+                    ours = {_list_key(p) for p in saved_in_names(list_name)}
+                    for wrong in sorted(saved_in_names(landed)
+                                        - saved_in_names(already)):
+                        if _list_key(wrong) not in ours:
+                            _unsave(page, wrong)
                     log.warning(
                         "  attempt %d did not stick (panel says %r)",
                         attempt, landed or "not saved",
