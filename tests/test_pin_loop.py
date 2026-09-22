@@ -250,3 +250,28 @@ def test_the_run_is_trimmed_to_the_remaining_budget(tmp_path, loop, monkeypatch)
                          limits=Limits(max_per_run=2, max_per_day=100),
                          min_gap_s=0, max_gap_s=0)
     assert sum(1 for v in journal.values() if v == "ok") == 2
+
+
+# --- a person's own saves are never touched --------------------------------
+@pytest.mark.unit
+def test_a_place_already_in_another_list_is_saved_and_that_list_left_alone(
+    tmp_path, loop
+):
+    """Found live: The Rake was already in the person's "London MTP25". The
+    save worked and the panel read "London Bars Test & London MTP25"; the
+    tool called it a wrong-list save and tried to "undo" the joined text.
+    It must read the join, count the save, and never unsave a list the
+    place was in before the attempt."""
+    calls = loop(saved_in="London MTP25",
+                 pin_once=lambda p, ln: "London Bars & London MTP25")
+    journal = _run(tmp_path)
+    assert set(journal.values()) == {"ok"}
+    assert calls["unsaved"] == []
+
+
+@pytest.mark.unit
+def test_only_the_list_this_attempt_added_is_undone(tmp_path, loop):
+    calls = loop(saved_in="London MTP25",
+                 pin_once=lambda p, ln: "London MTP25 & Bars")
+    _run(tmp_path, breaker_limit=99)
+    assert set(calls["unsaved"]) == {"Bars"}, calls["unsaved"]
