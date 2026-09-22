@@ -6,6 +6,23 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **A large sweep could misplace most of a city.** Found on London: in
+  dense areas the pan measurement is wrong often enough that the camera
+  drifted, and from a quarter of the way in every cell was 6-15 km off. The
+  global fit dropped those venues as outliers but still exported them where
+  the camera thought they were. Each venue now records its cell, and each
+  cell is shifted by the offset its own OpenStreetMap matches agree on
+  before the global fit; sparse cells carry the last measured shift. The
+  sweep result reports `cells_anchored`, `cells_carried` and
+  `max_cell_shift_m`.
+
+### Changed
+- **`enrich` paces like a person looking venues up.** Between venues it
+  pauses 6-15 s, and every 20-40 venues it takes a 2-6 minute break. It only
+  slows the run; the per-request floors and the hourly ceiling are unchanged.
+  A large city takes hours.
+
 ## [0.2.0] - 2026-09-22
 
 The source and the destination both changed. Venues now come from a sweep of
