@@ -253,6 +253,36 @@ def _saved_in(page) -> str | None:
         return None
 
 
+# How long to keep looking for the "Saved in ..." line after a write, and
+# how often to look. Measured live 2026-09-22: with a fixed 1.5 s wait, most
+# places read "not saved" on attempt 1 and stuck on attempt 2 or 3 -- about
+# 2.5 writes per place against a 100-a-day budget, for a line that simply had
+# not rendered yet. A save that really did not happen still costs this wait,
+# which is the cheaper way round.
+SAVED_IN_TIMEOUT_S = 15.0
+SAVED_IN_POLL_S = 1.0
+
+
+def _saved_in_settled(page, timeout_s: float = SAVED_IN_TIMEOUT_S,
+                      sleep=None) -> str | None:
+    """`_saved_in`, but give the panel time to render the line.
+
+    Returns the first non-empty answer. Empty or unreadable until the
+    deadline is the answer, and keeps `_saved_in`'s meaning: "" is
+    definitively in no list, None is could-not-tell.
+    """
+    sleep = sleep or (lambda s: page.wait_for_timeout(int(s * 1000)))
+    deadline = time.monotonic() + timeout_s
+    answer = None
+    while True:
+        answer = _saved_in(page)
+        if answer:
+            return answer
+        if time.monotonic() >= deadline:
+            return answer
+        sleep(SAVED_IN_POLL_S)
+
+
 def _open_place(page, name: str, address: str | None, region: str | None) -> bool:
     """Search for a place and wait for its detail panel. False if not found."""
     page.goto(
@@ -262,7 +292,7 @@ def _open_place(page, name: str, address: str | None, region: str | None) -> boo
     )
     try:
         # Either a place panel (single hit) or a results list (ambiguous query).
-        page.wait_for_selector(f"{SAVE_BTN}, div[role='feed']", timeout=25_000)
+        page.wait_for_selector(f"{SAVE_BTN}, div[role='feed']", timeout=40_000)
     except Exception:
         return False
 
@@ -381,7 +411,7 @@ def _pin_once(page, list_name: str) -> str | None:
         page.get_by_role("menuitemradio", name=list_name, exact=False)
         .or_(page.get_by_role("menuitemcheckbox", name=list_name, exact=False))
     )
-    candidates.first.wait_for(state="visible", timeout=15_000)
+    candidates.first.wait_for(state="visible", timeout=25_000)
     page.wait_for_timeout(1200)  # settle: the menu animates after it is visible
 
     # Match the row by its accessible name. Position is irrelevant, so a reflow
@@ -404,9 +434,8 @@ def _pin_once(page, list_name: str) -> str | None:
     # The picker does not reliably re-render, so never trust it. Reload and read
     # the place panel instead.
     page.goto(place_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_selector(SAVE_BTN, timeout=25_000)
-    page.wait_for_timeout(1500)
-    return _saved_in(page)
+    page.wait_for_selector(SAVE_BTN, timeout=40_000)
+    return _saved_in_settled(page)
 
 
 def _unsave(page, wrong_list: str) -> None:
