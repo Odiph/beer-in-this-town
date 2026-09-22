@@ -152,9 +152,17 @@ def _list_key(name: str) -> str:
     return _COUNT_SUFFIX.sub("", (name or "").strip()).strip().casefold()
 
 
+# Google joins list names as "A & B" and "A, B & C". Found live: a place
+# saved to "London Bars Test" that was already in "London MTP25" read as
+# "London Bars Test & London MTP25", and splitting on commas alone called a
+# correct save a wrong-list save.
+_LIST_JOIN = re.compile(r"\s*,\s*|\s+&\s+")
+
+
 def saved_in_names(text: str) -> set[str]:
     """The list names out of a "Saved in ..." line, which may name several."""
-    return {part.strip() for part in (text or "").split(",") if part.strip()}
+    return {part.strip() for part in _LIST_JOIN.split(text or "")
+            if part.strip()}
 
 
 def saved_in_target(text: str, list_name: str) -> bool:
@@ -166,7 +174,13 @@ def saved_in_target(text: str, list_name: str) -> bool:
     then journals `ok` and never retries it.
     """
     want = _list_key(list_name)
-    return any(_list_key(n) == want for n in saved_in_names(text))
+    names = saved_in_names(text)
+    if any(_list_key(n) == want for n in names):
+        return True
+    # A target whose own name has " & " in it is split like a join; it is
+    # there if every one of its parts is.
+    parts = {_list_key(p) for p in saved_in_names(list_name)}
+    return len(parts) > 1 and parts <= {_list_key(n) for n in names}
 
 
 # The other lines of a picker row. Found live 2026-09-22: a row's text is
@@ -621,10 +635,14 @@ def pin_places(
                         outcome = "ok"
                         log.info("  saved (verified: %r)", landed)
                         break
-                    if landed and landed != already:
-                        # Landed somewhere unintended -- undo before retrying so
-                        # we never leave debris in someone else's list.
-                        _unsave(page, landed)
+                    # Undo only what THIS attempt added. A list the place
+                    # was already in is the person's own save, and is never
+                    # touched; nor is the target.
+                    ours = {_list_key(p) for p in saved_in_names(list_name)}
+                    for wrong in sorted(saved_in_names(landed)
+                                        - saved_in_names(already)):
+                        if _list_key(wrong) not in ours:
+                            _unsave(page, wrong)
                     log.warning(
                         "  attempt %d did not stick (panel says %r)",
                         attempt, landed or "not saved",
