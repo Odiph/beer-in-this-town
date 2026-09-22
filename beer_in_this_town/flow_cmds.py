@@ -25,14 +25,17 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import logging
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
+from . import config
 from .agent_io import Envelope, Problem, fail
 from .classify import craft_beer_decision
-from .config import Settings, cli_arg, stage_path
+from .config import Settings, city_slug, cli_arg, stage_path
 from .export import (
     MAP_FORMATS,
     osm_attribution,
@@ -81,6 +84,11 @@ def add_parsers(sub: argparse._SubParsersAction,
                             "No default.")
         p.add_argument("--in", dest="in_path", default=None,
                        help="read this file instead of the previous step's")
+        if name == "enrich":
+            p.add_argument("--limit", type=_positive, default=None,
+                           help="look up at most this many venues not done "
+                                "yet, then stop; re-run to continue. Progress "
+                                "is saved after every venue either way.")
         if name == "export":
             p.add_argument("--format", default=",".join(MAP_FORMATS),
                            help="comma-separated: kml, gpx, geojson "
@@ -102,7 +110,7 @@ def dispatch(args: argparse.Namespace, s: Settings) -> Envelope | None:
         ))
     in_path = getattr(args, "in_path", None)
     if cmd == "enrich":
-        return cmd_enrich(s, city, in_path)
+        return cmd_enrich(s, city, in_path, limit=getattr(args, "limit", None))
     if cmd == "filter":
         return cmd_filter(s, city, in_path)
     return cmd_export(s, city, in_path, getattr(args, "format", None))
@@ -147,10 +155,59 @@ def write_stage(path: Path, rows: list[dict], fields: list[str]) -> Path:
 
 # --- enrich ---------------------------------------------------------------
 
+def _positive(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be 1 or more")
+    return value
+
+
+# --- enrich journal -------------------------------------------------------
+#
+# A city is hours of paced lookups, and a run can be stopped at any point --
+# found live: London was stopped three times, once at venue 391 of 629, with
+# nothing written, because the CSV is written only at the end. So every venue
+# is journalled as it resolves, keyed by its position in the sweep file and
+# tied to that file's content: a new sweep starts a new journal.
+
+def _journal_path(city: str) -> Path:
+    return config.STATE_DIR / f"enriched_{city_slug(city)}.json"
+
+
+def _fingerprint(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load_journal(city: str, source: str) -> dict[str, dict]:
+    try:
+        raw = json.loads(_journal_path(city).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if raw.get("source") != source:
+        return {}
+    return dict(raw.get("done", {}))
+
+
+def _save_journal(city: str, source: str, done: dict[str, dict]) -> None:
+    path = _journal_path(city)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"source": source, "done": done},
+                              ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
 def cmd_enrich(s: Settings, city: str, in_path: str | None = None, *,
+               limit: int | None = None,
                search: Search | None = None,
                fetch: Fetch | None = None) -> Envelope:
     """Join every swept venue to its venue page; keep the ones that do not.
+
+    Resumable: each venue is journalled as it resolves, so a stopped run
+    loses nothing and a re-run starts where it stopped. `--limit N` looks up
+    at most N venues not done yet and stops -- short batches, each of which
+    finishes. `2_enriched.csv` is written only once every venue is done, so
+    `filter` never runs on part of a city.
 
     `search` and `fetch` are injected by tests. Left out, the real ones are
     used: Chrome for the per-name search, `PoliteClient` for the pages, both
@@ -160,28 +217,51 @@ def cmd_enrich(s: Settings, city: str, in_path: str | None = None, *,
     if isinstance(src, Envelope):
         return src
     swept = [v for v, _ in read_stage(src)]
+    source = _fingerprint(src)
+    done = _load_journal(city, source)
+    todo = [i for i in range(len(swept)) if str(i) not in done]
+    batch = todo[:limit] if limit else todo
+
+    def record(i: int, rows: list, report) -> None:
+        res = report.resolutions[0]
+        row = ({**rows[0][0].to_row(), "sweep_name": res.name,
+                "resolution": res.status,
+                "resolution_detail": res.detail} if rows else None)
+        done[str(i)] = {"status": res.status, "row": row}
+        _save_journal(city, source, done)
 
     try:
         if search is not None and fetch is not None:
-            rows, report = _enrich(swept, city, search, fetch)
+            _enrich_batch(swept, batch, city, search, fetch, record)
         else:
-            outcome = _enrich_live(s, swept, city)
-            if isinstance(outcome, Envelope):
-                return outcome
-            rows, report = outcome
+            stopped = _enrich_live(s, swept, batch, city, record)
+            if stopped is not None:
+                return stopped
     except StatsLoginRequired as exc:
         return fail("enrich", Problem(
             code="not_signed_in",
             message=f"The Untappd session is signed out or expired ({exc}).",
             remedy=_SIGN_IN_REMEDY))
 
-    out = write_stage(stage_path(city, ENRICHED_CSV), [
-        {**v.to_row(), "sweep_name": res.name, "resolution": res.status,
-         "resolution_detail": res.detail}
-        for v, res in rows], ENRICHED_FIELDS)
+    remaining = len(todo) - len(batch)
+    counts = Counter(entry["status"] for entry in done.values())
+    base = {"city": city, "input": str(src), "venues": len(swept),
+            "done": len(done), "remaining": remaining,
+            "resolved": counts.get("resolved", 0), "statuses": dict(counts),
+            "journal": str(_journal_path(city))}
+    if remaining:
+        again = (f"{PY} enrich --city {cli_arg(city)} --limit {limit} --json"
+                 if limit else _cmd("enrich", city))
+        return Envelope(
+            command="enrich", ok=True, data={**base, "csv": None},
+            warnings=[f"{remaining} venue(s) still to look up; "
+                      f"{ENRICHED_CSV} is written when all are done."],
+            next_actions=[again],
+        )
 
-    counts = report.counts()
-    unresolved = len(rows) - counts.get("resolved", 0)
+    rows, dupes = _journal_rows(done, len(swept))
+    out = write_stage(stage_path(city, ENRICHED_CSV), rows, ENRICHED_FIELDS)
+    unresolved = sum(1 for r in rows if r["resolution"] != "resolved")
     warnings = []
     if not swept:
         warnings.append(f"{src} has no venues; nothing to enrich.")
@@ -191,35 +271,65 @@ def cmd_enrich(s: Settings, city: str, in_path: str | None = None, *,
             f"with unknown counts; `resolution` in {out.name} says why.")
     return Envelope(
         command="enrich", ok=True,
-        data={"city": city, "input": str(src), "csv": str(out),
-              "venues": len(rows), "resolved": counts.get("resolved", 0),
-              "statuses": counts},
+        data={**base, "csv": str(out), "rows": len(rows),
+              "duplicates": dupes},
         warnings=warnings,
         next_actions=[_cmd("filter", city)],
     )
 
 
-def _enrich(swept: list[Venue], city: str, search: Search, fetch: Fetch,
-            rest=None):
+def _journal_rows(done: dict[str, dict], total: int) -> tuple[list[dict], int]:
+    """The journal as CSV rows, in sweep order, one row per venue page.
+
+    Two swept names can land on one page -- the app lists `Oscar Wilde` and
+    `Oscar Wilde - Irish Pub` separately -- and batches cannot see each
+    other, so the duplicate is dropped here, the first one kept.
+    """
+    rows, seen, dupes = [], set(), 0
+    for i in range(total):
+        row = (done.get(str(i)) or {}).get("row")
+        if row is None:
+            continue
+        vid = (row.get("venue_id") or "").strip()
+        if vid and row.get("resolution") == "resolved":
+            if vid in seen:
+                dupes += 1
+                continue
+            seen.add(vid)
+        rows.append(row)
+    return rows, dupes
+
+
+def _enrich_batch(swept: list[Venue], batch: list[int], city: str,
+                  search: Search, fetch: Fetch, record, rest=None) -> None:
     from .resolve import enrich_rows
 
-    return enrich_rows(swept, city, search, fetch, rest=rest)
+    for n, i in enumerate(batch, 1):
+        rows, report = enrich_rows([swept[i]], city, search, fetch)
+        record(i, rows, report)
+        if rest is not None and n < len(batch):
+            rest(n)
 
 
 _SIGN_IN_REMEDY = (
     "Ask the human to sign in to untappd.com: run `beertown ui` and use the "
     "Accounts step (it needs their password, so an agent cannot do it). Then "
-    "`verify --json`, then re-run this command. Nothing was written.")
+    "`verify --json`, then re-run this command; the venues already looked up "
+    "are kept and are not looked up again.")
 
 
-def _enrich_live(s: Settings, swept: list[Venue], city: str):
+def _enrich_live(s: Settings, swept: list[Venue], batch: list[int],
+                 city: str, record) -> Envelope | None:
     """The real search and fetch, with the robots check `run` had."""
     from .http_client import PoliteClient, _cookies_from_storage_state
     from .resolve import BrowserNameSearch, ReadingRhythm, page_fetcher
 
-    if not any(v.has_coords for v in swept):
+    if not batch:
+        return None
+    if not any(swept[i].has_coords for i in batch):
         # Nothing can be matched without a pin; do not open a browser for it.
-        return _enrich(swept, city, lambda _q: [], _no_fetch)
+        _enrich_batch(swept, batch, city, lambda _q: [], _no_fetch, record)
+        return None
     # Signed out, Untappd hides the stats on every unverified venue page --
     # measured: 4 of 7 Tel Aviv pages. Refuse before spending one request.
     if not _cookies_from_storage_state(s.storage_state, "untappd.com"):
@@ -238,9 +348,10 @@ def _enrich_live(s: Settings, swept: list[Venue], city: str):
             ))
         # One budget for the searches and the page fetches.
         with BrowserNameSearch(s, budget=client._budget) as search:
-            return _enrich(swept, city, search, page_fetcher(client),
-                           rest=ReadingRhythm(
-                               requests_used=client._budget.used))
+            _enrich_batch(swept, batch, city, search, page_fetcher(client),
+                          record, rest=ReadingRhythm(
+                              requests_used=client._budget.used))
+    return None
 
 
 def _no_fetch(ref: VenueRef) -> Venue:  # pragma: no cover - never reached

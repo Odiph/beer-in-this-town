@@ -366,12 +366,28 @@ disallows the venue pages, it stops with `robots_disallow` and fetches
 nothing.
 
 **Time.** One to four paced requests per venue (a name search, sometimes a
-city-qualified search, and up to two page fetches), 2 to 4.5 seconds apart.
-Searches and page fetches count against the same limit of 600 requests an
-hour, persisted across restarts; a large city can hit it and stop with
-`rate_limited`, in which case run the same command again later. Searches and
-pages are cached for 12 hours, so a re-run is nearly free. Roughly 10 to 20
-minutes for 90 venues is an estimate, not a measurement.
+city-qualified search, and up to two page fetches), 2 to 4.5 seconds apart,
+plus a pause of 6 to 15 seconds between venues and a break of a few minutes
+every 20 to 40 -- the pace of a person looking venues up. Searches and page
+fetches count against the same limit of 600 requests an hour, persisted
+across restarts; a large city can hit it and stop with `rate_limited`, in
+which case run the same command again later. Measured on London: about 25-30
+seconds a venue, so 600 venues is an evening.
+
+**Stopping and batches.** Every venue is saved as it resolves (in
+`state/enriched_<slug>.json`), so a run that is stopped -- Ctrl-C, a closed
+laptop, a crash -- loses nothing: run the same command and it continues
+where it stopped, without looking anything up twice. `--limit N` does at
+most N venues and stops, which suits a big city done a batch at a time:
+
+```
+beertown enrich --city "London, England" --limit 50 --json
+```
+
+Each batch reports `done` and `remaining`, and repeats itself in
+`next_actions` until nothing is left. `2_enriched.csv` is written only when
+every venue is done, so `filter` never runs on part of a city. A new sweep
+of the city starts a new journal.
 
 ---
 

@@ -537,8 +537,14 @@ Rules for agents:
   `calibration_failed`) re-places without touching the emulator. Do not pass
   `--fresh` on your own initiative: it re-walks the whole map. Journals older
   than 12h are discarded. Overwrites `1_sweep.csv` when it completes.
-- `enrich` — safe to repeat. Venue pages are cached for 12h; a re-run costs
-  almost no requests. Overwrites `2_enriched.csv`.
+- `enrich` — resumable. Every venue is journalled as it resolves
+  (`state/enriched_<slug>.json`, tied to the sweep file's content), so a
+  stopped run continues where it stopped and nothing is looked up twice.
+  `--limit N` does at most N venues per run; while `data.remaining` is above
+  0 the envelope's `next_actions` repeats the same command, and
+  `data.csv` is null. Prefer batches (`--limit 25`-`50`) for a big city: each
+  finishes, which a multi-hour run may not. Writes `2_enriched.csv` only when
+  every venue is done.
 - `filter`, `export` — offline, deterministic, overwrite their own outputs.
 - `pin` — resumable and idempotent. `state/pinned_<list>.json` records every place;
   re-running skips successes and retries failures. Places recorded `not-found`
