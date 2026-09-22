@@ -164,6 +164,11 @@ class ReadBudget:
         self.window_start, self.count = self._read()
         self._roll()
 
+    def used(self) -> int:
+        """Requests counted in the current window, as the file has it."""
+        self._refresh()
+        return self.count
+
     def remaining(self) -> int:
         self._refresh()
         return max(0, self.s.hourly_budget - self.count)
