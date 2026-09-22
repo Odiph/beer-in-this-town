@@ -36,3 +36,16 @@ def test_enrich_rests_between_venues_not_after_the_last():
     enrich_rows(swept, "Tel Aviv", search=lambda q: [],
                 fetch=lambda ref: None, rest=rests.append)
     assert rests == [1, 2]
+
+
+def test_a_venue_served_from_cache_is_not_paced():
+    """Resuming after an interruption must not re-wait for cached venues."""
+    slept: list[float] = []
+    count = {"n": 0}
+    rhythm = ReadingRhythm(sleep=slept.append, rng=random.Random(1),
+                           requests_used=lambda: count["n"])
+    rhythm(1)                      # cached: nothing fetched
+    count["n"] += 2
+    rhythm(2)                      # fetched a search and a page
+    rhythm(3)                      # cached again
+    assert len(slept) == 1

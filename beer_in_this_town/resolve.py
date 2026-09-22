@@ -305,12 +305,24 @@ class ReadingRhythm:
     BREAK_S = (120.0, 360.0)
 
     def __init__(self, sleep: Callable[[float], None] = time.sleep,
-                 rng: random.Random | None = None) -> None:
+                 rng: random.Random | None = None,
+                 requests_used: Callable[[], int] | None = None) -> None:
         self._sleep = sleep
         self._rng = rng or random.Random()
         self._until_break = self._rng.randint(*self.BREAK_EVERY)
+        # A venue answered wholly from cache made no request, so there is
+        # nothing to pace. Without this a resumed run re-waited ~10 s per
+        # cached venue -- 25 minutes before reaching new work, after a
+        # London run was stopped at venue 145.
+        self._used = requests_used
+        self._last_used = requests_used() if requests_used else None
 
     def __call__(self, done: int) -> None:
+        if self._used is not None:
+            now = self._used()
+            fetched, self._last_used = now != self._last_used, now
+            if not fetched:
+                return
         self._until_break -= 1
         if self._until_break <= 0:
             pause = self._rng.uniform(*self.BREAK_S)

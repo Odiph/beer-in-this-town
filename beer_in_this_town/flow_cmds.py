@@ -239,7 +239,8 @@ def _enrich_live(s: Settings, swept: list[Venue], city: str):
         # One budget for the searches and the page fetches.
         with BrowserNameSearch(s, budget=client._budget) as search:
             return _enrich(swept, city, search, page_fetcher(client),
-                           rest=ReadingRhythm())
+                           rest=ReadingRhythm(
+                               requests_used=client._budget.used))
 
 
 def _no_fetch(ref: VenueRef) -> Venue:  # pragma: no cover - never reached
