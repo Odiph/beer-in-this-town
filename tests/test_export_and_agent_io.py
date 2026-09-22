@@ -298,3 +298,18 @@ def test_only_safe_remedies_become_next_actions(remedy, promoted):
     assert bool(payload["next_actions"]) is promoted
     if not promoted:
         assert payload["hints"] == [remedy], "it must still reach the caller"
+
+
+@pytest.mark.unit
+def test_a_picker_row_is_matched_by_its_name_line():
+    """Found live: rows read "<icon>\nLondon Bars Test\nPrivate · 0 places",
+    and comparing the whole text refused the list that existed."""
+    from beer_in_this_town.pin_to_list import AmbiguousList, pick_list_row
+
+    rows = ["\nLondon Bars\nShared · 12 places",
+            "\nLondon Bars Test\nPrivate · 0 places",
+            "\nFavourites\nPrivate · 3 places"]
+    assert pick_list_row(rows, "London Bars Test") == 1
+    assert pick_list_row(rows, "London Bars") == 0      # still exact
+    with pytest.raises(AmbiguousList):
+        pick_list_row(rows, "London")
