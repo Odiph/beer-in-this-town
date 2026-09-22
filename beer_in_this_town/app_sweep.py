@@ -246,6 +246,9 @@ class Venue:
     y: int
     lat: float | None = None
     lng: float | None = None
+    # Which cell (visit order) found it. Every pin in one cell shares one
+    # camera position, so a cell is the unit placement can be corrected in.
+    cell: int | None = None
 
 
 @dataclass
@@ -391,7 +394,8 @@ def save_journal(city: str, result: SweepResult) -> None:
     payload = {
         "city": city,
         "venues": [{"name": v.name, "x": v.x, "y": v.y,
-                    "lat": v.lat, "lng": v.lng} for v in result.venues],
+                    "lat": v.lat, "lng": v.lng, "cell": v.cell}
+                   for v in result.venues],
         "cells_visited": result.cells_visited,
         "truncated_cells": result.truncated_cells,
         "skipped_cells": result.skipped_cells,
@@ -673,7 +677,8 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
             known.add(pin.name)
             lat, lng = camera.locate(pin) if camera else (None, None)
             result.venues.append(
-                Venue(name=pin.name, x=pin.x, y=pin.y, lat=lat, lng=lng))
+                Venue(name=pin.name, x=pin.x, y=pin.y, lat=lat, lng=lng,
+                      cell=result.cells_visited))
 
     if city:
         save_journal(city, result)

@@ -160,6 +160,88 @@ def _consensus(src: list[complex], dst: list[complex]) -> set[int]:
     return best[2] if best[2] else set(range(n))
 
 
+@dataclass(frozen=True)
+class CellAnchoring:
+    """How each cell's position was settled before the global fit."""
+
+    anchored: int          # cells shifted by their own OSM matches
+    carried: int           # cells too sparse to measure; took the last shift
+    unmeasured: int        # sparse cells before any measurement: left as-is
+    max_shift_m: float     # the largest correction applied to any cell
+
+
+# A cell needs this many unambiguous OSM matches to measure its own shift,
+# and this share of them within AGREE_M of their median to trust it.
+CELL_MIN_MATCHES = 3
+CELL_AGREE_M = 250.0
+CELL_AGREE_SHARE = 0.6
+
+
+def anchor_cells(venues: list[Venue], known: list[tuple[str, float, float]],
+                 origin: tuple[float, float]
+                 ) -> tuple[list[Venue], CellAnchoring]:
+    """Correct each cell's position from its own matches, before the fit.
+
+    The camera is dead reckoning: it adds up measured pans. Found live on a
+    London sweep: in dense areas the pan measurement is wrong often enough
+    (pins matched across a re-queried result set) that the camera drifted,
+    and from about a quarter of the way in every cell was placed 6-15 km off.
+    One similarity cannot describe that -- the global fit kept the early
+    cells and dropped 165 matches as outliers, and the drifted venues went
+    out with their wrong coordinates.
+
+    Every pin in one cell shares one camera position, so drift is a
+    per-cell translation. Each cell with enough matches is shifted by the
+    median offset to OpenStreetMap; a sparse cell takes the last measured
+    shift, because drift persists until the next bad pan. Venues from
+    sweeps that did not record cells are one group, which is the old
+    behaviour.
+    """
+    cells: dict[int | None, list[int]] = {}
+    for i, v in enumerate(venues):
+        if v.lat is not None and v.lng is not None:
+            cells.setdefault(v.cell, []).append(i)
+    order = sorted(cells, key=lambda c: (c is None, c if c is not None else 0))
+
+    out = list(venues)
+    shift = 0j
+    measured_once = False
+    anchored = carried = unmeasured = 0
+    max_shift = 0.0
+    for cell in order:
+        members = [venues[i] for i in cells[cell]]
+        pairs = match_known(members, known)
+        offsets = [_to_local(lat, lng, origin) - _to_local(v.lat, v.lng, origin)
+                   for v, lat, lng in pairs]
+        own = _agreed_offset(offsets)
+        if own is not None:
+            shift, measured_once = own, True
+            anchored += 1
+        elif measured_once:
+            carried += 1
+        else:
+            unmeasured += 1
+            continue
+        max_shift = max(max_shift, abs(shift))
+        for i in cells[cell]:
+            v = venues[i]
+            lat, lng = _from_local(_to_local(v.lat, v.lng, origin) + shift, origin)
+            out[i] = replace(v, lat=lat, lng=lng)
+    return out, CellAnchoring(anchored, carried, unmeasured, max_shift)
+
+
+def _agreed_offset(offsets: list[complex]) -> complex | None:
+    """The median offset, if enough of the offsets agree with it."""
+    if len(offsets) < CELL_MIN_MATCHES:
+        return None
+    med = complex(statistics.median(o.real for o in offsets),
+                  statistics.median(o.imag for o in offsets))
+    agree = sum(1 for o in offsets if abs(o - med) <= CELL_AGREE_M)
+    if agree < CELL_AGREE_SHARE * len(offsets):
+        return None
+    return med
+
+
 def calibrate(venues: list[Venue], known: list[tuple[str, float, float]],
               origin: tuple[float, float]) -> tuple[list[Venue], Calibration]:
     """Fit the map's true scale and return every venue re-placed with it.
