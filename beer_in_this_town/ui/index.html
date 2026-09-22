@@ -299,8 +299,17 @@
 <script>
 // The key arrives in the URL fragment, which browsers never send in a Referer
 // header or write to a server log. Read it once, then clear it from the bar.
-const TOKEN = location.hash.slice(1);
-if (TOKEN) history.replaceState(null, "", location.pathname);
+// Kept for this tab only, so a refresh does not lock the person out of
+// their own dashboard: clearing the fragment used to mean F5 -> 401.
+const KEY = "beertown-token";
+function rememberedToken() {
+  try { return sessionStorage.getItem(KEY) || ""; } catch { return ""; }
+}
+const TOKEN = location.hash.slice(1) || rememberedToken();
+if (location.hash) {
+  try { sessionStorage.setItem(KEY, TOKEN); } catch {}
+  history.replaceState(null, "", location.pathname);
+}
 
 const $ = id => document.getElementById(id);
 let busy = false, lastJobId = null;
@@ -394,8 +403,11 @@ function checkRow(c) {
   // "Tested" is the whole distinction this page is built around: a cookie
   // on disk is not a working account.
   if (c.key === "google" || c.key === "untappd") {
-    label.appendChild(el("span", "tag" + (c.verified ? " tested" : ""),
-                         c.verified ? "tested" : "not tested"));
+    // Tested-and-failed is not untested. Saying "NOT TESTED" beside the
+    // result of a test read as "we did not look", which is the opposite.
+    const tag = c.verified ? "tested" : c.tested ? "tested — signed out"
+                                                 : "not tested";
+    label.appendChild(el("span", "tag" + (c.verified ? " tested" : ""), tag));
   }
   body.appendChild(label);
   body.appendChild(el("div", "detail", c.detail));

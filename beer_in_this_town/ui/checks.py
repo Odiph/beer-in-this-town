@@ -51,6 +51,7 @@ class Check:
     fix: str = ""            # what the person does about it, in their words
     action: str = ""         # an action id the dashboard can offer as a button
     verified: bool = False   # proven by a live round-trip, not merely detected
+    tested: bool = False     # a round-trip ran, whatever it concluded
     # Somewhere to actually go. A row that says what is wrong and offers no
     # way to act on it leaves the reader to go and find the page themselves,
     # which is the work this dashboard exists to remove.
@@ -64,7 +65,8 @@ class Check:
         return {
             "key": self.key, "label": self.label, "state": self.state,
             "detail": self.detail, "fix": self.fix, "action": self.action,
-            "verified": self.verified, "why": self.why,
+            "verified": self.verified, "tested": self.tested,
+            "why": self.why,
             "links": [{"label": lbl, "url": url} for lbl, url in self.links],
         }
 
@@ -122,14 +124,14 @@ def _google_check(s: Settings, proven: VerifyResult | None) -> Check:
     if proven is not None:
         if proven.ok:
             return Check("google", "Google account", OK, proven.detail,
-                         verified=True)
+                         verified=True, tested=True)
         if not proven.ran:
             return Check("google", "Google account", UNKNOWN, proven.detail,
                          fix=proven.evidence or "Try testing it again.",
                          action="verify")
         return Check("google", "Google account", ATTENTION, proven.detail,
                      fix="Sign in again — the saved session no longer works.",
-                     action="connect")
+                     action="connect", tested=True)
 
     has_state = s.storage_state.exists()
     if has_state:
@@ -165,14 +167,14 @@ def _untappd_check(s: Settings, proven: VerifyResult | None) -> Check:
     if proven is not None:
         if proven.ok:
             return Check("untappd", "Untappd account", OK, proven.detail,
-                         verified=True)
+                         verified=True, tested=True)
         if not proven.ran:
             return Check("untappd", "Untappd account", UNKNOWN, proven.detail,
                          fix=proven.evidence or "Try testing it again.",
                          action="verify")
         return Check("untappd", "Untappd account", ATTENTION, proven.detail,
                      fix="Sign in to untappd.com in the same Chrome window.",
-                     action="connect")
+                     action="connect", tested=True)
 
     # A profile that does not exist has never been to untappd.com. That is a
     # real answer, not an unreadable one, and the difference matters: a fresh
@@ -524,13 +526,18 @@ def wizard(step: NextStep) -> tuple[Stage, ...]:
 # --------------------------------------------------------------------------
 # Tier 2: verification. A real round-trip each.
 # --------------------------------------------------------------------------
-def verify_google(s: Settings) -> VerifyResult:
-    """Open the saved session headlessly and see if Google still knows us.
+_MAPS_SIGNED_IN = "a[aria-label*='Google Account'], img[alt*='Google Account']"
 
-    This is what `_capture_session` already does at the end of `bootstrap`,
-    asked as a question rather than as a side effect -- so a session that
-    expired two weeks after bootstrap is caught here instead of by a `pin`.
-    """
+
+def _maps_says_signed_in(page) -> bool:
+    page.goto("https://www.google.com/maps",
+              wait_until="domcontentloaded", timeout=60_000)
+    page.wait_for_timeout(4000)
+    return page.locator(_MAPS_SIGNED_IN).count() > 0
+
+
+def _google_via_snapshot(s: Settings) -> VerifyResult:
+    """Ask Google whether the saved cookie snapshot is still a session."""
     if not s.storage_state.exists():
         return VerifyResult(False, "No saved session to test.",
                             evidence=f"{s.storage_state} does not exist")
@@ -540,20 +547,13 @@ def verify_google(s: Settings) -> VerifyResult:
         return VerifyResult(False, "Playwright is not installed.",
                             evidence='Run: pip install -e ".[browser]"',
                             ran=False)
-
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(channel="chrome", headless=True)
             try:
                 ctx = browser.new_context(storage_state=str(s.storage_state),
                                           user_agent=s.user_agent)
-                page = ctx.new_page()
-                page.goto("https://www.google.com/maps",
-                          wait_until="domcontentloaded", timeout=60_000)
-                page.wait_for_timeout(4000)
-                signed_in = page.locator(
-                    "a[aria-label*='Google Account'], img[alt*='Google Account']"
-                ).count() > 0
+                signed_in = _maps_says_signed_in(ctx.new_page())
                 ctx.close()
             finally:
                 browser.close()
@@ -565,12 +565,76 @@ def verify_google(s: Settings) -> VerifyResult:
         return VerifyResult(False, "Could not run the check.",
                             evidence=f"{type(exc).__name__}: {exc}",
                             ran=False)
-
     if signed_in:
         return VerifyResult(True, "Signed in — checked just now.",
                             evidence="Google Account control present on Maps")
     return VerifyResult(False, "The saved session is no longer signed in.",
                         evidence="No Google Account control on Maps")
+
+
+def _google_via_profile(s: Settings) -> VerifyResult:
+    """Ask the same question of the Chrome profile `pin` actually drives.
+
+    Google rotates its session cookies, so a snapshot taken hours ago can be
+    refused while the profile it came from is perfectly signed in -- measured
+    2026-09-22: `verify` reported Google signed out and `pin`'s own
+    pre-flight, on the profile, was fine minutes later. When the profile is
+    signed in, the snapshot is refreshed from it, because that snapshot is
+    what `enrich` reads venue pages with.
+    """
+    if not s.profile_dir.exists():
+        return VerifyResult(False, "No Chrome profile to test.",
+                            evidence=f"{s.profile_dir} does not exist",
+                            ran=False)
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return VerifyResult(False, "Playwright is not installed.",
+                            evidence='Run: pip install -e ".[browser]"',
+                            ran=False)
+    try:
+        with sync_playwright() as p:
+            ctx = p.chromium.launch_persistent_context(
+                user_data_dir=str(s.profile_dir), channel="chrome",
+                headless=True, user_agent=s.user_agent)
+            try:
+                signed_in = _maps_says_signed_in(ctx.new_page())
+                if signed_in:
+                    ctx.storage_state(path=str(s.storage_state))
+            finally:
+                ctx.close()
+    except Exception as exc:
+        # Most often the profile is open in another window -- Chrome holds a
+        # lock on it. That is not a signed-out account either.
+        log.warning("google profile check could not run: %s", exc)
+        return VerifyResult(False, "Could not read the Chrome profile.",
+                            evidence=f"{type(exc).__name__}: {exc}",
+                            ran=False)
+    if signed_in:
+        return VerifyResult(
+            True, "Signed in — checked just now, in the Chrome profile.",
+            evidence="Google Account control present on Maps; the saved "
+                     "cookie snapshot was stale and has been refreshed")
+    return VerifyResult(False, "The Chrome profile is not signed in.",
+                        evidence="No Google Account control on Maps")
+
+
+def verify_google(s: Settings) -> VerifyResult:
+    """Is Google usable? Ask the snapshot, then the profile itself.
+
+    Two places can hold the session and they can disagree: `enrich` reads
+    venue pages with the cookie snapshot, while `pin` drives the Chrome
+    profile. A stale snapshot alone reported "signed out" for an account that
+    was signed in, which sends a person through a login they have already
+    done.
+    """
+    snapshot = _google_via_snapshot(s)
+    if snapshot.ok or not snapshot.ran:
+        return snapshot
+    profile = _google_via_profile(s)
+    if profile.ok or profile.ran:
+        return profile
+    return snapshot
 
 
 # Signed out, Untappd's own pages still render; what changes is the header.

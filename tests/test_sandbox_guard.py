@@ -49,11 +49,22 @@ def test_session_presence_is_fixed_not_inherited(sandbox_state):
 
 @pytest.mark.unit
 def test_writing_through_a_redirected_constant_lands_in_the_sandbox(sandbox_state):
-    """The end-to-end property: a real write goes nowhere near the project."""
+    """The end-to-end property: a real write goes nowhere near the project.
+
+    Asserted as "the real file is untouched" rather than "the real file does
+    not exist": on a machine that has actually run the tool it does exist,
+    and this failed there while passing in a fresh clone -- the machine
+    dependence this file is here to stop.
+    """
+    real = STATE_DIR / "last_run.json"
+    before = real.read_bytes() if real.exists() else None
+
     state.record_run(query="london", map_title="London Bars",
                      csv_path=Path("venues_london.csv"))
+
     assert state.LAST_RUN.exists()
-    assert not (STATE_DIR / "last_run.json").exists()
+    assert state.LAST_RUN.is_relative_to(sandbox_state)
+    assert (real.read_bytes() if real.exists() else None) == before
 
 
 @pytest.mark.unit
