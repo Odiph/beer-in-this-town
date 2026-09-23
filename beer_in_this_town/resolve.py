@@ -99,8 +99,10 @@ _SECONDARY = re.compile(r"\s*(\(.*|\s-\s.*|\s–\s.*)$")
 # How a card's location line relates to the city being enriched.
 IN_CITY, UNKNOWN_PLACE, ELSEWHERE = 2, 1, 0
 
+# `outside`: a search-sweep row whose page places it outside the city (a
+# namesake: "london" also finds New London, CT). Dropped, like a duplicate.
 STATUSES = ("resolved", "too_far", "no_match", "unverified", "unlocated",
-            "fetch_failed", "search_failed", "duplicate")
+            "fetch_failed", "search_failed", "duplicate", "outside")
 
 
 class Located(Protocol):
@@ -284,6 +286,40 @@ class _Named:
     lng: float | None
 
 
+def _known_page(raw: object) -> VenueRef | None:
+    """A search-sweep row: a venue page with an id and no map pin."""
+    if isinstance(raw, Venue) and raw.ref.url and not raw.has_coords:
+        return raw.ref
+    return None
+
+
+def resolve_by_id(ref: VenueRef, fetch: Callable[[VenueRef], Venue],
+                  within: Callable[[float, float], bool] | None = None
+                  ) -> Resolution:
+    """Fetch a venue page the search already identified. Nothing is guessed.
+
+    The page is the venue, so a page without coordinates still resolves --
+    with its stats, unplaced. `within` is the city's bounds; a page outside
+    them is a namesake the text search matched, and is reported `outside`.
+    """
+    try:
+        page = fetch(ref)
+    except _STOPS as exc:
+        log.error("Stopping enrich at %s: %s", ref.url, exc)
+        raise
+    except Exception as exc:
+        return Resolution(ref.name, "fetch_failed",
+                          detail=f"{ref.url}: {str(exc)[:160]}")
+    if page.lat is None or page.lng is None:
+        return Resolution(ref.name, "resolved", venue=page,
+                          detail="by id; the page publishes no coordinates")
+    if within is not None and not within(page.lat, page.lng):
+        return Resolution(ref.name, "outside",
+                          detail=f"{ref.url} is at {page.lat:.2f}, "
+                                 f"{page.lng:.2f}, outside the city")
+    return Resolution(ref.name, "resolved", venue=page, detail="by id")
+
+
 def _located(sv: Located | Venue) -> Located:
     if isinstance(sv, Venue):
         return _Named(sv.ref.name, sv.lat, sv.lng)
@@ -338,6 +374,7 @@ def enrich_rows(swept: list, city: str,
                 fetch: Callable[[VenueRef], Venue],
                 progress: Callable[[int, int, str], None] | None = None,
                 rest: Callable[[int], None] | None = None,
+                within: Callable[[float, float], bool] | None = None,
                 ) -> tuple[list[tuple[Venue, Resolution]], Report]:
     """Every swept venue paired with how it resolved, duplicates merged.
 
@@ -354,7 +391,9 @@ def enrich_rows(swept: list, city: str,
         sv = _located(raw)
         if progress:
             progress(i, len(swept), sv.name)
-        res = resolve_one(sv, search, fetch, city)
+        known = _known_page(raw)
+        res = (resolve_by_id(known, fetch, within) if known is not None
+               else resolve_one(sv, search, fetch, city))
         if rest is not None and i < len(swept):
             rest(i)
         if res.venue is not None and res.venue.ref.venue_id in seen_ids:
@@ -362,7 +401,7 @@ def enrich_rows(swept: list, city: str,
         report.resolutions.append(res)
         log.info("%-9s %s  %s", res.status, sv.name, res.detail)
 
-        if res.status == "duplicate":
+        if res.status in ("duplicate", "outside"):
             continue
         if res.venue is not None:
             seen_ids.add(res.venue.ref.venue_id)

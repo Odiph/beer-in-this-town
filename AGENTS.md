@@ -33,14 +33,15 @@ An empty `next_actions` means one of these, and `data.blocked_on` says which:
 | `null` | Finished: every read-side stage is done for the city | Report, then give the human the `hints` (list creation, `pin`, `notes`). |
 | `"sign_in"` | No session file, or `verify` found an account signed out | Open the dashboard and ask the human to sign in (step 3). |
 | `"choose_city"` | Nobody has named a city | Ask the human which city. |
-| `"emulator"` | A sweep is next and the emulator checks fail | Give the human the failing checks' `remedy` (in `data.emulator` and `hints`; see the playbook, step 2). |
+| `"emulator"` | A `--method map` sweep is next and the emulator checks fail | Give the human the failing checks' `remedy` (in `data.emulator` and `hints`; see the playbook, step 2). |
 
 When several apply, `blocked_on` reports the first in this order: `sign_in`,
 then `choose_city`, then `emulator`. The emulator is probed only when `sweep`
-is the next stage, so it never blocks `enrich`, `filter` or `export`.
+is the next stage and `data.method` is `"map"`, so it never blocks a search
+sweep, `enrich`, `filter` or `export`.
 
 (`"app_screen"` is not reported by `status`; it is what a `sweep` failure with
-`app_screen_unexpected` means. See step 5.)
+`app_screen_unexpected` means. See step 5b.)
 
 ## The envelope
 
@@ -181,7 +182,33 @@ Pass what they say as `--city`, verbatim. Never infer a city from `data/`, an
 old corpus, a list name or the repo. If they chose one in the dashboard,
 `data.intent` has it and the `sweep` in `next_actions` already carries it.
 
-### 5. Open the map — human, before each sweep
+### 5. Choose how to sweep — the human's call, once per city
+
+`sweep` has two methods. `data.method` in `status` says which one the next
+sweep uses (`"search"` unless the human chose `map`), and the `sweep` command
+in `next_actions` names it. The dashboard's city step asks for the method
+with the city, and only a `map` choice sends the human to the emulator
+setup.
+
+| | `--method search` (default) | `--method map` |
+|---|---|---|
+| Source | Untappd's web search, once per spelling of the city's name | the Untappd app's map, cell by cell |
+| Needs | the Untappd web session (step 3) | the emulator (steps 1-2, 5b) |
+| Finds | each spelling's most-checked-in venues first, up to `--top` (max 1,000) | what the map shows, capped ~60 per search |
+| Time | ~50 requests per spelling at `--top 1000` | minutes to an hour or more |
+
+Measured 2026-09-23: London's search held 99 of the map sweep's top 100
+venues by check-ins; Tel Aviv's held all of its top 100 beer venues, where
+the map had 20. The map remains for a person who wants it; it is not the
+default. Do not switch methods on your own initiative.
+
+The spellings (`data.variants`) come from Foursquare's open places data,
+cached per city: every spelling with at least 2% of the city's named
+places, at most ten. Building the list needs the `search` extra
+(`pip install -e ".[search]"`); without it the city as typed is the only
+spelling, and the envelope says so in `warnings`.
+
+### 5b. Open the map — human, before each `--method map` sweep
 
 > In BlueStacks, open Untappd, tap Discover, then View Map, and close
 > anything covering the map. Please don't touch the emulator until I say the
@@ -194,10 +221,25 @@ send this message again, not to retry blindly.
 ### 6. Sweep — you
 
 ```bash
-python -m beer_in_this_town sweep --city "<city>" --json
+python -m beer_in_this_town sweep --city "<city>" --method search --json
 ```
 
-Writes `data/<slug>/1_sweep.csv`. Takes minutes at depth 1 and can take an
+Writes `data/<slug>/1_sweep.csv`. Report `data.venues`, and per spelling in
+`data.variants` its reported `total`, how many were `collected`, and
+`other_city` (results matched on their name, dropped). A spelling whose
+`total` is above what was collected stopped at `--top`: the rest are its
+less-visited venues, and `warnings` says so. A spelling with `complete:
+false` is different: a page of results stopped loading, so it is short
+because something failed, not because the rest is unpopular. Report it as
+such and re-run the sweep; an incomplete search is never cached, so the
+re-run retries it. Search rows carry each venue's
+Untappd id and no position (`data.located` is 0); `enrich` adds both.
+
+```bash
+python -m beer_in_this_town sweep --city "<city>" --method map --json
+```
+
+Writes the same file. Takes minutes at depth 1 and can take an
 hour or more at depth 3 on a large city; run it with a long timeout, or in the
 background, and do not interrupt it. It journals per city, so a re-run after a
 failure resumes. Use the defaults (`--min-depth 1 --max-depth 3`); they are
@@ -209,8 +251,8 @@ Report from the envelope: venues found (`data.venues`, of which
 `data.located` have coordinates), cells still at the result cap when the
 depth limit stopped them (`data.truncated_cells`, `data.hit_depth_limit`: the
 sweep is saying it stopped short), and the calibration error
-(`data.calibration.median_residual_m`). A sweep is **not** a census; do not
-describe it as "all the bars in <city>".
+(`data.calibration.median_residual_m`). Neither method is a census; do not
+describe either as "all the bars in <city>".
 
 ### 7. Enrich — you
 
@@ -218,11 +260,16 @@ describe it as "all the bars in <city>".
 python -m beer_in_this_town enrich --city "<city>" --json
 ```
 
-Writes `data/<slug>/2_enriched.csv`. Needs the Untappd web session (step 3),
-and opens a visible Chrome window on the tool's profile for the name lookups.
+Writes `data/<slug>/2_enriched.csv`. Needs the Untappd web session (step 3).
+A map sweep's rows are names and pins, so enrich searches each name in a
+visible Chrome window and checks the page against the pin. A search sweep's
+rows already carry their venue id, so enrich fetches each page directly and
+places it from the page; a page outside the city's bounds is a namesake
+("london" also finds New London, CT) and is dropped as `outside`.
 Report `data.resolved` out of `data.venues`, and `data.statuses` (counts of
 `resolved`, `too_far`, `no_match`, `unverified`, `unlocated`, `fetch_failed`,
-`search_failed`, `duplicate`; the per-row reason is the `resolution` column).
+`search_failed`, `duplicate`, `outside`; the per-row reason is the
+`resolution` column).
 An unresolved venue has **unknown** counts, not zero: never report it as
 having no check-ins. If most rows come back `fetch_failed` or `unverified`,
 suspect the parser or the session, not the city: run `selfcheck --json`.
@@ -301,10 +348,11 @@ yourself are `adb connect` and `adb devices`.
 |---|---|---|
 | `emulator_unavailable` | `doctor`'s emulator checks fail, so `sweep` refused before touching the device | Run `doctor --json`, give the human the first failing check's `remedy` (step 2). |
 | `adb_unavailable` | The emulator could not be reached, or `adb` returned nothing usable | Check BlueStacks is running and `adb devices` lists it; `adb connect` again. Never read an empty result as an empty city. |
-| `app_screen_unexpected` | The Untappd app was not showing the map, its category filter was not where expected, or `--here` could not find the map's Reset location control | Send the step-5 message (for `--here`, add "allow Untappd location access"). Progress is journalled per city, so the sweep resumes rather than restarting. |
+| `app_screen_unexpected` | The Untappd app was not showing the map, its category filter was not where expected, or `--here` could not find the map's Reset location control | Send the step-5b message (for `--here`, add "allow Untappd location access"). Progress is journalled per city, so the sweep resumes rather than restarting. |
 | `app_pan_failed` | Gestures stopped reaching the map, three cells in a row | A marker, a dialog or the venue card is absorbing the swipe. Ask the human to bring the map to the front and dismiss anything over it, then re-run. **Do not** lower the pacing to compensate. |
 | `calibration_failed` | Too few swept venues matched OpenStreetMap to trust the fitted positions | Nothing was written. Report it. Do not work around it; a sweep with guessed positions puts every venue somewhere plausible and wrong. |
-| `city_not_found` | The geocoder has no match for the city | Ask the human for a fuller name (with country or state). Do not substitute a nearby city. |
+| `city_not_found` | The geocoder has no match for the city, or (search) no spelling of it lists any venue | Ask the human for a fuller name (with country or state). Do not substitute a nearby city. |
+| `search_unavailable` | `sweep --method search`: a search page showed neither results nor its empty state | Run `verify --json`; a signed-out Untappd session is the usual cause (step 3). Then re-run; finished searches are cached. |
 | `overpass_unavailable` | OpenStreetMap's Overpass endpoint is throttled, down or unreachable | Not per-venue. Wait and re-run, or set `OVERPASS_URL` to a mirror. Overpass is volunteer-run and sheds load under pressure; a 504 is normal. |
 | `geocoder_unavailable` | The geocoder is rejected, out of quota, or unreachable | Check the key and billing, or unset it for Nominatim. |
 | `stage_input_missing` | The previous stage's file is not there | Run the command the `remedy` names (for `filter`, that is `enrich`). |
@@ -438,8 +486,9 @@ The rows are checked top to bottom; the first that matches decides.
 | session, `verification: null` | `verify --json` | a cookie proves nothing |
 | `verification.ok: false` | *(none)* — `blocked_on: "sign_in"` | a person must sign in |
 | no city | `ui --detach` (nothing if a dashboard is already serving) — `blocked_on: "choose_city"` | a person must choose |
-| sweep next, emulator checks failing | *(none)* — `blocked_on: "emulator"` | a person must set up BlueStacks |
-| sweep next, emulator ready | `sweep --city ... --json` | only now, after `verify` passed |
+| sweep next, `method: "search"` | `sweep --city ... --method search --json` | only now, after `verify` passed |
+| sweep next, `method: "map"`, emulator checks failing | *(none)* — `blocked_on: "emulator"` | a person must set up BlueStacks |
+| sweep next, `method: "map"`, emulator ready | `sweep --city ... --method map --json` | only now, after `verify` passed |
 | sweep done | `enrich`, then `filter`, then `export` | one stage at a time |
 | every stage done | *(none)* — `blocked_on: null` | finished; `hints` has the rest |
 
@@ -453,8 +502,10 @@ and `path`; `filter` adds `excluded` and `excluded_path`, `export` adds
 `files`, and an interrupted sweep adds `journal_venues`. `pin` and `notes`
 carry `total`, `by_status` and `list` from their per-list journals.
 `data.next_stage` is the first collection stage not done, or `null`.
-`data.emulator` is the emulator checks (as in `doctor`) when a sweep is next,
-and `null` otherwise: `null` means not checked, never fine.
+`data.method` is how the next (or last) sweep collects venues: the last
+run's method, else the one chosen in the dashboard, else `"search"`.
+`data.emulator` is the emulator checks (as in `doctor`) when a map sweep is
+next, and `null` otherwise: `null` means not checked, never fine.
 
 **The city comes from the user, not from a default.** `data.intent` is what
 they asked for in the dashboard. When `intent` is null and no stage has run,

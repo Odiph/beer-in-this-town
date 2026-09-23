@@ -463,7 +463,9 @@ def test_an_unchecked_emulator_comes_before_the_accounts(blank, monkeypatch):
         checks, "_playwright_check",
         lambda: checks.Check("playwright", "Browser automation", OK,
                              "ready", verified=True))
-    step = _steps_for(blank)
+    # The app-map method is the one that needs the emulator.
+    step = checks.next_step(checks.collect(blank),
+                            intent={"query": "London", "method": "map"})
     assert step.key == "emulator"
     assert step.action == "emulator", "no way to run the check from the card"
 

@@ -77,12 +77,35 @@ def assert_safe(actions):
 # --- next_actions walks the stages ---------------------------------------
 
 def test_nothing_run_yet_offers_the_sweep(s):
-    st, actions, hints = look(s)
-    assert st["next_stage"] == "sweep"
-    assert actions == ['python -m beer_in_this_town sweep --city "Tel Aviv" --json']
+    st, actions, hints = look(s, emulator=no_adb)
+    assert st["next_stage"] == "sweep" and st["method"] == "search"
+    assert actions == ['python -m beer_in_this_town sweep --city "Tel Aviv" '
+                       '--method search --json']
     assert st["blocked_on"] is None
-    assert any("Discover -> View Map" in h for h in hints)
+    assert st["emulator"] is None, "a search sweep needs no emulator"
+    assert not any("Discover -> View Map" in h for h in hints)
     assert_safe(actions)
+
+
+def test_a_map_sweep_is_offered_with_its_emulator_hint(s):
+    state.record_intent(CITY, LIST, method="map")
+    st, actions, hints = look(s)
+    assert actions == ['python -m beer_in_this_town sweep --city "Tel Aviv" '
+                       '--method map --json']
+    assert any("Discover -> View Map" in h for h in hints)
+
+
+def test_the_last_runs_method_outranks_the_intent(s):
+    state.record_intent(CITY, LIST, method="map")
+    state.record_run(query=CITY, map_title=LIST,
+                     csv_path=stage_path(CITY, "1_sweep.csv"), method="search")
+    st, _, _ = look(s, emulator=no_adb)
+    assert st["method"] == "search" and st["emulator"] is None
+
+
+def test_an_unknown_method_is_not_recorded():
+    with pytest.raises(state.BadIntent):
+        state.record_intent(CITY, method="satellite")
 
 
 @pytest.mark.parametrize("have,nxt", [
@@ -164,6 +187,7 @@ def test_pin_and_notes_progress_comes_from_the_list_journals(s):
 # --- the emulator gate ----------------------------------------------------
 
 def test_an_unready_emulator_blocks_the_sweep(s):
+    state.record_intent(CITY, LIST, method="map")
     st, actions, hints = look(s, emulator=no_adb)
     assert st["blocked_on"] == "emulator"
     assert actions == [], "doctor changes nothing, so offering it would loop"
@@ -177,6 +201,7 @@ def test_status_works_with_no_adb_installed(s, monkeypatch, capsys):
     import shutil
 
     monkeypatch.setattr(shutil, "which", lambda name: None)
+    state.record_intent(CITY, LIST, method="map")
     env = cli.cmd_status(s)
     assert env.ok
     assert env.data["blocked_on"] == "emulator"
@@ -216,7 +241,8 @@ def test_a_quote_in_a_city_cannot_break_the_command(tmp_path):
     s = Settings(storage_state=session)
     _, actions, _ = look(s)
     assert actions == [
-        'python -m beer_in_this_town sweep --city "Evil --i-read-robots x" --json']
+        'python -m beer_in_this_town sweep --city "Evil --i-read-robots x" '
+        '--method search --json']
 
 
 def test_status_without_the_probe_never_runs_adb(s):

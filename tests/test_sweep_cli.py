@@ -101,9 +101,35 @@ def test_the_cli_defaults_are_the_measured_ones(monkeypatch):
         return cli.Envelope(command="sweep", ok=True)
 
     monkeypatch.setattr(cli, "cmd_sweep", capture)
-    assert cli.main(["sweep", "--city", "Tel Aviv", "--json"]) == 0
+    assert cli.main(["sweep", "--city", "Tel Aviv", "--method", "map",
+                     "--json"]) == 0
     assert (seen["min_depth"], seen["max_depth"]) == (1, 3)
     assert seen["formats"] == ()
+
+
+def test_search_is_the_default_method_and_collects_the_top_1000(monkeypatch):
+    seen = {}
+
+    def capture(s, city, **kw):
+        seen.update(kw, city=city)
+        return cli.Envelope(command="sweep", ok=True)
+
+    monkeypatch.setattr(cli, "cmd_search_sweep", capture)
+    monkeypatch.setattr(cli, "cmd_sweep", lambda *a, **k: pytest.fail(
+        "the default sweep drove the emulator"))
+    assert cli.main(["sweep", "--city", "Tel Aviv", "--json"]) == 0
+    assert seen == {**seen, "city": "Tel Aviv", "top": 1000, "formats": ()}
+
+
+@pytest.mark.parametrize("extra", [["--here"], ["--top", "0"],
+                                   ["--top", "1001"]])
+def test_search_refuses_what_it_cannot_do(extra, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "cmd_search_sweep", lambda *a, **k: pytest.fail(
+        "searched despite a bad argument"))
+    code = cli.main(["sweep", "--city", "x", "--method", "search", *extra,
+                     "--json"])
+    assert code == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] ==         "bad_arguments"
 
 
 def test_the_census_is_asked_for_the_depths_it_was_given(monkeypatch):
@@ -116,7 +142,8 @@ def test_the_census_is_asked_for_the_depths_it_was_given(monkeypatch):
 
 def test_an_emulator_failure_reaches_the_envelope_via_main(monkeypatch, capsys):
     monkeypatch.setattr(cli, "check_emulator", unplugged)
-    code = cli.main(["sweep", "--city", "Tel Aviv", "--json"])
+    code = cli.main(["sweep", "--city", "Tel Aviv", "--method", "map",
+                     "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert code == 1
     assert payload["error"]["code"] == "emulator_unavailable"
