@@ -76,7 +76,16 @@ def assert_safe(actions):
 
 # --- next_actions walks the stages ---------------------------------------
 
-def test_nothing_run_yet_offers_the_sweep(s):
+def test_nothing_run_yet_defaults_to_the_map_and_its_emulator(s):
+    # Map is the default method: with no emulator, the sweep is blocked.
+    st, actions, hints = look(s, emulator=no_adb)
+    assert st["next_stage"] == "sweep" and st["method"] == "map"
+    assert st["blocked_on"] == "emulator"
+    assert actions == []
+
+
+def test_a_city_chosen_for_search_offers_the_search_sweep(s):
+    state.record_intent(CITY, LIST, method="search")
     st, actions, hints = look(s, emulator=no_adb)
     assert st["next_stage"] == "sweep" and st["method"] == "search"
     assert actions == ['python -m beer_in_this_town sweep --city "Tel Aviv" '
@@ -242,7 +251,7 @@ def test_a_quote_in_a_city_cannot_break_the_command(tmp_path):
     _, actions, _ = look(s)
     assert actions == [
         'python -m beer_in_this_town sweep --city "Evil --i-read-robots x" '
-        '--method search --json']
+        '--method map --json']
 
 
 def test_status_without_the_probe_never_runs_adb(s):

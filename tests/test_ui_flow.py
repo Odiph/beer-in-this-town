@@ -59,7 +59,7 @@ def test_a_fresh_city_shows_four_commands_and_nothing_done(project):
     assert card["next"] == "sweep"
     by = {s["key"]: s for s in card["stages"]}
     assert by["sweep"]["command"] == ('beertown sweep --city "Tel Aviv"'
-                                       ' --method search')
+                                       ' --method map')
     assert by["enrich"]["command"] == 'beertown enrich --city "Tel Aviv"'
     assert by["filter"]["command"] == 'beertown filter --city "Tel Aviv"'
     assert by["export"]["command"].startswith(
@@ -119,7 +119,7 @@ def test_no_city_no_commands(project):
 def test_a_quote_in_the_city_cannot_break_the_shown_command(project):
     card = flow.build_card('Tel "Aviv')
     assert card["stages"][0]["command"] == ('beertown sweep --city "Tel Aviv"'
-                                       ' --method search')
+                                       ' --method map')
 
 
 # --- Google Maps --------------------------------------------------------------
@@ -300,7 +300,7 @@ def test_a_chosen_city_reaches_the_build_and_maps_cards(board):
     build = state["cards"]["build"]
     assert build["city"] == "Tel Aviv"
     assert build["stages"][0]["command"] == ('beertown sweep --city "Tel Aviv"'
-                                       ' --method search')
+                                       ' --method map')
     assert state["cards"]["maps"]["commands"]["pin_trial"].endswith(
         '--list "Tel Aviv Bars" --limit 3')
 

@@ -16,7 +16,8 @@ that look like answers and are not.
 
 > **Corrected 2026-09-23.** What follows was half right. The web search is
 > not geographic, but it is not name-only either, and signed in it is the
-> better source. `sweep --method search` is now the default; this document
+> better source for the most-visited venues. It is available as
+> `sweep --method search`; the map stays the default, and this document
 > describes `--method map`. The measurements are in section 1a.
 
 `untappd.com` has **no public geographic venue search**. Its `/search`

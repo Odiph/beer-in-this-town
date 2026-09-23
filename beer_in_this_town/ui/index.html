@@ -701,12 +701,12 @@ const VIEWS = {
     let savedMethod = "";
     try { savedMethod = localStorage.getItem("beertown.method") || ""; } catch (e) {}
     const chosen = draft.method || (state.intent && state.intent.method)
-      || savedMethod || "search";
+      || savedMethod || "map";
     for (const [value, label, hint] of [
+      ["map", "Sweep the Untappd app's map (default)",
+       "Slower, and needs BlueStacks set up. Finds venues by where they are."],
       ["search", "Search Untappd",
        "Fast, no emulator. The most checked-in venues first."],
-      ["map", "Sweep the Untappd app's map",
-       "Slower, and needs BlueStacks set up. Finds venues by where they are."],
     ]) {
       const row = el("label");
       const radio = el("input");
@@ -747,7 +747,7 @@ const VIEWS = {
       try {
         const picked = methods.querySelector("input[name=method]:checked");
         await api("/api/city", { method: "POST", body: JSON.stringify({
-          city, method: picked ? picked.value : "search" }) });
+          city, method: picked ? picked.value : "map" }) });
         draft.city = null;
         viewKey = null;
         tick();
