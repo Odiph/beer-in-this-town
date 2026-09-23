@@ -419,8 +419,14 @@ def next_step(rows: tuple[Check, ...], intent: dict | None = None,
             "reload this page.",
         )
 
+    # Only the app's map needs the emulator. The method is chosen with the
+    # city; before that, the default decides.
+    from ..config import DEFAULT_METHOD
+
+    method = (intent or {}).get("method") or DEFAULT_METHOD
     emulator = by_key.get("emulator")
-    if emulator is not None and emulator.state != OK and not swept:
+    if (method == "map" and emulator is not None and emulator.state != OK
+            and not swept):
         return NextStep(
             "emulator", "Set up the Android emulator",
             "The venues come from the Untappd app's map, running on "

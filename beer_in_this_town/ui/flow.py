@@ -177,6 +177,19 @@ STAGES = (
      "them in map apps other than Google Maps."),
 )
 
+# The sweep row when the method is Untappd's web search.
+SEARCH_SWEEP = (
+    "Search Untappd for the city",
+    "Searches Untappd's website for each common spelling of the city's name "
+    "and keeps the venues listed there, most checked-in first. No emulator; "
+    "a few minutes per spelling. Positions come from each venue's page in "
+    "the next step."
+)
+SEARCH_OPTIONS = (
+    "Options: --top N keeps only the N most checked-in venues per spelling "
+    "(default and maximum 1000); --method map uses the app's map instead."
+)
+
 SWEEP_PRECONDITION = (
     "Before each sweep: BlueStacks running, the Untappd app open on "
     "Discover -> View Map, and nothing covering the map."
@@ -192,15 +205,23 @@ AGENT_NOTE = (
 )
 
 
-def _stage_command(key: str, city: str) -> str:
+def _stage_command(key: str, city: str, method: str = "") -> str:
     cmd = f'{CLI} {key} --city "{_quote(city)}"'
+    if key == "sweep" and method:
+        cmd += f" --method {method}"
     if key == "export":
         cmd += " --format kml,gpx,geojson"
     return cmd
 
 
-def build_card(city: str | None, root: Path | None = None) -> dict:
-    """Each stage for this city: command, explanation, done + count."""
+def build_card(city: str | None, root: Path | None = None,
+               method: str | None = None) -> dict:
+    """Each stage for this city: command, explanation, done + count.
+
+    `method` is how the sweep collects venues ("search" or "map"; None
+    means the default). It changes the sweep row only.
+    """
+    method = method or config.DEFAULT_METHOD
     if not city:
         return {"city": None, "stages": []}
     folder = data_dir_for(city, root)
@@ -210,11 +231,14 @@ def build_card(city: str | None, root: Path | None = None) -> dict:
         done = path.exists()
         row = {
             "key": key, "title": title, "explain": explain,
-            "command": _stage_command(key, city),
+            "command": _stage_command(key, city, method),
             "file": rel(path), "done": done,
             "count": _count(path) if done else None,
         }
-        if key == "sweep":
+        if key == "sweep" and method == "search":
+            row["title"], row["explain"] = SEARCH_SWEEP
+            row["options"] = SEARCH_OPTIONS
+        elif key == "sweep":
             row["precondition"] = SWEEP_PRECONDITION
             row["options"] = SWEEP_OPTIONS
         if key == "filter":

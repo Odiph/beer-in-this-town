@@ -329,3 +329,24 @@ def test_saved_in_reads_googles_joined_list_names(panel, target, hit):
     from beer_in_this_town.pin_to_list import saved_in_target
 
     assert saved_in_target(panel, target) is hit
+
+
+def test_a_json_envelope_prints_on_a_cp1252_console(monkeypatch):
+    """Found live: `sweep --city Haifa --json` wrote its CSV, then crashed
+    printing the envelope, because the variant "חיפה" does not encode in
+    Windows' default console code page. One JSON object on stdout is the
+    contract; escaped non-ASCII is still that object."""
+    import io
+    import json
+    import sys
+
+    from beer_in_this_town.agent_io import Envelope, emit
+
+    raw = io.BytesIO()
+    console = io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", console)
+    emit(Envelope(command="sweep", ok=True,
+                  data={"variants": {"חיפה": 1, "хайфа": 2}}), as_json=True)
+    console.flush()
+    back = json.loads(raw.getvalue().decode("cp1252"))
+    assert back["data"]["variants"] == {"חיפה": 1, "хайфа": 2}
