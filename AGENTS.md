@@ -185,12 +185,12 @@ old corpus, a list name or the repo. If they chose one in the dashboard,
 ### 5. Choose how to sweep — the human's call, once per city
 
 `sweep` has two methods. `data.method` in `status` says which one the next
-sweep uses (`"search"` unless the human chose `map`), and the `sweep` command
+sweep uses (`"map"` unless the human chose `search`), and the `sweep` command
 in `next_actions` names it. The dashboard's city step asks for the method
-with the city, and only a `map` choice sends the human to the emulator
-setup.
+with the city; only a `map` choice, the default, sends the human to the
+emulator setup.
 
-| | `--method search` (default) | `--method map` |
+| | `--method search` | `--method map` (default) |
 |---|---|---|
 | Source | Untappd's web search, once per spelling of the city's name | the Untappd app's map, cell by cell |
 | Needs | the Untappd web session (step 3) | the emulator (steps 1-2, 5b) |
@@ -199,8 +199,9 @@ setup.
 
 Measured 2026-09-23: London's search held 99 of the map sweep's top 100
 venues by check-ins; Tel Aviv's held all of its top 100 beer venues, where
-the map had 20. The map remains for a person who wants it; it is not the
-default. Do not switch methods on your own initiative.
+the map had 20. The map is still the default (the user's call,
+2026-09-24); search is what a person chooses. Do not switch methods on your
+own initiative.
 
 The spellings (`data.variants`) come from Foursquare's open places data,
 cached per city: every spelling with at least 2% of the city's named
@@ -503,7 +504,7 @@ and `path`; `filter` adds `excluded` and `excluded_path`, `export` adds
 carry `total`, `by_status` and `list` from their per-list journals.
 `data.next_stage` is the first collection stage not done, or `null`.
 `data.method` is how the next (or last) sweep collects venues: the last
-run's method, else the one chosen in the dashboard, else `"search"`.
+run's method, else the one chosen in the dashboard, else `"map"`.
 `data.emulator` is the emulator checks (as in `doctor`) when a map sweep is
 next, and `null` otherwise: `null` means not checked, never fine.
 

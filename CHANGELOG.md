@@ -7,14 +7,14 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- **`sweep --method search`, now the default.** Untappd's signed-in web
+- **`sweep --method search`**, beside the app-map sweep, which stays the
+  default (`--method map`). Untappd's signed-in web
   search, once per spelling of the city's name, most-checked-in venues
   first (`--top`, up to the site's 1,000). No emulator. Measured against
   the map sweep: London's search held 99 of the map's top 100 venues by
   check-ins for 50 requests; Tel Aviv's held all of its top 100 beer
-  venues, where the map had 20. `--method map` is the app-map sweep, as
-  before, and is what `status` offers when the dashboard or last run chose
-  it.
+  venues, where the map had 20. `status` offers the method the dashboard or the
+  last run chose, and the map when nobody chose.
 - **City name variants** (`city_names.py`): which spellings to search, from
   Foursquare's open places data inside the city's boundary -- nothing under
   2%, at most ten, cached per city. Needs the new `search` extra; without it

@@ -107,7 +107,18 @@ def test_the_cli_defaults_are_the_measured_ones(monkeypatch):
     assert seen["formats"] == ()
 
 
-def test_search_is_the_default_method_and_collects_the_top_1000(monkeypatch):
+def test_map_is_the_default_method(monkeypatch):
+    # The user's call, 2026-09-24: search is opt-in with --method search.
+    called = []
+    monkeypatch.setattr(cli, "cmd_sweep", lambda *a, **k: called.append(k)
+                        or cli.Envelope(command="sweep", ok=True))
+    monkeypatch.setattr(cli, "cmd_search_sweep", lambda *a, **k: pytest.fail(
+        "the default sweep ran the web search"))
+    assert cli.main(["sweep", "--city", "Tel Aviv", "--json"]) == 0
+    assert called, "the default sweep did not use the app's map"
+
+
+def test_search_collects_the_top_1000_by_default(monkeypatch):
     seen = {}
 
     def capture(s, city, **kw):
@@ -116,8 +127,9 @@ def test_search_is_the_default_method_and_collects_the_top_1000(monkeypatch):
 
     monkeypatch.setattr(cli, "cmd_search_sweep", capture)
     monkeypatch.setattr(cli, "cmd_sweep", lambda *a, **k: pytest.fail(
-        "the default sweep drove the emulator"))
-    assert cli.main(["sweep", "--city", "Tel Aviv", "--json"]) == 0
+        "--method search drove the emulator"))
+    assert cli.main(["sweep", "--city", "Tel Aviv", "--method", "search",
+                     "--json"]) == 0
     assert seen == {**seen, "city": "Tel Aviv", "top": 1000, "formats": ()}
 
 

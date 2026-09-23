@@ -36,8 +36,9 @@ def test_a_map_city_still_needs_the_emulator_first():
 
 @pytest.mark.unit
 def test_no_choice_yet_follows_the_default_method():
-    # Default is search: nobody is sent to BlueStacks before choosing.
-    assert next_step(ROWS).key == "city"
+    # Default is the app's map (the user's call, 2026-09-24), so the
+    # emulator setup comes first, as it always did.
+    assert next_step(ROWS).key == "emulator"
 
 
 @pytest.mark.unit

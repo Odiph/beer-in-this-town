@@ -231,7 +231,7 @@ def test_the_city_a_person_named_is_enough(ready, monkeypatch, capsys):
     twice."""
     from beer_in_this_town import cli
 
-    record_intent("porto")
+    record_intent("porto", method="search")
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False, raising=False)
     monkeypatch.setattr(cli, "cmd_search_sweep",
                         lambda s, city, **kw: cli.Envelope(
