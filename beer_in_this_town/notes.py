@@ -67,7 +67,9 @@ NOTE_FIELD = (
 LISTS_TOGGLE = "button[aria-label*='place lists details']"
 
 _NOTE_BLOCK = re.compile(
-    r"Saved in\s+(?P<name>.+?)\s+(?:Private|Shared|Public)\s*·", re.S)
+    # \s*, not \s+: the live innerText is "Saved inLondon Bars Test" -- the
+    # label and the list's link are adjacent inline elements.
+    r"Saved in\s*(?P<name>.+?)\s+(?:Private|Shared|Public)\s*·", re.S)
 
 # For each note box: the text of the nearest ancestor that says "Saved in"
 # and holds no other box -- that box's own list block.

@@ -25,6 +25,12 @@ SHARED = "Saved in\nLondon MTP25\nShared · 37 places\nAdd a note"
     ("Saved in Want to go Private · 1 place", "Want to go"),
     ("Saved in\nBeer & Bars\nPublic · 2 places", "Beer & Bars"),
     ("Add a note", None),
+    # Verbatim from the live page, 2026-09-24: innerText joins the label and
+    # the list's link with no space, and carries the icon glyphs.
+    ("\ue896\n\nSaved inLondon Bars Test\n\nPrivate · 33 places\n\ue5ce"
+     "\nAdd a note", "London Bars Test"),
+    ("\ue896\n\nSaved inLondon MTP25\n\nShared · 37 places\nAdd a note",
+     "London MTP25"),
 ])
 def test_the_list_a_note_box_belongs_to_is_read_from_its_block(block, name):
     assert notes.note_block_list(block) == name
