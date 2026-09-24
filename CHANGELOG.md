@@ -15,7 +15,9 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   It now unfolds the row and writes only into the box whose block names the
   target list. When there is no such box it types nothing, spends no write,
   records `no-note-box` and fails the run (`data.no_note_box`), and three in
-  a row trip the breaker.
+  a row trip the breaker. The folded row is found by its own button
+  (`aria-expanded="false"`), because the reload that verifies a note folds
+  it again: before that, a note that had landed read back as a failure.
 - **`notes` no longer adopts the old unscoped `state/noted.json` by
   guessing.** It renamed a Singapore journal into the journal of "London
   Bars Test", the bug `pin` had until 2026-09-22. Same rule now: never
