@@ -1047,17 +1047,24 @@ def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
         ))
 
     tally = {k: sum(1 for v in journal.values() if v == k)
-             for k in ("ok", "failed", "not-found", "ambiguous", "not-in-list")}
+             for k in ("ok", "failed", "not-found", "ambiguous", "not-in-list",
+                       "no-note-box")}
     unpinned = [k for k, v in journal.items() if v == "not-in-list"]
+    no_box = tally["no-note-box"]
     return Envelope(
         command="notes",
-        ok=tally["failed"] == 0,
+        ok=tally["failed"] == 0 and no_box == 0,
         data={"written": tally["ok"], "failed": tally["failed"],
               "not_found": tally["not-found"], "ambiguous": tally["ambiguous"],
-              "not_in_list": tally["not-in-list"], "list": list_name},
+              "not_in_list": tally["not-in-list"], "no_note_box": no_box,
+              "list": list_name},
         warnings=(region_warnings
                   + ([f"{len(unpinned)} place(s) are not in the list yet; "
-                      "run pin first"] if unpinned else [])),
+                      "run pin first"] if unpinned else [])
+                  + ([f"{no_box} place(s) showed no note box for "
+                      f"{list_name!r}, so nothing was written to them. If "
+                      "every place does this, Google Maps changed its note "
+                      "editor again."] if no_box else [])),
         next_actions=[],
         hints=([f'A human can retry the {tally["failed"]} that failed: notes '
                 f'--csv "{path}" --list "{list_name}" --json']
