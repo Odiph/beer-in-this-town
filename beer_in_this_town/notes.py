@@ -63,8 +63,11 @@ NOTE_FIELD = (
     "textarea[aria-label*='note'], "
     "textarea[placeholder*='Add a note']"
 )
-# The chevron on the "Saved in" row; aria-expanded says whether it is open.
-LISTS_TOGGLE = "button[aria-label*='place lists details']"
+# The folded "Saved in" row is itself a button (aria-expanded="false").
+# Unfolded, it is replaced by a different button ("Hide place lists
+# details"), so this matches only while folded -- and a reload folds it
+# again, which is why the read-back after a write must unfold it too.
+LISTS_TOGGLE = "button[aria-expanded='false']:has-text('Saved in')"
 
 _NOTE_BLOCK = re.compile(
     # \s*, not \s+: the live innerText is "Saved inLondon Bars Test" -- the
@@ -227,7 +230,7 @@ def note_action(existing: str | None, note: str) -> str:
 def _open_lists(page) -> None:
     """Unfold the "Saved in" row, where the note boxes are. Never fold it."""
     toggle = page.locator(LISTS_TOGGLE).first
-    if toggle.count() and toggle.get_attribute("aria-expanded") == "false":
+    if toggle.count():
         toggle.click(timeout=10_000)
         page.wait_for_timeout(1500)
 
@@ -255,7 +258,10 @@ def _read_note(page, list_name: str) -> str | None:
         if box is None:
             return None
         return (box.input_value(timeout=5000) or "").strip()
-    except Exception:
+    except Exception as exc:
+        # Unknown is still the answer, but say why: swallowed silently, a
+        # read-back failure looked like a write failure (found live).
+        log.warning("  could not read the note for %r: %s", list_name, exc)
         return None
 
 

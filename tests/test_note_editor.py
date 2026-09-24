@@ -84,11 +84,16 @@ class FakeBoxes:
 
 
 class FakeToggle:
+    """The folded "Saved in" row: the selector matches it only while folded.
+
+    Found live: once unfolded, the row's button changes into a different one
+    ("Hide place lists details"), and after a reload it is folded again.
+    """
     def __init__(self, page):
         self.page = page
 
     def count(self):
-        return 1
+        return 0 if self.page.expanded else 1
 
     @property
     def first(self):
@@ -175,3 +180,11 @@ def test_a_place_with_no_note_box_fails_the_run_and_says_why(tmp_path,
     assert env.ok is False
     assert env.data["no_note_box"] == 1 and env.data["written"] == 0
     assert any("note box" in w for w in env.warnings)
+
+
+@pytest.mark.unit
+def test_the_toggle_selector_targets_the_folded_saved_in_row():
+    # The reload after writing folds the row again; the read-back must be
+    # able to unfold it, or a note that landed reads as a failure.
+    assert "aria-expanded='false'" in notes.LISTS_TOGGLE
+    assert "Saved in" in notes.LISTS_TOGGLE
