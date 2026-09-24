@@ -115,6 +115,20 @@ def test_note_journals_are_per_list(state_dir):
 
 
 @pytest.mark.unit
+def test_a_legacy_note_journal_is_never_adopted_by_guessing(state_dir):
+    """Same rule as pin's. Found live 2026-09-24: `notes` renamed a Singapore
+    noted.json into the journal of "London Bars Test" and reported its four
+    Singapore rows as London failures."""
+    legacy = state_dir / "noted.json"
+    legacy.write_text(json.dumps({"Ghost Whale | None": "failed"}),
+                      encoding="utf-8")
+
+    assert notes._load_journal("London Bars Test") == {}
+    assert legacy.exists()
+    assert not notes.journal_path("London Bars Test").exists()
+
+
+@pytest.mark.unit
 def test_a_legacy_journal_is_never_adopted_by_guessing(state_dir):
     """Its list is unrecorded, so no list may claim it.
 
