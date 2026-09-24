@@ -77,6 +77,13 @@ Worth understanding before you run it:
   chosen geocoder, OpenStreetMap's Overpass API (`overpass-api.de`, or the
   mirror in `OVERPASS_URL`: it receives the city centre and a radius, to
   calibrate the sweep), and -- only when you ask for it -- the Places API.
+- `sweep --method search` adds two, once per city (the result is cached in
+  `cache/city_names/`): Nominatim receives the **city name** to return its
+  boundary, whatever geocoder is configured, and `data.source.coop` serves
+  byte ranges of Foursquare's public places files. It receives no query,
+  only which file ranges are read, which says roughly which region of the
+  map you asked about. The spellings it finds are then searched on Untappd
+  with your session, like any search you would type.
 - The emulator is local. `sweep` talks to it over adb on this machine; with
   `--here` it reads the emulator's GPS fix, which stays on this machine and
   is only used as the map's centre.
