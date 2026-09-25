@@ -301,3 +301,45 @@ def test_an_unreadable_panel_still_answers_unknown(monkeypatch):
     monkeypatch.setattr(pin_to_list, "_saved_in", lambda p: None)
     assert pin_to_list._saved_in_settled(types.SimpleNamespace(), timeout_s=0.1,
                                          sleep=lambda s: None) is None
+
+
+class ReloadingPage:
+    """Each reload shows the place as the server had it at that moment."""
+
+    def __init__(self):
+        self.reloads = 0
+
+    def goto(self, url, **kw):
+        self.reloads += 1
+
+    def wait_for_selector(self, sel, **kw):
+        pass
+
+    def wait_for_timeout(self, ms):
+        pass
+
+
+@pytest.mark.unit
+def test_a_place_already_in_another_list_is_not_misread_as_unsaved(monkeypatch):
+    """Found live 2026-09-25: for a place already in "London MTP25", the
+    first reload after saving still showed "London MTP25" -- the old line,
+    rendered at once -- so pin called the save lost and clicked again, which
+    unticked it: three writes, and an even count would have left it out."""
+    page = ReloadingPage()
+    shown = {1: "London MTP25", 2: "London Bars Test & London MTP25"}
+    monkeypatch.setattr(pin_to_list, "_saved_in",
+                        lambda p: shown.get(page.reloads, shown[2]))
+    got = pin_to_list._read_back(page, "https://maps/place/x", "London Bars Test",
+                                 sleep=lambda s: None)
+    assert got == "London Bars Test & London MTP25"
+    assert page.reloads == 2
+
+
+@pytest.mark.unit
+def test_a_save_that_never_lands_reads_as_what_is_there(monkeypatch):
+    page = ReloadingPage()
+    monkeypatch.setattr(pin_to_list, "_saved_in", lambda p: "London MTP25")
+    got = pin_to_list._read_back(page, "https://maps/place/x", "London Bars Test",
+                                 sleep=lambda s: None)
+    assert got == "London MTP25"
+    assert page.reloads == pin_to_list.READBACK_TRIES
