@@ -144,6 +144,34 @@ def test_search_refuses_what_it_cannot_do(extra, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["error"]["code"] ==         "bad_arguments"
 
 
+@pytest.mark.parametrize("argv,sort", [([], "all"),
+                                       (["--sort", "recent"], "recent"),
+                                       (["--sort", "all"], "all")])
+def test_search_passes_the_sort_through(argv, sort, monkeypatch):
+    seen = {}
+
+    def capture(s, city, **kw):
+        seen.update(kw)
+        return cli.Envelope(command="sweep", ok=True)
+
+    monkeypatch.setattr(cli, "cmd_search_sweep", capture)
+    assert cli.main(["sweep", "--city", "x", "--method", "search", *argv,
+                     "--json"]) == 0
+    assert seen["sort"] == sort
+
+
+@pytest.mark.parametrize("sort", ["recent", "all"])
+def test_sort_is_refused_with_the_map(sort, monkeypatch, capsys):
+    # The app's map has no ranking to choose: --sort there would be ignored.
+    monkeypatch.setattr(cli, "cmd_sweep", lambda *a, **k: pytest.fail(
+        "swept the map despite --sort"))
+    code = cli.main(["sweep", "--city", "x", "--method", "map", "--sort",
+                     sort, "--json"])
+    assert code == 1
+    err = json.loads(capsys.readouterr().out)["error"]
+    assert err["code"] == "bad_arguments" and "--sort" in err["message"]
+
+
 def test_the_census_is_asked_for_the_depths_it_was_given(monkeypatch):
     monkeypatch.setattr(cli, "census", fake_census)
     cli.cmd_sweep(Settings(query="x"), here=True, min_depth=2, max_depth=4,

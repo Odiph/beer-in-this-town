@@ -82,7 +82,13 @@ from .pin_to_list import (
 )
 from .places import PlacesUnavailable, resolve_closures
 from .places import counts as closure_counts
-from .search_sweep import DEFAULT_TOP, SEARCH_CAP, cmd_search_sweep
+from .search_sweep import (
+    DEFAULT_SORT,
+    DEFAULT_TOP,
+    SEARCH_CAP,
+    SORT_PARAMS,
+    cmd_search_sweep,
+)
 from .state import (
     blocked_on,
     hints,
@@ -1145,6 +1151,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="search: how many results to collect per spelling, "
                          f"most-checked-in first (1-{SEARCH_CAP}, default "
                          f"{DEFAULT_TOP}; the site pages no deeper)")
+    sw.add_argument("--sort", choices=tuple(SORT_PARAMS), default=None,
+                    help="search only: how Untappd ranks the results before "
+                         "--top keeps the first ones. all: all-time "
+                         "check-ins (default). recent: recent popularity, "
+                         "the places getting busy now.")
     sw.add_argument("--fresh", action="store_true",
                     help="sweep again even if a complete sweep of this city "
                          "from the last 12h exists (a re-run otherwise only "
@@ -1418,7 +1429,16 @@ def main(argv: list[str] | None = None) -> int:
                     )), as_json)
                     return 1
                 env = cmd_search_sweep(s, s.query, top=args.top,
+                                       sort=args.sort or DEFAULT_SORT,
                                        formats=formats, title=s.map_title)
+            elif args.sort is not None:
+                emit(fail("sweep", Problem(
+                    code="bad_arguments",
+                    message="--sort ranks the web search's results; the "
+                            "app's map (--method map) has no ranking.",
+                    remedy="Re-run without --sort, or with --method search.",
+                )), as_json)
+                return 1
             else:
                 env = cmd_sweep(s, here=args.here, min_depth=args.min_depth,
                                 max_depth=args.max_depth, formats=formats,

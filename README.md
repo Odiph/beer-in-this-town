@@ -254,7 +254,7 @@ with Untappd, Google or BlueStacks, and nothing here is legal advice.
 | `bootstrap` | Sign-in from the terminal (opens a real Chrome) | signs in |
 | `verify` | Test both accounts actually work (no window) | reads |
 | `selfcheck` | One request: can a known venue page still be parsed | no |
-| `sweep` | Read the Untappd app's map and place the venues; `--method search` uses Untappd's web search instead | drives the app; reads |
+| `sweep` | Read the Untappd app's map and place the venues; `--method search` uses Untappd's web search instead (`--sort recent` for what is popular now) | drives the app; reads |
 | `enrich` | Match each venue to its Untappd page: id, stats, coordinates | reads |
 | `filter` | Keep beer venues, record the rest with reasons | no |
 | `export` | KML / GPX / GeoJSON map files | no |

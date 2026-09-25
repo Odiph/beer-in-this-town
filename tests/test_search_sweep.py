@@ -186,3 +186,65 @@ def test_an_incomplete_search_is_not_cached(tmp_path, monkeypatch):
     assert search("london", 1000).complete is False
     assert len(search("london", 1000).refs) == 2   # fetched again, not cached
     assert len(search("london", 1000).refs) == 2   # now complete: cached
+
+
+# --- --sort recent (issue #16) ---------------------------------------------
+
+@pytest.mark.parametrize("sort,param", [("all", "sort=all"),
+                                        ("recent", "sort=popular_recent")])
+def test_the_search_url_carries_the_sort(sort, param):
+    url = search_sweep.search_url("tel aviv", sort)
+    assert url.startswith("https://untappd.com/search?")
+    assert "q=tel+aviv" in url and "type=venues" in url
+    assert url.endswith(param)
+
+
+def test_an_unknown_sort_is_refused_not_sent():
+    with pytest.raises(ValueError):
+        search_sweep.search_url("london", "popular_recent")
+
+
+def test_the_page_cache_is_kept_apart_by_sort(tmp_path, monkeypatch):
+    # A cached all-time page served for a recent search would be the wrong
+    # ranking under the right name.
+    from beer_in_this_town import config
+
+    monkeypatch.setattr(search_sweep, "CACHE_DIR", tmp_path)
+    paths = {}
+    for sort in ("all", "recent"):
+        search = search_sweep.BrowserCitySearch.__new__(
+            search_sweep.BrowserCitySearch)
+        search.s, search.sort = config.Settings(), sort
+        paths[sort] = search._cache("london", 1000)
+    assert paths["all"] != paths["recent"]
+
+
+def test_a_capped_recent_search_says_recently_popular():
+    load, _ = pages({"london": (63300, [ref(i, f"V{i}") for i in range(5)]),
+                     "croydon": (3, [])})
+    h = harvest(LONDON, load, top=5, sort="recent")
+    text = " ".join(h.warnings)
+    assert "most recently popular" in text
+    assert "most-checked-in" not in text
+
+
+@pytest.mark.parametrize("sort", ["all", "recent"])
+def test_the_envelope_records_the_sort(sort, tmp_path, monkeypatch):
+    monkeypatch.setattr(search_sweep, "stage_path",
+                        lambda city, name: tmp_path / name)
+    monkeypatch.setattr(search_sweep, "record_run", lambda **_k: None)
+    load, _ = pages({"london": (1, [ref(1, "A")]), "croydon": (0, [])})
+    env = search_sweep.cmd_search_sweep(
+        None, "London", top=1000, sort=sort, formats=(), load=load,
+        names=LONDON)
+    assert env.ok and env.data["sort"] == sort
+
+
+def test_the_sort_defaults_to_all_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(search_sweep, "stage_path",
+                        lambda city, name: tmp_path / name)
+    monkeypatch.setattr(search_sweep, "record_run", lambda **_k: None)
+    load, _ = pages({"london": (1, [ref(1, "A")]), "croydon": (0, [])})
+    env = search_sweep.cmd_search_sweep(
+        None, "London", top=1000, formats=(), load=load, names=LONDON)
+    assert env.data["sort"] == "all"
