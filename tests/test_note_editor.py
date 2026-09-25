@@ -188,3 +188,54 @@ def test_the_toggle_selector_targets_the_folded_saved_in_row():
     # able to unfold it, or a note that landed reads as a failure.
     assert "aria-expanded='false'" in notes.LISTS_TOGGLE
     assert "Saved in" in notes.LISTS_TOGGLE
+
+
+class SavingBox(FakeBox):
+    def click(self, timeout=None):
+        pass
+
+    def fill(self, text, timeout=None):
+        self.page.typed = text
+
+
+class SlowSavePage(FakePage):
+    """Maps stores a note a few seconds after blur; early reloads show the
+    old text (found live 2026-09-25: read back 3 s after Tab, the old note;
+    read a minute later, the new one)."""
+
+    def __init__(self, old, stored_after_reloads):
+        super().__init__([TEST], [old], expanded=True)
+        self.reloads, self.stored_after = 0, stored_after_reloads
+        self.typed = None
+        self.keyboard = self
+
+    def press(self, key):
+        pass
+
+    def goto(self, url, **kw):
+        self.reloads += 1
+        if self.typed is not None and self.reloads >= self.stored_after:
+            self.values[0] = self.typed
+
+    def locator(self, selector):
+        if selector == notes.LISTS_TOGGLE:
+            return FakeToggle(self)
+        boxes = FakeBoxes(self)
+        boxes.nth = lambda i: SavingBox(self, i)
+        return boxes
+
+
+@pytest.mark.unit
+def test_a_slow_save_is_read_back_after_another_reload():
+    page = SlowSavePage(old="as of 2026-09-24", stored_after_reloads=2)
+    assert notes._write_note(page, "as of 2026-09-22",
+                             "London Bars Test") == "as of 2026-09-22"
+    assert page.reloads == 2
+
+
+@pytest.mark.unit
+def test_a_note_that_never_lands_still_reads_as_what_is_there():
+    page = SlowSavePage(old="as of 2026-09-24", stored_after_reloads=99)
+    assert notes._write_note(page, "as of 2026-09-22",
+                             "London Bars Test") == "as of 2026-09-24"
+    assert page.reloads == notes.READBACK_TRIES
