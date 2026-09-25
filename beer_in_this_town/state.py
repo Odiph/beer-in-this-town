@@ -20,11 +20,13 @@ from typing import Any
 
 from .app_sweep import journal_path as sweep_journal_path
 from .config import (
+    DEFAULT_METHOD,
     ENRICHED_CSV,
     EXCLUDED_CSV,
     EXPORT_STEM,
     STATE_DIR,
     SWEEP_CSV,
+    SWEEP_METHODS,
     VENUES_CSV,
     Settings,
     cli_arg,
@@ -37,7 +39,8 @@ LAST_RUN = STATE_DIR / "last_run.json"
 LEGACY_PINNED = STATE_DIR / "pinned.json"
 
 
-def record_run(query: str, map_title: str, csv_path: Path) -> None:
+def record_run(query: str, map_title: str, csv_path: Path,
+               method: str = "") -> None:
     """Remember the city and list the last `sweep` was for.
 
     `status` used to answer from `Settings()` defaults, because it is not one
@@ -49,9 +52,16 @@ def record_run(query: str, map_title: str, csv_path: Path) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     LAST_RUN.write_text(
         json.dumps({"query": query, "map_title": map_title,
-                    "csv": str(csv_path)}, indent=1),
+                    "csv": str(csv_path), "method": method}, indent=1),
         encoding="utf-8",
     )
+
+
+def sweep_method(s: Settings) -> str:
+    """The method the city's sweep uses: the last run's, the intent's, or
+    the default. The same precedence `inspect_state` reports."""
+    return (_read_json(LAST_RUN).get("method")
+            or (last_intent() or {}).get("method") or DEFAULT_METHOD)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -211,6 +221,10 @@ def inspect_state(s: Settings, *, probe_emulator: bool = False,
     # the city a person types reaches the agent at all.
     intent = last_intent() or {}
     query = last_run.get("query") or intent.get("query") or s.query or ""
+    # Same precedence as the city. A run recorded before methods existed
+    # carries none, and falls through to the default.
+    method = (last_run.get("method") or intent.get("method")
+              or DEFAULT_METHOD)
     list_name = (last_run.get("map_title") or intent.get("map_title")
                  or s.map_title or "")
 
@@ -239,7 +253,7 @@ def inspect_state(s: Settings, *, probe_emulator: bool = False,
     export = _stage(stages, "export")
 
     checks = None
-    if probe_emulator and upcoming == "sweep":
+    if probe_emulator and upcoming == "sweep" and method == "map":
         if emulator is None:
             from .emulator_checks import check_emulator as emulator
         checks = [c.to_dict() for c in emulator(s.adb_serial)]
@@ -256,6 +270,9 @@ def inspect_state(s: Settings, *, probe_emulator: bool = False,
         "last_run": {"query": query, "map_title": list_name,
                      "recorded": bool(last_run)},
         "city": query or None,
+        # How the next (or last) sweep collects venues: "search" or "map".
+        # Only "map" needs the emulator, so only "map" probes it.
+        "method": method,
         "city_dir": str(stage_path(query, "")) if query else None,
         "next_stage": upcoming,
         # Filled only when a sweep is next and the probe was asked for.
@@ -287,7 +304,8 @@ class BadIntent(ValueError):
     """The city was empty, or not something worth writing down."""
 
 
-def record_intent(query: str, map_title: str | None = None) -> dict:
+def record_intent(query: str, map_title: str | None = None,
+                  method: str | None = None) -> dict:
     """Remember the city the user asked for, before there is a run to record.
 
     The dashboard asks for a city and the agent reads `status`; without this
@@ -307,7 +325,12 @@ def record_intent(query: str, map_title: str | None = None) -> dict:
                         f"characters.")
 
     title = map_title or f"{cleaned.title()} Bars"
+    if method is not None and method not in SWEEP_METHODS:
+        raise BadIntent(f"Unknown method {method!r}; use one of "
+                        f"{', '.join(SWEEP_METHODS)}.")
     payload = {"query": cleaned, "map_title": title, "at": time.time()}
+    if method:
+        payload["method"] = method
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = INTENT.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
@@ -473,6 +496,11 @@ def next_actions(state: dict[str, Any], s: Settings) -> list[str]:
         return []
     if stage == "sweep" and _emulator_failed(state):
         return []          # blocked_on says "emulator"
+    if stage == "sweep":
+        # Explicit, so the command says which method it will use.
+        method = state.get("method") or DEFAULT_METHOD
+        return [f"python -m beer_in_this_town sweep --city {cli_arg(query)} "
+                f"--method {method} --json"]
     return [_stage_command(stage, query)]
 
 
@@ -567,7 +595,7 @@ def hints(state: dict[str, Any], s: Settings) -> list[str]:
         return _emulator_hints(state)
 
     out: list[str] = []
-    if state.get("next_stage") == "sweep":
+    if state.get("next_stage") == "sweep" and state.get("method") == "map":
         out.append(
             "Before the sweep: open the Untappd app in BlueStacks on Discover "
             "-> View Map. The sweep reads that map, and reads only.")

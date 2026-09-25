@@ -242,7 +242,8 @@ def make_handler(board: Dashboard):
             from ..state import BadIntent, record_intent
 
             try:
-                recorded = record_intent(body.get("city", ""))
+                recorded = record_intent(body.get("city", ""),
+                                         method=body.get("method") or None)
             except BadIntent as exc:
                 return self._deny(400, "bad_city", str(exc))
             log.info("[ui] city set to %r (list %r)",
@@ -293,7 +294,8 @@ def make_handler(board: Dashboard):
                     "accounts": {"why": list(flow.ACCOUNT_WHY)},
                     "city": {"notes": [{"heading": h, "body": b}
                                        for h, b in checks.CITY_NOTES]},
-                    "build": flow.build_card(city),
+                    "build": flow.build_card(
+                        city, method=intent.get("method") if intent else None),
                     "maps": flow.maps_card(
                         city, intent.get("map_title") if intent else None),
                 },

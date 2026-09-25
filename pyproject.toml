@@ -28,6 +28,9 @@ dependencies = [
 
 [project.optional-dependencies]
 browser = ["playwright>=1.45"]
+# `sweep --method search` builds each city's name variants from
+# Foursquare's open places data; without these it searches the city as typed.
+search = ["duckdb>=1.1", "pyarrow>=15"]
 dev = ["pytest>=8.0", "ruff>=0.5"]
 
 [project.scripts]

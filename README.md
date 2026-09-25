@@ -51,13 +51,21 @@ hand when you land somewhere new.
                               6. notes  write its numbers into the note
 ```
 
-Why an Android emulator: **untappd.com has no geographic venue search.** Its
-search matches venue *names*, so "Tel Aviv" returns a grill in Encino and a
-café in New Jersey while missing the bar two streets from the centre. The map
-in Untappd's own app is the only geographic search Untappd has, so the tool
-reads that map, over `adb`, from an emulator. The full research record — what
-was tried, what was measured, which surfaces are traps — is
-[docs/HARVESTING.md](docs/HARVESTING.md).
+Why an Android emulator: **untappd.com has no geographic venue search.** The
+map in Untappd's own app is the only geographic search Untappd has, so by
+default the tool reads that map, over `adb`, from an emulator.
+
+There is a second way, with no emulator: `sweep --method search`. Signed in,
+the website's search matches a venue's name *and* its city line, and ranks by
+check-ins. The tool searches each common spelling of the city's name (from
+Foursquare's open places data: "tel aviv", "תל אביב", "jaffa") and keeps each
+spelling's most-checked-in venues, up to the site's 1,000. Measured against
+the map: London's search held 99 of the map sweep's top 100 venues, and
+Tel Aviv's held all of its top 100 beer venues, where the map had 20. It is
+text, not geography, so it misses what is listed under another spelling and
+catches namesakes elsewhere, which `enrich` drops by position. The full
+research record — what was tried, what was measured, which surfaces are traps
+— is [docs/HARVESTING.md](docs/HARVESTING.md).
 
 ## Prerequisites
 
@@ -67,8 +75,8 @@ All of these are needed for the full flow. None is optional.
 |---|---|
 | **Python 3.11 or 3.12** | Runs the tool. CI tests both, on Linux and Windows. |
 | **Google Chrome** (or Chromium) | The tool's own Chrome profile holds your Google and Untappd sessions; it reads venue pages and drives Google Maps through it. |
-| **BlueStacks 5**, at its default 1600 x 900 screen, with Android Debug Bridge on | Runs the Untappd Android app, which it draws at 900 x 1600 -- the size the sweep is calibrated for. Tested on Windows only. |
-| **adb** (Android platform-tools) on your `PATH` | How the tool reads the app's map. |
+| **BlueStacks 5**, at its default 1600 x 900 screen, with Android Debug Bridge on (not needed with `--method search`) | Runs the Untappd Android app, which it draws at 900 x 1600 -- the size the sweep is calibrated for. Tested on Windows only. |
+| **adb** (Android platform-tools) on your `PATH` (not needed with `--method search`) | How the tool reads the app's map. |
 | **An Untappd account** | Signed in to the app in BlueStacks (for the map), and on untappd.com in the tool's profile (venue stats are only shown to signed-in visitors). |
 | **A Google account** | The saved list lives there. You create the list by hand; the tool never creates one. |
 
@@ -246,7 +254,7 @@ with Untappd, Google or BlueStacks, and nothing here is legal advice.
 | `bootstrap` | Sign-in from the terminal (opens a real Chrome) | signs in |
 | `verify` | Test both accounts actually work (no window) | reads |
 | `selfcheck` | One request: can a known venue page still be parsed | no |
-| `sweep` | Read the Untappd app's map and place the venues | drives the app |
+| `sweep` | Read the Untappd app's map and place the venues; `--method search` uses Untappd's web search instead | drives the app; reads |
 | `enrich` | Match each venue to its Untappd page: id, stats, coordinates | reads |
 | `filter` | Keep beer venues, record the rest with reasons | no |
 | `export` | KML / GPX / GeoJSON map files | no |

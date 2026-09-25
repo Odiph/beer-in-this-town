@@ -12,22 +12,50 @@ that look like answers and are not.
 
 ---
 
-## 1. Why the app at all
+## 1. Why the app at all -- and why it is no longer the default
+
+> **Corrected 2026-09-23.** What follows was half right. The web search is
+> not geographic, but it is not name-only either, and signed in it is the
+> better source for the most-visited venues. It is available as
+> `sweep --method search`; the map stays the default, and this document
+> describes `--method map`. The measurements are in section 1a.
 
 `untappd.com` has **no public geographic venue search**. Its `/search`
-endpoint matches venue *names* and ignores `lat`, `lng` and `radius`
-outright: passing coordinates changes nothing, and the parameters are not
-merely defaulted, they are unread. The only geo-parameterised endpoint on the
-website is `/nearby/nearby_events_markup`, which is events-only and returned
-nothing in every city tested.
+endpoint ignores `lat`, `lng` and `radius` outright: passing coordinates
+changes nothing, and the parameters are not merely defaulted, they are
+unread. The only geo-parameterised endpoint on the website is
+`/nearby/nearby_events_markup`, which is events-only and returned nothing in
+every city tested.
 
-So a query like `q="Tel Aviv"` returns venues whose *name* contains "Tel
-Aviv". A real corpus built that way was train stations, hotels, a pita place
-and a light-rail platform, while missing `Lauter` two streets from the
-centre.
+The original conclusion -- that `q="Tel Aviv"` returns only venues whose
+*name* contains "Tel Aviv" -- came from an English query in a city whose
+venues mostly list their city in Hebrew. The app's map has a real
+geographic search, and was the only route this document knew of.
 
-The app's map has a real geographic search. This is the only known route to
-one.
+### 1a. The web search, measured (2026-09-23, signed in)
+
+- **It matches the city line, not only the name.** A venue's city line is
+  Foursquare's `locality` for it ("תל אביב-יפו, תל אביב, ישראל"). "Tel Aviv"
+  in English returned 240 venues, 2 of the map sweep's 33; "תל אביב" in
+  Hebrew reported 3,965 and held 28 of them. The spelling decides.
+- **It ranks by all-time check-ins, exactly**: 0 of 325 pairs out of order
+  against the venue pages' totals.
+- **It pages to 1,000 results, no further**, whatever total it reports.
+  Each sort order (`sort=all`, `venue_name_asc`, `venue_name_desc`) is its
+  own index with its own cap.
+- **The top 1,000 hold the best venues.** London: 99 of the map sweep's top
+  100 by check-ins, for 50 requests. Tel Aviv: all of its top 100 beer
+  venues; the map sweep had 20.
+- **Typo tolerance defeats letter-splitting.** Appending letters to force
+  narrower queries ("תל אביב אביבכ") matches the city word with one typo
+  and returns the whole city again. A probe that split on "still over
+  1,000" sent 710 such queries; none added a venue. Do not split on the
+  city's own words.
+
+Which spellings to search comes from Foursquare's open places (FSQ OS
+Places): the localities inside the city's boundary, longer spellings folded
+into the shorter ones they contain, nothing under 2%, at most ten. Tel Aviv:
+`tel aviv`, `תל אביב`, `jaffa`. London: `london`, `croydon`.
 
 ---
 

@@ -205,6 +205,11 @@
     background:var(--ground); color:var(--ink);
   }
   .cityform input:focus-visible, .field input:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .methods{border:0; padding:0; margin:14px 0 0; display:flex; flex-direction:column; gap:8px}
+  .methods legend{font-size:13px; font-weight:600; padding:0; margin-bottom:2px}
+  .methods label{display:flex; gap:10px; align-items:flex-start; font-size:14px; cursor:pointer}
+  .methods input{margin-top:3px; accent-color:var(--accent)}
+  .methods small{display:block; color:var(--muted); font-size:12.5px}
   .field{display:flex; flex-direction:column; gap:6px; margin-top:10px}
   .field label{font-size:13px; font-weight:600}
   .cmd{
@@ -321,7 +326,7 @@ let autoChecked = false;
 // click on the stepper pins another, so a finished step can be reread.
 let viewKey = null;
 // What the person has typed, kept across rebuilds of the card.
-const draft = { city: null, list: null };
+const draft = { city: null, list: null, method: null };
 
 async function api(path, options) {
   const res = await fetch(path, {
@@ -689,6 +694,37 @@ const VIEWS = {
     form.append(input, save);
     go.appendChild(form);
 
+    // How the venues are found. Only the app's map needs the emulator, so
+    // this is asked here, before the dashboard sends anyone to BlueStacks.
+    const methods = el("fieldset", "methods");
+    methods.appendChild(el("legend", "", "How should venues be found?"));
+    let savedMethod = "";
+    try { savedMethod = localStorage.getItem("beertown.method") || ""; } catch (e) {}
+    const chosen = draft.method || (state.intent && state.intent.method)
+      || savedMethod || "map";
+    for (const [value, label, hint] of [
+      ["map", "Sweep the Untappd app's map (default)",
+       "Slower, and needs BlueStacks set up. Finds venues by where they are."],
+      ["search", "Search Untappd",
+       "Fast, no emulator. The most checked-in venues first."],
+    ]) {
+      const row = el("label");
+      const radio = el("input");
+      radio.type = "radio";
+      radio.name = "method";
+      radio.value = value;
+      radio.checked = value === chosen;
+      radio.addEventListener("change", () => {
+        draft.method = value;
+        try { localStorage.setItem("beertown.method", value); } catch (e) {}
+      });
+      const text = el("span", "", label);
+      text.appendChild(el("small", "", hint));
+      row.append(radio, text);
+      methods.appendChild(row);
+    }
+    go.appendChild(methods);
+
     const note = el("p", "cmdnote");
     note.style.marginTop = "8px";
     note.textContent = state.intent
@@ -709,7 +745,9 @@ const VIEWS = {
       if (!city) { input.focus(); return; }
       save.disabled = true;
       try {
-        await api("/api/city", { method: "POST", body: JSON.stringify({ city }) });
+        const picked = methods.querySelector("input[name=method]:checked");
+        await api("/api/city", { method: "POST", body: JSON.stringify({
+          city, method: picked ? picked.value : "map" }) });
         draft.city = null;
         viewKey = null;
         tick();
