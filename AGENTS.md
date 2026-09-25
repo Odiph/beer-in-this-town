@@ -382,6 +382,13 @@ trial it with `--limit` first.
 It only annotates places already in the target list; anything else is recorded
 as `not-in-list` and left alone. A note that already matches is never rewritten.
 
+A place saved in several lists has one note box per list, under its folded
+"Saved in" row, and a list may be shared with other people. `notes` writes
+only into the box whose block names the target list. When the place shows no
+such box it types nothing, spends no write, records `no-note-box`, and the
+run fails with `data.no_note_box` above 0 and a warning. Several in a row
+mean Google Maps changed its note editor: stop and report it, do not retry.
+
 Like `pin`, it runs a pre-flight first and reports `not_signed_in` or
 `list_missing` rather than working through a hundred places against a
 signed-out browser.
