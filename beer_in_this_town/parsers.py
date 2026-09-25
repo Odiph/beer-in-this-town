@@ -146,7 +146,42 @@ def parse_venue_stats(html: str, ref: VenueRef) -> Venue:
         lat=lat,
         lng=lng,
         geo_source="embedded" if lat is not None else "none",
+        last_checkin=extract_last_checkin(soup),
+        fsq_id=extract_fsq_id(soup),
     )
+
+
+# The venue's own Foursquare link; a review-place URL elsewhere on the page
+# (a comment, a check-in) names some other place.
+_FSQ_LINK = 'a[data-href=":foursquare"]'
+_FSQ_ID = re.compile(r"/review-place/([0-9a-f]{24})\b")
+
+
+def extract_fsq_id(soup) -> str:
+    """The venue's Foursquare place id, or "" when it has no link."""
+    link = soup.select_one(_FSQ_LINK)
+    m = _FSQ_ID.search(link.get("href", "")) if link else None
+    return m.group(1) if m else ""
+
+
+def extract_last_checkin(soup) -> str:
+    """The newest check-in time on the page's activity feed, as a date.
+
+    The latest of all the feed's times, not the first: order is Untappd's
+    to change. A time that does not parse is skipped, never guessed; no
+    parseable time at all is "" -- unknown, which is not "never".
+    """
+    from email.utils import parsedate_to_datetime
+
+    newest = None
+    for a in soup.select('a.time[data-href=":feed/viewcheckindate"]'):
+        try:
+            when = parsedate_to_datetime(a.get_text(strip=True))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if when is not None and (newest is None or when > newest):
+            newest = when
+    return newest.date().isoformat() if newest else ""
 
 
 def extract_coords(html: str) -> tuple[float | None, float | None]:

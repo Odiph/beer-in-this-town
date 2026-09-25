@@ -58,6 +58,7 @@ from __future__ import annotations
 import logging
 import unicodedata
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 
 from .models import Venue
@@ -174,13 +175,25 @@ def looks_private(v: Venue) -> bool:
     return v.unique <= PRIVATE_MAX_UNIQUE and v.total >= PRIVATE_MIN_TOTAL
 
 
-def looks_closed(v: Venue) -> bool:
+STALE_DAYS = 365
+
+
+def looks_closed(v: Venue, today: date | None = None) -> bool:
     """Substantial history, no current activity.
 
-    Suggestive, never conclusive: a quiet neighbourhood bar looks similar and
-    a seasonal venue looks identical. #7 proposes Google Places `businessStatus`
-    as the authoritative second tier; this is the free first one.
+    With a last check-in date (#21) that is the direct observation: nothing
+    in STALE_DAYS reads as gone, anything newer as alive -- which separates
+    the quiet-but-open bar and the seasonal one that `monthly == 0` lumps in
+    with the dead. Without a date, the older rule: history, but nothing this
+    month. Suggestive, never conclusive either way.
     """
+    if v.last_checkin:
+        try:
+            last = date.fromisoformat(v.last_checkin)
+        except ValueError:
+            last = None
+        if last is not None:
+            return ((today or date.today()) - last).days > STALE_DAYS
     if v.monthly is None or v.total is None:
         return False
     return v.monthly <= CLOSED_MAX_MONTHLY and v.total >= CLOSED_MIN_TOTAL

@@ -271,6 +271,9 @@ Report `data.resolved` out of `data.venues`, and `data.statuses` (counts of
 `resolved`, `too_far`, `no_match`, `unverified`, `unlocated`, `fetch_failed`,
 `search_failed`, `duplicate`, `outside`; the per-row reason is the
 `resolution` column).
+Each page also gives `last_checkin` (the newest check-in on its feed, an
+ISO date; empty when the page shows no public feed, which is unknown, not
+"never") and `fsq_id` (the venue's own Foursquare place id).
 An unresolved venue has **unknown** counts, not zero: never report it as
 having no check-ins. If most rows come back `fetch_failed` or `unverified`,
 suspect the parser or the session, not the city: run `selfcheck --json`.
@@ -452,7 +455,8 @@ private spaces. `label` emits a stratified sample for a human to judge;
 excludes a venue that `looks_private`, keeps or excludes by the category
 vocabulary in that module's docstring (a venue with no category is kept), and
 only *flags* one that is closed per Places or `looks_closed`, never dropping
-it. `label` and `score` measure the older `classify()` verdict, not
+it. `looks_closed` uses `last_checkin` when it is known (nothing in 365 days)
+and falls back to "history, but nothing this month" when it is not. `label` and `score` measure the older `classify()` verdict, not
 `craft_beer_decision`.
 
 Both are read-only, offline and touch no account, so an agent may run them
