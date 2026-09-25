@@ -134,7 +134,8 @@ connected once that passes. A cookie on disk means a login happened once, not
 that the account works now.
 
 The dashboard **cannot write to your Google account**: `pin` and `notes` have
-no button there and no route on that server. It binds to `127.0.0.1` only and
+no button there and no route on that server, and neither does the consent
+they need (`allow-writes`, which only runs at a terminal). It binds to `127.0.0.1` only and
 needs the key from the URL the terminal prints; [SECURITY.md](SECURITY.md)
 explains why.
 
@@ -233,8 +234,14 @@ it makes it considerate, and keeps you well clear of looking like a problem.
 never run as part of anything else, are never offered to a coding agent as a
 next step, and never create a list -- you make it yourself. They are wrapped
 in guardrails that fail closed: 100 writes a day, a circuit breaker, CAPTCHA
-detection, and a six-hour cool-off, all persisted to disk. Start with
-`--limit 3` and look at the result before doing more.
+detection, and a six-hour cool-off, all persisted to disk. Before either will
+run, you give consent for the exact list yourself, at your own terminal:
+`python -m beer_in_this_town allow-writes --list "<list name>"` explains what
+the writes cross, asks you to type the list's name, and records it for 7 days
+(`--days`, at most 30). It refuses `--json` and piped input, so an agent cannot
+consent for you; without it `pin` and `notes` stop with `no_consent` before
+opening a browser. Start with `--limit 3` and look at the result before doing
+more.
 
 **If you would rather not touch Google at all**, stop after `export`: the same
 venues come out as KML, GPX and GeoJSON for Organic Maps, OsmAnd or any other
@@ -258,6 +265,7 @@ with Untappd, Google or BlueStacks, and nothing here is legal advice.
 | `enrich` | Match each venue to its Untappd page: id, stats, coordinates | reads |
 | `filter` | Keep beer venues, record the rest with reasons | no |
 | `export` | KML / GPX / GeoJSON map files | no |
+| `allow-writes` | A person, at their own terminal, consents to `pin`/`notes` writing to one list for up to 30 days (default 7); `--revoke` takes it back | no (records consent) |
 | `pin` | Save each venue into a Google Maps list | **writes** |
 | `notes` | Write stats into each saved place's note | **writes** |
 | `closures` | Ask Google Places whether each venue still trades (paid) | no |
