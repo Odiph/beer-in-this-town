@@ -346,6 +346,31 @@ def _place_heading(page) -> str | None:
         return None
 
 
+LISTS_PANEL_TIMEOUT_S = 25.0
+
+
+def saved_lists_show(page, list_name: str,
+                     timeout_s: float = LISTS_PANEL_TIMEOUT_S,
+                     poll_ms: int = 1000) -> bool:
+    """Does the saved-lists panel name the list, once it has drawn?
+
+    Read once after a fixed 4 s, a slow panel reported an existing list as
+    missing (found live 2026-09-25: `list_missing` for "London Bars Test",
+    which the same page showed two seconds later). Poll until it appears or
+    the deadline passes; waited time is counted, not the clock, so a test
+    page can drive it.
+    """
+    waited = 0
+    while True:
+        body = page.locator("body").inner_text(timeout=15_000)
+        if list_exists_in(body, list_name):
+            return True
+        if waited >= timeout_s * 1000:
+            return False
+        page.wait_for_timeout(poll_ms)
+        waited += poll_ms
+
+
 def _assert_ready(page, list_name: str) -> None:
     """Fail fast unless we are signed in AND the target list already exists.
 
@@ -380,10 +405,9 @@ def _assert_ready(page, list_name: str) -> None:
         wait_until="domcontentloaded",
         timeout=60_000,
     )
-    page.wait_for_timeout(4000)
-    body = page.locator("body").inner_text(timeout=15_000)
+    page.wait_for_timeout(2000)
 
-    if not list_exists_in(body, list_name):
+    if not saved_lists_show(page, list_name):
         raise RuntimeError(
             f"Saved list {list_name!r} not found in this account.\n"
             "This tool saves INTO an existing list; it does not create one.\n"
