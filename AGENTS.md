@@ -456,7 +456,12 @@ excludes a venue that `looks_private`, keeps or excludes by the category
 vocabulary in that module's docstring (a venue with no category is kept), and
 only *flags* one that is closed per Places or `looks_closed`, never dropping
 it. `looks_closed` uses `last_checkin` when it is known (nothing in 365 days)
-and falls back to "history, but nothing this month" when it is not. `label` and `score` measure the older `classify()` verdict, not
+and falls back to "history, but nothing this month" when it is not.
+It also marks probable duplicates (#9): two kept rows linking the same
+Foursquare place, or with the same normalised name within 100 m. The quieter
+one gets `duplicate_of` = the busier one's venue id, and `data.flagged`
+counts `possible_duplicate`. Both stay in `3_venues.csv`; whether to drop one
+before `pin` is the human's call, so report them. `label` and `score` measure the older `classify()` verdict, not
 `craft_beer_decision`.
 
 Both are read-only, offline and touch no account, so an agent may run them

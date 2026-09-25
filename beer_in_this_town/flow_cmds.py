@@ -57,7 +57,9 @@ EXCLUDED_CSV = "3_excluded.csv"
 MAP_BASENAME = "venues"
 
 ENRICHED_FIELDS = [*CSV_FIELDS, "sweep_name", "resolution", "resolution_detail"]
-FILTERED_FIELDS = [*ENRICHED_FIELDS, "kind", "flag", "reason"]
+# `duplicate_of`: the busier Untappd id this row is probably the same bar as
+# (#9). Appended, so older filtered files still line up.
+FILTERED_FIELDS = [*ENRICHED_FIELDS, "kind", "flag", "reason", "duplicate_of"]
 
 COMMANDS = ("enrich", "filter", "export")
 
@@ -391,6 +393,15 @@ def cmd_filter(s: Settings, city: str, in_path: str | None = None) -> Envelope:
             reasons[d.reason] += 1
         elif d.flag:
             flags[d.flag] += 1
+
+    # Flagged, never merged: see dedupe.py for why a wrong merge is worse.
+    from .dedupe import possible_duplicates
+
+    twins = possible_duplicates(kept)
+    for r in kept:
+        r["duplicate_of"] = twins.get(r.get("venue_id", ""), "")
+    if twins:
+        flags["possible_duplicate"] = len(twins)
 
     venues_csv = write_stage(stage_path(city, VENUES_CSV), kept,
                              FILTERED_FIELDS)

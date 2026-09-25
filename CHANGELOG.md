@@ -12,6 +12,12 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   check-in on the page's feed (#21); `fsq_id` is the venue's own
   Foursquare place, which joins exactly to Foursquare's open data (#6, #9).
   On 798 cached pages: a date on 703, an id on 797.
+- **`filter` flags probable duplicate venues** (#9): the same Foursquare
+  place, or the same normalised name within 100 m. The quieter entry gets
+  `duplicate_of` (the busier one's id); both are kept, nothing is summed.
+  Measured first: none in the London or Tel Aviv map sweeps (London's
+  same-name pairs are branches 6-13 km apart); they come with the web
+  search, which lists every Untappd entry for a name.
 
 ### Changed
 - **"Possibly closed" now reads the last check-in date when there is one:**
