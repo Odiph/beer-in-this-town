@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from beer_in_this_town import pin_to_list
 from beer_in_this_town.pin_to_list import (
     AmbiguousList,
     list_exists_in,
@@ -89,3 +90,40 @@ def test_list_exists_requires_a_whole_line_not_a_substring():
 @pytest.mark.unit
 def test_list_exists_ignores_a_trailing_place_count():
     assert list_exists_in("Your lists\nBars (12)\n", "Bars") is True
+
+
+class SlowListsPage:
+    """The saved-lists panel renders after a while, as Maps does."""
+
+    def __init__(self, renders_after: int, lists: str):
+        self.reads, self.renders_after, self.lists = 0, renders_after, lists
+        self.waited_ms = 0
+
+    def locator(self, selector):
+        return self
+
+    def inner_text(self, timeout=None):
+        self.reads += 1
+        shell = "Search Google Maps\nSaved\nRecents\n"
+        return shell + (self.lists if self.reads > self.renders_after else "")
+
+    def wait_for_timeout(self, ms):
+        self.waited_ms += ms
+
+
+@pytest.mark.unit
+def test_the_list_check_waits_for_a_slow_panel():
+    # Found live 2026-09-25: read once after a fixed 4 s, the panel had not
+    # drawn yet and an existing list was reported missing (list_missing).
+    page = SlowListsPage(renders_after=3,
+                         lists="London Bars Test\nPrivate · 33 places\n")
+    assert pin_to_list.saved_lists_show(page, "London Bars Test") is True
+    assert page.reads == 4
+
+
+@pytest.mark.unit
+def test_a_list_that_never_appears_is_missing_after_the_deadline():
+    page = SlowListsPage(renders_after=0, lists="Other list\nPrivate · 1 place\n")
+    assert pin_to_list.saved_lists_show(page, "London Bars Test",
+                                        timeout_s=10) is False
+    assert page.waited_ms >= 10_000
