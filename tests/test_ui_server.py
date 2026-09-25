@@ -156,7 +156,8 @@ def test_there_is_no_route_that_writes_to_an_account(board):
     If this ever fails, every other test in this file stops being enough.
     """
     base, token = board
-    for action in ("pin", "notes", "run", "bootstrap"):
+    for action in ("pin", "notes", "run", "bootstrap", "allow-writes",
+                   "allow_writes", "consent"):
         code, body = _req(base, "/api/run", token=token, method="POST",
                           body={"action": action})
         assert code == 400, f"{action} was accepted by the dashboard"

@@ -276,7 +276,9 @@ TOS = (
     "you would by hand. Automating Google Maps is against Google's Terms of "
     "Service, and the account at risk is yours. Running them is your choice: "
     "nothing on this page runs them, and an agent following AGENTS.md will "
-    "not run them unless you tell it to."
+    "not run them unless you tell it to. They also refuse to start until you "
+    "have allowed writes to the list yourself, in a terminal, with "
+    "allow-writes: this page cannot do that for you, and neither can an agent."
 )
 
 
@@ -293,6 +295,8 @@ def maps_card(city: str | None, list_default: str | None,
         return text + (" --limit 3" if limit else "")
 
     templates = {
+        # Text to copy, never a route: consent is given at a terminal only.
+        "allow_writes": f'{CLI} allow-writes --list "{LIST_TOKEN}"',
         "pin_trial": cmd("pin", True),
         "pin_rest": cmd("pin", False),
         "notes_trial": cmd("notes", True),

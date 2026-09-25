@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from . import consent
 from .app_sweep import journal_path as sweep_journal_path
 from .config import (
     DEFAULT_METHOD,
@@ -285,7 +286,10 @@ def inspect_state(s: Settings, *, probe_emulator: bool = False,
         "pin_progress_scope": pin_scope,
         # The write guardrails, which `status` could not previously see even
         # though several error remedies send the caller here to check them.
-        "write_guardrails": inspect_guardrails(Limits()),
+        # `consent` is per list: what `allow-writes` recorded and how long
+        # each grant has left. An empty list means `pin` and `notes` refuse.
+        "write_guardrails": {**inspect_guardrails(Limits()),
+                             "consent": consent.report()},
         "stages": stages,
     }
 
@@ -530,6 +534,15 @@ def _write_hints(state: dict[str, Any], s: Settings) -> list[str]:
         f"Create the saved list {target} in Google Maps by hand (Saved -> "
         f"New list) before pinning; pin refuses a list that does not exist.",
     ]
+    if not (list_name and consent.has_consent(list_name)):
+        # Never a next action, and not something an agent can do: the
+        # command refuses --json and a non-terminal stdin.
+        out.append(
+            f"pin and notes refuse to write without recorded consent for the "
+            f"exact list. The person who owns the account runs, in their own "
+            f"terminal: python -m beer_in_this_town allow-writes --list "
+            f"{target} -- it explains what the writes cross and asks them to "
+            f"type the list name to confirm.")
     by_status = pin.get("by_status") or {}
     if not pin.get("count"):
         out.append(
