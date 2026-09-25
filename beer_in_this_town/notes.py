@@ -239,10 +239,28 @@ def _open_lists(page) -> None:
         page.wait_for_timeout(1500)
 
 
+NOTE_BOX_TIMEOUT_MS = 15_000
+NOTE_BOX_POLL_MS = 1000
+
+
 def _note_box(page, list_name: str):
-    """The target list's note box, or None when there is not exactly one."""
-    _open_lists(page)
-    blocks = page.evaluate(_BLOCKS_JS, NOTE_FIELD) or []
+    """The target list's note box, or None when there is not exactly one.
+
+    Polls: on a slow page the row and its boxes draw seconds apart. Found
+    live 2026-09-25, read once 1.5 s after unfolding, The Wild Swan and
+    Utobeer showed no boxes while both had one (Utobeer's already holding
+    the note just written). Unfold again each poll, in case the row itself
+    drew late; `_open_lists` never folds an open row.
+    """
+    blocks: list[str] = []
+    waited = 0
+    while True:
+        _open_lists(page)
+        blocks = page.evaluate(_BLOCKS_JS, NOTE_FIELD) or []
+        if blocks or waited >= NOTE_BOX_TIMEOUT_MS:
+            break
+        page.wait_for_timeout(NOTE_BOX_POLL_MS)
+        waited += NOTE_BOX_POLL_MS
     i = pick_note_box(blocks, list_name)
     if i is None:
         log.warning("  no note box for %r among: %s", list_name,
