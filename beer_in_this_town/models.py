@@ -52,6 +52,13 @@ class Venue:
     # and does not list this place. Neither is a closure -- see
     # `places.py` for why that distinction is the whole design.
     business_status: str = ""
+    # The newest check-in on the venue page's feed, as an ISO date; "" is
+    # unknown (no public feed), never "no check-ins". See #21.
+    last_checkin: str = ""
+    # The venue's own Foursquare place id, from its page's Foursquare link.
+    # Untappd takes its venues from Foursquare, so this joins exactly to
+    # Foursquare's open places data (#6) and exposes duplicates (#9).
+    fsq_id: str = ""
 
     @property
     def has_public_stats(self) -> bool:
@@ -113,6 +120,7 @@ class Venue:
             lat=coord("lat"), lng=coord("lng"),
             geo_source=text("geo_source") or "none",
             business_status=text("business_status"),
+            last_checkin=text("last_checkin"), fsq_id=text("fsq_id"),
         )
 
     def to_row(self) -> dict[str, Any]:
@@ -132,6 +140,8 @@ class Venue:
             "geo_source": self.geo_source,
             "business_status": self.business_status,
             "url": r.url,
+            "last_checkin": self.last_checkin,
+            "fsq_id": self.fsq_id,
         }
 
 
@@ -139,4 +149,7 @@ CSV_FIELDS = [
     "venue_id", "name", "category", "address", "city",
     "total", "unique", "monthly", "you",
     "lat", "lng", "geo_source", "business_status", "url",
+    # Appended, never inserted: stage files written before these existed
+    # still line up, and read back with the two left unknown.
+    "last_checkin", "fsq_id",
 ]

@@ -6,6 +6,19 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`last_checkin` and `fsq_id` columns** from each venue page `enrich`
+  already fetches, at no extra request. `last_checkin` is the newest
+  check-in on the page's feed (#21); `fsq_id` is the venue's own
+  Foursquare place, which joins exactly to Foursquare's open data (#6, #9).
+  On 798 cached pages: a date on 703, an id on 797.
+
+### Changed
+- **"Possibly closed" now reads the last check-in date when there is one:**
+  nothing in 365 days, instead of `monthly == 0`, which lumped the quiet
+  and the seasonal in with the dead (#21). Without a date the old rule
+  applies. On the cached pages, 51 of 703 dated venues are over a year old.
+
 ## [0.4.0] - 2026-09-26
 
 ### Added
