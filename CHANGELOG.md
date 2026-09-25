@@ -6,6 +6,11 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`sweep --method search --sort recent`** ranks by Untappd's recent
+  popularity instead of all-time check-ins: the places getting busy now
+  (#16). `data.sort` records which ranking ran; the default stays `all`.
+
 ## [0.4.0] - 2026-09-26
 
 ### Added
