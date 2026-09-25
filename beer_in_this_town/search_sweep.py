@@ -7,6 +7,10 @@ once, most-checked-in first, down to `--top` results -- at most 1,000,
 which is as deep as the site pages. Those are exactly the variant's
 most-checked-in venues; what the cap leaves out is the long tail.
 
+`--sort recent` (issue #16) asks the same search for "Popularity (Recent)"
+instead: the venues getting busy now, not the ones busy longest. It changes
+only the ranking, so it changes which venues `--top` keeps.
+
 Every result is a venue page with an id, so `enrich` fetches it directly
 instead of guessing which page a map pin belongs to. What the search does
 not give is a position: that comes from the page, in `enrich`, which also
@@ -33,6 +37,7 @@ from .city_names import CityNames, for_city, norm
 from .config import CACHE_DIR, SWEEP_CSV, Settings, cli_arg, stage_path
 from .export import write_csv, write_geojson, write_gpx, write_kml
 from .models import Venue, VenueRef
+from .resolve import NAME_SEARCH_URL
 from .state import record_run
 
 log = logging.getLogger(__name__)
@@ -41,6 +46,20 @@ SEARCH_CAP = 1000   # the site pages no deeper than this, whatever it reports
 PAGE_SIZE = 20
 DEFAULT_TOP = SEARCH_CAP
 PY = "python -m beer_in_this_town"
+
+# `--sort` -> the search page's own `sort` parameter.
+SORT_PARAMS = {"all": "all", "recent": "popular_recent"}
+DEFAULT_SORT = "all"
+_RANKED = {"all": "most-checked-in", "recent": "most recently popular"}
+_TAIL = {"all": "less-visited venues", "recent": "venues less busy lately"}
+
+
+def search_url(query: str, sort: str = DEFAULT_SORT) -> str:
+    """The venue search page for `query`, ranked by `sort` (all | recent)."""
+    if sort not in SORT_PARAMS:
+        raise ValueError(f"unknown sort {sort!r}: one of {sorted(SORT_PARAMS)}")
+    return f"{NAME_SEARCH_URL}?" + urlencode(
+        {"q": query, "type": "venues", "sort": SORT_PARAMS[sort]})
 
 
 @dataclass(frozen=True)
@@ -70,8 +89,11 @@ def _words(text: str | None) -> set[str]:
     return set(norm((text or "").replace(",", " ")).split())
 
 
-def harvest(names: CityNames, load: Load, top: int) -> Harvest:
+def harvest(names: CityNames, load: Load, top: int,
+            sort: str = DEFAULT_SORT) -> Harvest:
     """Every variant's top results in the city, merged, in variant order.
+
+    `sort` is how `load` ranked them; here it only words the warnings.
 
     Ranks from two searches are not comparable, so the first (commonest)
     spelling's order leads and a later variant adds only what it alone found.
@@ -105,17 +127,20 @@ def harvest(names: CityNames, load: Load, top: int) -> Harvest:
         elif (page.total or 0) > len(page.refs):
             warnings.append(
                 f"{variant!r} reports {page.total} venues; the "
-                f"{len(page.refs)} most-checked-in were collected. The rest "
-                f"are less-visited venues.")
+                f"{len(page.refs)} {_RANKED[sort]} were collected. The rest "
+                f"are {_TAIL[sort]}.")
     venues = [Venue(ref, None, None, None, None) for ref in found.values()]
     return Harvest(venues, per_variant, warnings)
 
 
 def cmd_search_sweep(s: Settings | None, city: str, *, top: int = DEFAULT_TOP,
+                     sort: str = DEFAULT_SORT,
                      formats: tuple[str, ...] = (), title: str = "",
                      load: Load | None = None,
                      names: CityNames | None = None) -> Envelope:
     """Search the city's name variants and write `1_sweep.csv`.
+
+    `sort` is `all` (all-time check-ins) or `recent` (recent popularity).
 
     `load` and `names` are injected by tests; left out, the real ones are
     used: the cached name variants, and the signed-in Chrome profile paced
@@ -123,14 +148,14 @@ def cmd_search_sweep(s: Settings | None, city: str, *, top: int = DEFAULT_TOP,
     """
     names = names or for_city(city, s)
     if load is None:
-        return _live(s, city, top, formats, title, names)
-    return _run(city, top, formats, title, names, load)
+        return _live(s, city, top, sort, formats, title, names)
+    return _run(city, top, sort, formats, title, names, load)
 
 
-def _run(city: str, top: int, formats: tuple[str, ...], title: str,
-         names: CityNames, load: Load) -> Envelope:
+def _run(city: str, top: int, sort: str, formats: tuple[str, ...],
+         title: str, names: CityNames, load: Load) -> Envelope:
     try:
-        h = harvest(names, load, top)
+        h = harvest(names, load, top, sort)
     except SearchPageUnreadable as exc:
         return fail("sweep", Problem(
             code="search_unavailable",
@@ -166,15 +191,16 @@ def _run(city: str, top: int, formats: tuple[str, ...], title: str,
         command="sweep", ok=True,
         data={"city": city, "method": "search", "venues": len(h.venues),
               "located": 0, "csv": str(csv_path), "maps": maps,
-              "variants": h.per_variant, "top": min(top, SEARCH_CAP),
+              "variants": h.per_variant, "top": min(top, SEARCH_CAP), "sort": sort,
               "variants_source": names.source or "the city as typed"},
         warnings=warnings,
         next_actions=[f"{PY} enrich --city {cli_arg(city)} --json"],
     )
 
 
-def _live(s: Settings, city: str, top: int, formats: tuple[str, ...],
-          title: str, names: CityNames) -> Envelope:  # pragma: no cover
+def _live(s: Settings, city: str, top: int, sort: str,
+          formats: tuple[str, ...], title: str,
+          names: CityNames) -> Envelope:  # pragma: no cover
     from .http_client import PoliteClient, _cookies_from_storage_state
 
     if not _cookies_from_storage_state(s.storage_state, "untappd.com"):
@@ -190,8 +216,8 @@ def _live(s: Settings, city: str, top: int, formats: tuple[str, ...],
                 code="robots_disallow",
                 message="Untappd's robots.txt disallows the search pages.",
                 remedy="Stop and ask a human. Nothing was fetched."))
-        with BrowserCitySearch(s, client._budget) as search:
-            return _run(city, top, formats, title, names, search)
+        with BrowserCitySearch(s, client._budget, sort) as search:
+            return _run(city, top, sort, formats, title, names, search)
 
 
 # --- the real search: Chrome, paced and counted ----------------------------
@@ -200,16 +226,20 @@ _TOTAL = re.compile(r"([\d,]+)\s+venue results")
 
 
 class BrowserCitySearch:  # pragma: no cover - needs a real browser
-    """One variant's popularity-sorted results, paged in Chrome, cached.
+    """One variant's results, ranked by `sort`, paged in Chrome, cached.
 
     Shares `BrowserNameSearch`'s profile, pacing and on-disk hourly budget:
     the page load and every "Show More" are one request each.
     """
 
-    def __init__(self, s: Settings, budget) -> None:
+    sort: str = DEFAULT_SORT
+
+    def __init__(self, s: Settings, budget, sort: str = DEFAULT_SORT) -> None:
         from .resolve import BrowserNameSearch
 
+        search_url("", sort)   # an unknown sort fails here, not mid-sweep
         self.s = s
+        self.sort = sort
         self._browser = BrowserNameSearch(s, budget=budget)
 
     def __enter__(self) -> BrowserCitySearch:
@@ -219,7 +249,10 @@ class BrowserCitySearch:  # pragma: no cover - needs a real browser
         self._browser.__exit__(*exc)
 
     def _cache(self, query: str, top: int):
-        key = hashlib.sha256(f"city-search:{query}:{top}".encode()).hexdigest()
+        # "all" keeps the key it had before --sort, so those pages still hit.
+        tag = "" if self.sort == DEFAULT_SORT else f":{self.sort}"
+        key = hashlib.sha256(
+            f"city-search:{query}:{top}{tag}".encode()).hexdigest()
         return CACHE_DIR / f"{key}.citysearch.json"
 
     def __call__(self, query: str, top: int) -> SearchPage:
@@ -247,12 +280,11 @@ class BrowserCitySearch:  # pragma: no cover - needs a real browser
         b._last = time.time()
 
     def _load(self, query: str, top: int) -> SearchPage:
-        from .resolve import NAME_SEARCH_URL, parse_search_cards
+        from .resolve import parse_search_cards
 
         b = self._browser
         page = b._page or b._open()
-        url = f"{NAME_SEARCH_URL}?" + urlencode(
-            {"q": query, "type": "venues", "sort": "all"})
+        url = search_url(query, self.sort)
         self._request(lambda: page.goto(url, wait_until="domcontentloaded"))
         try:
             page.wait_for_selector(".beer-item", timeout=30_000)

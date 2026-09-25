@@ -194,7 +194,7 @@ emulator setup.
 |---|---|---|
 | Source | Untappd's web search, once per spelling of the city's name | the Untappd app's map, cell by cell |
 | Needs | the Untappd web session (step 3) | the emulator (steps 1-2, 5b) |
-| Finds | each spelling's most-checked-in venues first, up to `--top` (max 1,000) | what the map shows, capped ~60 per search |
+| Finds | each spelling's most-checked-in venues first (or, with `--sort recent`, the most recently popular), up to `--top` (max 1,000) | what the map shows, capped ~60 per search |
 | Time | ~50 requests per spelling at `--top 1000` | minutes to an hour or more |
 
 Measured 2026-09-23: London's search held 99 of the map sweep's top 100
@@ -235,6 +235,14 @@ because something failed, not because the rest is unpopular. Report it as
 such and re-run the sweep; an incomplete search is never cached, so the
 re-run retries it. Search rows carry each venue's
 Untappd id and no position (`data.located` is 0); `enrich` adds both.
+
+`--sort recent` (search only) ranks by Untappd's "Popularity (Recent)"
+instead of all-time check-ins, so `--top` keeps the places getting busy now
+rather than the ones busy longest (issue #16). `data.sort` says which
+ranking ran (`all` or `recent`); report it with the counts, and when it is
+`recent` call the venues "most recently popular", not "most-checked-in".
+The default is `all`. Pass `recent` only when the human asked for what is
+popular now. With `--method map`, `--sort` is refused with `bad_arguments`.
 
 ```bash
 python -m beer_in_this_town sweep --city "<city>" --method map --json
