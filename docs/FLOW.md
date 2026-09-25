@@ -30,7 +30,7 @@ such and the exact message to give them.
 | 8 | [Filter](#8-filter) | command | `beertown filter --city "<city>" --json` | `data/<slug>/3_venues.csv`, `3_excluded.csv` |
 | 9 | [Export](#9-export-map-files) | command | `beertown export --city "<city>" --json` | `data/<slug>/venues.{kml,gpx,geojson}` |
 | 10 | [Create the saved list](#10-create-the-saved-list-in-google-maps) | you | | (in Google Maps) |
-| 11 | [Pin](#11-pin-three-check-then-the-rest) | you trigger it | `beertown pin --csv data/<slug>/3_venues.csv --list "<name>" --limit 3` | the saved list; `state/pinned_<list>.json` |
+| 11 | [Pin](#11-pin-three-check-then-the-rest) | you trigger it, after `beertown allow-writes --list "<name>"` | `beertown pin --csv data/<slug>/3_venues.csv --list "<name>" --limit 3` | the saved list; `state/pinned_<list>.json` |
 | 12 | [Notes](#12-notes) | you trigger it | `beertown notes --csv data/<slug>/3_venues.csv --list "<name>" --limit 3` | each place's note; `state/noted_<list>.json` |
 | opt | [Closure check](#optional-closure-check-paid) | you trigger it | `beertown closures --csv data/<slug>/3_venues.csv` | `data/checked_3_venues.csv` (or `--out`) |
 
@@ -456,6 +456,22 @@ your list. **This automates the Google Maps UI, which Google's terms of
 service do not allow.** It is your choice whether to use it; see
 [Using other people's services](../README.md#using-other-peoples-services).
 
+### Consent first
+
+`pin` and `notes` will not run until you have said yes for this exact list,
+yourself, at your own terminal:
+
+```bash
+beertown allow-writes --list "Tel Aviv Beer"
+```
+
+It explains what the two commands do and what they cross, then asks you to
+type the list's name back. That is recorded in `state/consent.json` for 7
+days (`--days`, at most 30); `beertown allow-writes --revoke --list "Tel Aviv
+Beer"` takes it back. It refuses `--json` and piped input, so a coding agent
+cannot consent for you, and the dashboard has no button for it. Without it,
+`pin` and `notes` stop with `no_consent` before opening a browser.
+
 ### Trial
 
 ```bash
@@ -607,6 +623,7 @@ Every command prints one JSON envelope with `--json`. On failure it carries
 | `fetch_failed` | `selfcheck` could not fetch its known-good page | Check your connection. Repeated 403s mean a block: stop. |
 | `network_unavailable` | Several requests in a row failed to connect | Check your connection and re-run. |
 | `no_list` | `pin`/`notes` without `--list` | Pass the exact list name. |
+| `no_consent` | `pin`/`notes` with no consent recorded for that exact list, or it expired | Run `beertown allow-writes --list "<name>"` yourself, at a terminal (step 11). Nothing was written. |
 | `list_missing` | No saved list with that name | Create it (step 10) or fix the name. |
 | `list_ambiguous` | The name matches more than one list, or none exactly | Use the exact, full name, or rename a list so only one matches. Nothing was saved. |
 | `already_running` | Another `pin`/`notes` holds the write budget | Wait for it to finish. Do not delete the lock. |

@@ -6,6 +6,22 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Recorded consent for account writes** (#22). `pin` and `notes` now refuse
+  with the new error code `no_consent` -- before the pre-flight, before any
+  browser -- unless the account owner has consented for that exact list.
+  Consent is given with the new human-only command `allow-writes --list
+  "<name>" [--days N]` (default 7, at most 30), which explains what the
+  writes do and cross, then asks for the list's name typed back. It refuses
+  `--json` and a non-terminal stdin (error code `human_only`), so an agent
+  cannot grant itself consent; `allow-writes --revoke --list "<name>"` takes
+  it back from anywhere. The record is `state/consent.json`, keyed per list,
+  written atomically and read fail-closed: a corrupt, unreadable, expired or
+  over-long record is no consent. `status` reports live consent under
+  `data.write_guardrails.consent` and names `allow-writes` in `hints` when a
+  write is the next human step; it is never in `next_actions`. The dashboard
+  has no route that grants it.
+
 ## [0.4.0] - 2026-09-26
 
 ### Added

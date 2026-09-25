@@ -65,8 +65,27 @@ Worth understanding before you run it:
   foreground `beertown ui` instead, which never writes the key anywhere.
 
   The strongest protection is what is absent: there is no route on that server
-  that can `pin` or write `notes`. Nothing it serves reaches off-machine, and
-  its page is served with `default-src 'none'`.
+  that can `pin` or write `notes`, and none that can grant the consent they
+  need (below). Nothing it serves reaches off-machine, and its page is served
+  with `default-src 'none'`.
+
+- **The consent record (`state/consent.json`).** `pin` and `notes` write to
+  your Google account, so they refuse with `no_consent` -- before the
+  pre-flight and before any browser opens -- unless you have consented for
+  that exact list. You do that with `allow-writes --list "<name>"`, which
+  only runs at an interactive terminal and never with `--json`: it explains
+  what the writes cross and asks you to type the list's name back. The
+  record holds, per list, the list's name and when consent was given and
+  expires (7 days by default, 30 at most); nothing about your account. It is
+  written atomically and read fail-closed: a missing, corrupt, unreadable,
+  expired or over-long entry counts as no consent, and consent for one list
+  never covers another. `allow-writes --revoke --list "<name>"` removes it.
+
+  It is a check on the ordinary path, not a lock: anything that can write
+  your `state/` directory can write this file, the same trust boundary as
+  the rate ledger and the Chrome profile beside it. What it stops is a coding
+  agent, following the tool's own instructions, drifting into a write that
+  nobody at the keyboard agreed to.
 
 ## What it does not do
 
