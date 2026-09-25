@@ -239,3 +239,31 @@ def test_a_note_that_never_lands_still_reads_as_what_is_there():
     assert notes._write_note(page, "as of 2026-09-22",
                              "London Bars Test") == "as of 2026-09-24"
     assert page.reloads == notes.READBACK_TRIES
+
+
+class LateBoxesPage(FakePage):
+    """The boxes draw a few reads after the row unfolds (found live
+    2026-09-25: The Wild Swan and Utobeer read "no box among []" while
+    their boxes were there, Utobeer's already holding the new note)."""
+
+    def __init__(self, blocks, values, draws_after):
+        super().__init__(blocks, values)
+        self.evaluations, self.draws_after = 0, draws_after
+
+    def evaluate(self, script, arg=None):
+        self.evaluations += 1
+        if not self.expanded or self.evaluations <= self.draws_after:
+            return []
+        return list(self.blocks)
+
+
+@pytest.mark.unit
+def test_boxes_that_draw_late_are_waited_for():
+    page = LateBoxesPage([TEST], ["our note"], draws_after=3)
+    assert notes._read_note(page, "London Bars Test") == "our note"
+
+
+@pytest.mark.unit
+def test_boxes_that_never_draw_are_still_no_box():
+    page = LateBoxesPage([TEST], ["our note"], draws_after=10**6)
+    assert notes._read_note(page, "London Bars Test") is None
