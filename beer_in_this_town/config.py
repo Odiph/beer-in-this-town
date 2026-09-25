@@ -165,6 +165,13 @@ def stage_path(city: str, name: str) -> Path:
 
 # The file each stage writes, under data/<slug>/. Each stage reads the one
 # before it, so these names are the pipeline's only coupling.
+# How `sweep` collects a city's venues: the Untappd app's map on an
+# emulator (the default, the user's call 2026-09-24), or Untappd's web
+# search by the city's name variants (measured faster, and it finds the
+# most-checked-in venues first).
+SWEEP_METHODS = ("search", "map")
+DEFAULT_METHOD = "map"
+
 SWEEP_CSV = "1_sweep.csv"
 ENRICHED_CSV = "2_enriched.csv"
 VENUES_CSV = "3_venues.csv"

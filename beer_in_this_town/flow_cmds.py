@@ -302,10 +302,21 @@ def _journal_rows(done: dict[str, dict], total: int) -> tuple[list[dict], int]:
 
 def _enrich_batch(swept: list[Venue], batch: list[int], city: str,
                   search: Search, fetch: Fetch, record, rest=None) -> None:
+    from .city_names import cached
     from .resolve import enrich_rows
 
+    # A search sweep's rows are placed from their pages; the city's bounds,
+    # cached when the sweep looked up its name variants, drop the namesakes.
+    names = cached(city)
+    within = names.contains if names is not None else None
+    if within is None and any(swept[i].ref.url and not swept[i].has_coords
+                              for i in batch):
+        log.warning("No cached bounds for %s: search-sweep venues are not "
+                    "checked for being outside the city. Re-run the sweep to "
+                    "rebuild them.", city)
     for n, i in enumerate(batch, 1):
-        rows, report = enrich_rows([swept[i]], city, search, fetch)
+        rows, report = enrich_rows([swept[i]], city, search, fetch,
+                                   within=within)
         record(i, rows, report)
         if rest is not None and n < len(batch):
             rest(n)
@@ -326,8 +337,9 @@ def _enrich_live(s: Settings, swept: list[Venue], batch: list[int],
 
     if not batch:
         return None
-    if not any(swept[i].has_coords for i in batch):
-        # Nothing can be matched without a pin; do not open a browser for it.
+    if not any(swept[i].has_coords or swept[i].ref.url for i in batch):
+        # Nothing can be matched without a pin or a known page; do not open
+        # a browser for it.
         _enrich_batch(swept, batch, city, lambda _q: [], _no_fetch, record)
         return None
     # Signed out, Untappd hides the stats on every unverified venue page --

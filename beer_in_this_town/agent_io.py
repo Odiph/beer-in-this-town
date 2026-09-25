@@ -58,7 +58,10 @@ class Envelope:
         payload = asdict(self)
         if payload.get("error") is None:
             payload.pop("error")
-        return json.dumps(payload, indent=2, ensure_ascii=False)
+        # ASCII-escaped: "חיפה" as ח... parses back to the same text,
+        # and prints on any console. Unescaped, a Windows console's cp1252
+        # stdout raised after the command had done its work.
+        return json.dumps(payload, indent=2, ensure_ascii=True)
 
 
 def emit(envelope: Envelope, as_json: bool) -> None:

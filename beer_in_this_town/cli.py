@@ -39,7 +39,13 @@ from .app_pipeline import (
     write_census,
 )
 from .app_sweep import DeadPan
-from .config import DATA_DIR, Settings, ensure_dirs
+from .config import (
+    DATA_DIR,
+    DEFAULT_METHOD,
+    SWEEP_METHODS,
+    Settings,
+    ensure_dirs,
+)
 from .emulator_checks import check_emulator, emulator_ready, first_failure
 from .export import write_csv
 from .geocode import GeocoderUnavailable
@@ -76,6 +82,7 @@ from .pin_to_list import (
 )
 from .places import PlacesUnavailable, resolve_closures
 from .places import counts as closure_counts
+from .search_sweep import DEFAULT_TOP, SEARCH_CAP, cmd_search_sweep
 from .state import (
     blocked_on,
     hints,
@@ -83,6 +90,7 @@ from .state import (
     next_actions,
     record_run,
     record_verification,
+    sweep_method,
 )
 from .ui.server import DEFAULT_PORT as UI_DEFAULT_PORT
 
@@ -843,7 +851,8 @@ def cmd_sweep(s: Settings, *, here: bool, min_depth: int, max_depth: int,
     c = census(device, s.query, s, here=here, min_depth=min_depth,
                max_depth=max_depth, fresh=fresh)
     csv_path, written = write_census(c, s.query, s.map_title, formats)
-    record_run(query=s.query, map_title=s.map_title, csv_path=csv_path)
+    record_run(query=s.query, map_title=s.map_title, csv_path=csv_path,
+               method="map")
     return census_envelope(c, s.query, s.map_title, csv_path, written)
 
 
@@ -1114,8 +1123,10 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--id", dest="venue_id", default="7480946")
 
     sw = sub.add_parser("sweep", parents=[common],
-                        help="find a city's venues from the Untappd app's map "
-                             "on an Android emulator (the collection step)")
+                        help="find a city's venues (the collection step): "
+                             "Untappd's web search by the city's name "
+                             "variants, or the Untappd app's map on an "
+                             "Android emulator")
     sw.add_argument("--city", dest="query", default=None,
                     help="the city to sweep. No default: without one, and "
                          "without a city named in the dashboard, `sweep` "
@@ -1123,6 +1134,17 @@ def build_parser() -> argparse.ArgumentParser:
     sw.add_argument("--title", default=None,
                     help='the Google Maps list name the results are meant for, '
                          'e.g. "London Bars"')
+    sw.add_argument("--method", choices=SWEEP_METHODS, default=None,
+                    help="search: Untappd's web search for each spelling of "
+                         "the city's name, most-checked-in first (no "
+                         "emulator). map: the Untappd app's map on an "
+                         "emulator. Default: the method of the last sweep "
+                         "or of the city chosen in the dashboard, else "
+                         f"{DEFAULT_METHOD}.")
+    sw.add_argument("--top", type=int, default=DEFAULT_TOP,
+                    help="search: how many results to collect per spelling, "
+                         f"most-checked-in first (1-{SEARCH_CAP}, default "
+                         f"{DEFAULT_TOP}; the site pages no deeper)")
     sw.add_argument("--fresh", action="store_true",
                     help="sweep again even if a complete sweep of this city "
                          "from the last 12h exists (a re-run otherwise only "
@@ -1383,9 +1405,24 @@ def main(argv: list[str] | None = None) -> int:
                            "both for the measured defaults.",
                 )), as_json)
                 return 1
-            env = cmd_sweep(s, here=args.here, min_depth=args.min_depth,
-                            max_depth=args.max_depth, formats=formats,
-                            fresh=args.fresh)
+            method = args.method or sweep_method(s)
+            if method == "search":
+                if args.here or not 1 <= args.top <= SEARCH_CAP:
+                    emit(fail("sweep", Problem(
+                        code="bad_arguments",
+                        message=("--here needs the app's map (--method map)."
+                                 if args.here else
+                                 f"--top {args.top} is outside 1-{SEARCH_CAP}."),
+                        remedy="Re-run without --here, or with --method map; "
+                               f"--top takes 1 to {SEARCH_CAP}.",
+                    )), as_json)
+                    return 1
+                env = cmd_search_sweep(s, s.query, top=args.top,
+                                       formats=formats, title=s.map_title)
+            else:
+                env = cmd_sweep(s, here=args.here, min_depth=args.min_depth,
+                                max_depth=args.max_depth, formats=formats,
+                                fresh=args.fresh)
         elif args.cmd == "notes":
             env = cmd_notes(s, args.csv, args.list_name, args.limit,
                             # NOT `or None`: "" is the caller switching the

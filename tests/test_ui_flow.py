@@ -58,7 +58,8 @@ def test_a_fresh_city_shows_four_commands_and_nothing_done(project):
     assert not any(s["done"] for s in card["stages"])
     assert card["next"] == "sweep"
     by = {s["key"]: s for s in card["stages"]}
-    assert by["sweep"]["command"] == 'beertown sweep --city "Tel Aviv"'
+    assert by["sweep"]["command"] == ('beertown sweep --city "Tel Aviv"'
+                                       ' --method map')
     assert by["enrich"]["command"] == 'beertown enrich --city "Tel Aviv"'
     assert by["filter"]["command"] == 'beertown filter --city "Tel Aviv"'
     assert by["export"]["command"].startswith(
@@ -67,7 +68,7 @@ def test_a_fresh_city_shows_four_commands_and_nothing_done(project):
 
 
 def test_the_sweep_names_its_manual_precondition(project):
-    sweep = flow.build_card("Tel Aviv")["stages"][0]
+    sweep = flow.build_card("Tel Aviv", method="map")["stages"][0]
     assert "Discover -> View Map" in sweep["precondition"]
     assert "--here" in sweep["options"]
 
@@ -117,7 +118,8 @@ def test_no_city_no_commands(project):
 
 def test_a_quote_in_the_city_cannot_break_the_shown_command(project):
     card = flow.build_card('Tel "Aviv')
-    assert card["stages"][0]["command"] == 'beertown sweep --city "Tel Aviv"'
+    assert card["stages"][0]["command"] == ('beertown sweep --city "Tel Aviv"'
+                                       ' --method map')
 
 
 # --- Google Maps --------------------------------------------------------------
@@ -216,7 +218,7 @@ def test_once_swept_an_unchecked_emulator_stops_sending_you_back(tmp_path):
         Check("google", "Google account", OK, "ok", verified=True),
         Check("untappd", "Untappd account", OK, "ok", verified=True),
     )
-    intent = {"query": "Tel Aviv"}
+    intent = {"query": "Tel Aviv", "method": "map"}
     assert next_step(rows, intent=intent).key == "emulator"
     assert next_step(rows, intent=intent, swept=True).key == "build"
     assert next_step(rows, intent=intent, swept=True,
@@ -297,7 +299,8 @@ def test_a_chosen_city_reaches_the_build_and_maps_cards(board):
 
     build = state["cards"]["build"]
     assert build["city"] == "Tel Aviv"
-    assert build["stages"][0]["command"] == 'beertown sweep --city "Tel Aviv"'
+    assert build["stages"][0]["command"] == ('beertown sweep --city "Tel Aviv"'
+                                       ' --method map')
     assert state["cards"]["maps"]["commands"]["pin_trial"].endswith(
         '--list "Tel Aviv Bars" --limit 3')
 

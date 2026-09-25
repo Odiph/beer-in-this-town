@@ -6,7 +6,36 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`sweep --method search`**, beside the app-map sweep, which stays the
+  default (`--method map`). Untappd's signed-in web
+  search, once per spelling of the city's name, most-checked-in venues
+  first (`--top`, up to the site's 1,000). No emulator. Measured against
+  the map sweep: London's search held 99 of the map's top 100 venues by
+  check-ins for 50 requests; Tel Aviv's held all of its top 100 beer
+  venues, where the map had 20. `status` offers the method the dashboard or the
+  last run chose, and the map when nobody chose.
+- **City name variants** (`city_names.py`): which spellings to search, from
+  Foursquare's open places data inside the city's boundary -- nothing under
+  2%, at most ten, cached per city. Needs the new `search` extra; without it
+  the city as typed is searched, with a warning.
+- **`enrich` fetches a search sweep's venues by id.** No name is guessed; the
+  position comes from the page, and a page outside the city is dropped as
+  the new status `outside` (a namesake: "london" also finds New London, CT).
+- `status` reports `data.method`, probes the emulator only for a map sweep,
+  and names the method in the `sweep` command it offers.
+- **The dashboard asks how to find venues** with the city: search or the
+  app's map. Only a map choice sends the person to the emulator setup, and
+  the Build step's sweep command and explanation follow the choice.
+- A search whose results stopped loading part-way is reported per spelling
+  (`complete: false`, and a warning), never passed off as the less-visited
+  tail, and never cached, so a re-run retries it.
+
 ### Fixed
+- **`--json` output crashed on a Windows console** when the envelope held
+  non-Latin text (a Hebrew city name, say): cp1252 cannot encode it, and
+  the command raised after doing its work. Envelopes are now printed with
+  non-ASCII escaped, which is the same JSON.
 - **`notes` could not find Google Maps' note box, and would have written
   into the wrong list's.** Found live 2026-09-24: Maps moved the note under
   the "Saved in" row, which starts folded, with one box per list the place
@@ -23,7 +52,6 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   Bars Test", the bug `pin` had until 2026-09-22. Same rule now: never
   adopted, and the warning says how to adopt it.
 
-### Fixed
 - **`verify` reported Google signed out while `pin` was signed in.** Two
   places hold the session -- the cookie snapshot `enrich` reads with, and
   the Chrome profile `pin` drives -- and Google rotates its cookies, so the
