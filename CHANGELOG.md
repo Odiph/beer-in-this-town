@@ -6,6 +6,8 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-26
+
 ### Added
 - **`sweep --method search`**, beside the app-map sweep, which stays the
   default (`--method map`). Untappd's signed-in web
@@ -614,6 +616,9 @@ position, and a run aborts without writing anything if under 90% of venues
 parse cleanly. Two bugs of exactly the class this guards against were found and
 fixed during development — see the README and the regression tests.
 
-[Unreleased]: https://github.com/Odiph/beer-in-this-town/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Odiph/beer-in-this-town/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Odiph/beer-in-this-town/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/Odiph/beer-in-this-town/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Odiph/beer-in-this-town/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Odiph/beer-in-this-town/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Odiph/beer-in-this-town/releases/tag/v0.1.0
