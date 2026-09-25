@@ -167,8 +167,11 @@ def test_what_to_do_with_a_place_depends_on_its_own_box(existing, action):
 @pytest.mark.unit
 def test_a_place_with_no_note_box_fails_the_run_and_says_why(tmp_path,
                                                              monkeypatch):
-    from beer_in_this_town import cli, config
+    from beer_in_this_town import cli, config, consent
 
+    # pin and notes refuse without recorded consent (#22); this test is about
+    # what happens after it, so it grants it, in the sandboxed state dir.
+    consent.grant("London Bars Test")
     csv_path = tmp_path / "3_venues.csv"
     csv_path.write_text("name,address,city,total,unique,monthly\n"
                         "The Rake,14 Winchester Walk,London,71162,11112,345\n",

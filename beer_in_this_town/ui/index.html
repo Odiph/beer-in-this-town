@@ -869,6 +869,12 @@ const VIEWS = {
         w.append(linkRow([{ label: "Open Google Maps", url: "https://www.google.com/maps" }]), field);
         return w;
       })());
+    add("Allow the writes, yourself",
+      "Run this in your own terminal, not through an agent. It explains what "
+      + "pin and notes do and asks you to type the list's name to agree. "
+      + "Without it they refuse to start. It lasts 7 days; add --revoke to "
+      + "take it back. There is no button for this on purpose.",
+      ["allow_writes"]);
     add("Try three places first",
       "This saves the first three venues into your list, with pauses "
       + "between them. Keep that Chrome window alone while it works.",

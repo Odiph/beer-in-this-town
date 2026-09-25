@@ -99,9 +99,10 @@ def fail(command: str, problem: Problem, **data: Any) -> Envelope:
 
 
 # Commands that must never be handed to an agent to run: two write to the
-# user's Google account, and `bootstrap` opens a browser and blocks for up to
-# fifteen minutes waiting for a person.
-_HUMAN_ONLY = ("bootstrap", " pin ", " notes ")
+# user's Google account, `allow-writes` is the person's consent to those
+# writes, and `bootstrap` opens a browser and blocks for up to fifteen
+# minutes waiting for a person.
+_HUMAN_ONLY = ("bootstrap", " pin ", " notes ", " allow-writes ")
 
 
 def _runnable(remedy: str) -> list[str]:
