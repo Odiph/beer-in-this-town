@@ -52,11 +52,68 @@ def journal_path(list_name: str) -> Path:
 MIN_GAP_S = 5.0
 MAX_GAP_S = 11.0
 
+# Found live 2026-09-24: the note is no longer on the place page. It sits
+# under the "Saved in" row, which starts collapsed, with one box per list the
+# place is saved in, each in a block reading "Saved in <list> Private · 33
+# places / Add a note". The right box is the one whose block names the list:
+# the first box may be another list's -- a shared one, whose note everyone on
+# it can read.
 NOTE_FIELD = (
-    "textarea[placeholder*='Add a note'], "
+    "textarea[aria-label='Add note'], "
     "textarea[aria-label*='note'], "
-    "input[placeholder*='Add a note']"
+    "textarea[placeholder*='Add a note']"
 )
+# The folded "Saved in" row is itself a button (aria-expanded="false").
+# Unfolded, it is replaced by a different button ("Hide place lists
+# details"), so this matches only while folded -- and a reload folds it
+# again, which is why the read-back after a write must unfold it too.
+LISTS_TOGGLE = "button[aria-expanded='false']:has-text('Saved in')"
+
+_NOTE_BLOCK = re.compile(
+    # \s*, not \s+: the live innerText is "Saved inLondon Bars Test" -- the
+    # label and the list's link are adjacent inline elements.
+    r"Saved in\s*(?P<name>.+?)\s+(?:Private|Shared|Public)\s*·", re.S)
+
+# For each note box: the text of the nearest ancestor that says "Saved in"
+# and holds no other box -- that box's own list block.
+_BLOCKS_JS = """sel => [...document.querySelectorAll(sel)].map(box => {
+  let node = box;
+  for (let i = 0; i < 10 && node.parentElement; i++) {
+    const up = node.parentElement;
+    if (up.querySelectorAll(sel).length > 1) break;
+    node = up;
+    if ((node.innerText || '').includes('Saved in')) return node.innerText;
+  }
+  return '';
+})"""
+
+
+READBACK_TRIES = 3
+READBACK_GAP_MS = 5000
+
+
+class NoteBoxMissing(Exception):
+    """The place shows no note box for the target list. Nothing was typed."""
+
+
+def note_block_list(block: str) -> str | None:
+    """The list a note box belongs to, from its block's text."""
+    m = _NOTE_BLOCK.search(block or "")
+    return " ".join(m.group("name").split()) if m else None
+
+
+def pick_note_box(blocks: list[str], list_name: str) -> int | None:
+    """The index of the target list's box: exactly one, or None.
+
+    Exact name, as `saved_in_target` compares them: "London Bars" is not
+    "London Bars Test". Two boxes claiming the list is ambiguous, not a pick.
+    """
+    from .pin_to_list import _list_key
+
+    want = _list_key(list_name)
+    hits = [i for i, b in enumerate(blocks)
+            if _list_key(note_block_list(b) or "") == want]
+    return hits[0] if len(hits) == 1 else None
 
 
 DATE_IN_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})")
@@ -144,17 +201,15 @@ def _load_journal(list_name: str) -> dict[str, str]:
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
     if LEGACY_NOTE_JOURNAL.exists():
-        # The pre-scoping journal does not record which list it was built for,
-        # so adopting it is a guess. Make it exactly once, by renaming: a
-        # second list inheriting "already saved" entries it never earned would
-        # skip real work and under-deliver in silence.
+        # The pre-scoping journal does not record which list it was built
+        # for. Adopting it was a guess, and found live 2026-09-24 it guessed
+        # wrong: a Singapore noted.json became the journal of "London Bars
+        # Test". Never guess; say how to adopt it. (pin_to_list does the same.)
         log.warning(
-            "Adopting the pre-scoping noted.json as the journal for %r, on the "
-            "assumption it was built for that list. Any other list starts "
-            "empty. Rename it back if that assumption is wrong.", list_name,
+            "state/noted.json predates per-list journals and names no list, "
+            "so it is not used for %r. If it belongs to that list, rename it "
+            "to %s.", list_name, path.name,
         )
-        LEGACY_NOTE_JOURNAL.replace(path)
-        return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
@@ -165,22 +220,81 @@ def _save_journal(journal: dict[str, str], list_name: str) -> None:
     )
 
 
-def _read_note(page) -> str | None:
-    """Current note text, or None if the field cannot be read."""
+def note_action(existing: str | None, note: str) -> str:
+    """"ok" (already right), "write", or "no-box" (not this list's to write).
+
+    "no-box" spends no write and types nothing: an unidentified box may be
+    another list's, and the budget is for writes that can land.
+    """
+    if existing is None:
+        return "no-box"
+    return "ok" if existing == note else "write"
+
+
+def _open_lists(page) -> None:
+    """Unfold the "Saved in" row, where the note boxes are. Never fold it."""
+    toggle = page.locator(LISTS_TOGGLE).first
+    if toggle.count():
+        toggle.click(timeout=10_000)
+        page.wait_for_timeout(1500)
+
+
+NOTE_BOX_TIMEOUT_MS = 15_000
+NOTE_BOX_POLL_MS = 1000
+
+
+def _note_box(page, list_name: str):
+    """The target list's note box, or None when there is not exactly one.
+
+    Polls: on a slow page the row and its boxes draw seconds apart. Found
+    live 2026-09-25, read once 1.5 s after unfolding, The Wild Swan and
+    Utobeer showed no boxes while both had one (Utobeer's already holding
+    the note just written). Unfold again each poll, in case the row itself
+    drew late; `_open_lists` never folds an open row.
+    """
+    blocks: list[str] = []
+    waited = 0
+    while True:
+        _open_lists(page)
+        blocks = page.evaluate(_BLOCKS_JS, NOTE_FIELD) or []
+        if blocks or waited >= NOTE_BOX_TIMEOUT_MS:
+            break
+        page.wait_for_timeout(NOTE_BOX_POLL_MS)
+        waited += NOTE_BOX_POLL_MS
+    i = pick_note_box(blocks, list_name)
+    if i is None:
+        log.warning("  no note box for %r among: %s", list_name,
+                    [note_block_list(b) for b in blocks])
+        return None
+    return page.locator(NOTE_FIELD).nth(i)
+
+
+def _read_note(page, list_name: str) -> str | None:
+    """The target list's note text, or None if its box cannot be read.
+
+    None is "unknown", never "empty": empty means "write it", and writing
+    into a box we could not identify is how a note lands in another list.
+    """
     try:
-        field = page.locator(NOTE_FIELD).first
-        if field.count() == 0:
+        box = _note_box(page, list_name)
+        if box is None:
             return None
-        return (field.input_value(timeout=5000) or "").strip()
-    except Exception:
+        return (box.input_value(timeout=5000) or "").strip()
+    except Exception as exc:
+        # Unknown is still the answer, but say why: swallowed silently, a
+        # read-back failure looked like a write failure (found live).
+        log.warning("  could not read the note for %r: %s", list_name, exc)
         return None
 
 
-def _write_note(page, text: str) -> str | None:
-    """Type the note, commit it, and read it back after a reload."""
+def _write_note(page, text: str, list_name: str) -> str | None:
+    """Type the note into the list's own box, commit it, read it back."""
     place_url = page.url
 
-    field = page.locator(NOTE_FIELD).first
+    field = _note_box(page, list_name)
+    if field is None:
+        raise NoteBoxMissing(
+            f"no note box for {list_name!r} on this place; nothing typed")
     field.click(timeout=15_000)
     field.fill(text, timeout=15_000)
 
@@ -189,9 +303,20 @@ def _write_note(page, text: str) -> str | None:
     page.keyboard.press("Tab")
     page.wait_for_timeout(3000)
 
-    page.goto(place_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_timeout(3500)
-    return _read_note(page)
+    # Maps stores the note a few seconds after the blur, and a reload before
+    # that shows the old text: found live 2026-09-25, read back 3 s after Tab
+    # the old note, read a minute later the new one. So a mismatch is not yet
+    # a failure: reload and read again, a few times. Reloads are reads.
+    seen = None
+    for attempt in range(READBACK_TRIES):
+        if attempt:
+            page.wait_for_timeout(READBACK_GAP_MS)
+        page.goto(place_url, wait_until="domcontentloaded", timeout=60_000)
+        page.wait_for_timeout(3500)
+        seen = _read_note(page, list_name)
+        if seen == text:
+            break
+    return seen
 
 
 @single_writer
@@ -316,16 +441,26 @@ def add_notes(
                     time.sleep(random.uniform(min_gap_s, max_gap_s))
                     continue
 
-                existing = _read_note(page)
-                if existing == note:
+                action = note_action(_read_note(page, list_name), note)
+                if action == "ok":
                     journal[key] = "ok"
                     log.info("  note already correct")
                     _save_journal(journal, list_name)
                     continue
+                if action == "no-box":
+                    # Counts toward the breaker: Maps changing its note editor
+                    # again should stop the run after three, not walk it.
+                    journal[key] = "no-note-box"
+                    breaker.record_failure()
+                    log.error("  no note box for %r here; nothing written",
+                              list_name)
+                    _save_journal(journal, list_name)
+                    time.sleep(random.uniform(min_gap_s, max_gap_s))
+                    continue
 
                 ledger.record_write()
                 try:
-                    written = _write_note(page, note)
+                    written = _write_note(page, note, list_name)
                 except Exception as exc:
                     log.warning("  could not write note: %s", exc)
                     _abort_if_blocked(page, ledger)

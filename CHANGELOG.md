@@ -36,6 +36,22 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   non-Latin text (a Hebrew city name, say): cp1252 cannot encode it, and
   the command raised after doing its work. Envelopes are now printed with
   non-ASCII escaped, which is the same JSON.
+- **`notes` could not find Google Maps' note box, and would have written
+  into the wrong list's.** Found live 2026-09-24: Maps moved the note under
+  the "Saved in" row, which starts folded, with one box per list the place
+  is saved in. `notes` timed out on every place; had it found a box it took
+  the first, and The Rake's first could as well have been a shared list's.
+  It now unfolds the row and writes only into the box whose block names the
+  target list. When there is no such box it types nothing, spends no write,
+  records `no-note-box` and fails the run (`data.no_note_box`), and three in
+  a row trip the breaker. The folded row is found by its own button
+  (`aria-expanded="false"`), because the reload that verifies a note folds
+  it again: before that, a note that had landed read back as a failure.
+- **`notes` no longer adopts the old unscoped `state/noted.json` by
+  guessing.** It renamed a Singapore journal into the journal of "London
+  Bars Test", the bug `pin` had until 2026-09-22. Same rule now: never
+  adopted, and the warning says how to adopt it.
+
 - **`verify` reported Google signed out while `pin` was signed in.** Two
   places hold the session -- the cookie snapshot `enrich` reads with, and
   the Chrome profile `pin` drives -- and Google rotates its cookies, so the

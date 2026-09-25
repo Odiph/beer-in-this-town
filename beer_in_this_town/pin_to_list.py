@@ -346,6 +346,31 @@ def _place_heading(page) -> str | None:
         return None
 
 
+LISTS_PANEL_TIMEOUT_S = 25.0
+
+
+def saved_lists_show(page, list_name: str,
+                     timeout_s: float = LISTS_PANEL_TIMEOUT_S,
+                     poll_ms: int = 1000) -> bool:
+    """Does the saved-lists panel name the list, once it has drawn?
+
+    Read once after a fixed 4 s, a slow panel reported an existing list as
+    missing (found live 2026-09-25: `list_missing` for "London Bars Test",
+    which the same page showed two seconds later). Poll until it appears or
+    the deadline passes; waited time is counted, not the clock, so a test
+    page can drive it.
+    """
+    waited = 0
+    while True:
+        body = page.locator("body").inner_text(timeout=15_000)
+        if list_exists_in(body, list_name):
+            return True
+        if waited >= timeout_s * 1000:
+            return False
+        page.wait_for_timeout(poll_ms)
+        waited += poll_ms
+
+
 def _assert_ready(page, list_name: str) -> None:
     """Fail fast unless we are signed in AND the target list already exists.
 
@@ -380,10 +405,9 @@ def _assert_ready(page, list_name: str) -> None:
         wait_until="domcontentloaded",
         timeout=60_000,
     )
-    page.wait_for_timeout(4000)
-    body = page.locator("body").inner_text(timeout=15_000)
+    page.wait_for_timeout(2000)
 
-    if not list_exists_in(body, list_name):
+    if not saved_lists_show(page, list_name):
         raise RuntimeError(
             f"Saved list {list_name!r} not found in this account.\n"
             "This tool saves INTO an existing list; it does not create one.\n"
@@ -433,9 +457,36 @@ def _pin_once(page, list_name: str) -> str | None:
 
     # The picker does not reliably re-render, so never trust it. Reload and read
     # the place panel instead.
-    page.goto(place_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_selector(SAVE_BTN, timeout=40_000)
-    return _saved_in_settled(page)
+    return _read_back(page, place_url, list_name)
+
+
+READBACK_TRIES = 3
+READBACK_GAP_S = 5.0
+
+
+def _read_back(page, place_url: str, list_name: str, sleep=None) -> str | None:
+    """Reload and read "Saved in", until it names the list or tries run out.
+
+    A reload shows the place as the server had it at that moment, and the
+    save lands a few seconds late. For a place in no other list that reads
+    as "" and `_saved_in_settled` waits it out; for a place already in
+    another list the OLD line renders at once. Found live 2026-09-25: a place
+    in "London MTP25" read "London MTP25" after its save, pin clicked again,
+    which unticked it -- three writes, and an even count leaves it out. So a
+    line without the target is re-read after another reload before anyone
+    calls the save lost. Reloads are reads, not writes.
+    """
+    sleep = sleep or (lambda s: page.wait_for_timeout(int(s * 1000)))
+    answer = None
+    for attempt in range(READBACK_TRIES):
+        if attempt:
+            sleep(READBACK_GAP_S)
+        page.goto(place_url, wait_until="domcontentloaded", timeout=60_000)
+        page.wait_for_selector(SAVE_BTN, timeout=40_000)
+        answer = _saved_in_settled(page, sleep=sleep)
+        if answer and saved_in_target(answer, list_name):
+            break
+    return answer
 
 
 def _unsave(page, wrong_list: str) -> None:
