@@ -88,6 +88,10 @@ _BLOCKS_JS = """sel => [...document.querySelectorAll(sel)].map(box => {
 })"""
 
 
+READBACK_TRIES = 3
+READBACK_GAP_MS = 5000
+
+
 class NoteBoxMissing(Exception):
     """The place shows no note box for the target list. Nothing was typed."""
 
@@ -281,9 +285,20 @@ def _write_note(page, text: str, list_name: str) -> str | None:
     page.keyboard.press("Tab")
     page.wait_for_timeout(3000)
 
-    page.goto(place_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_timeout(3500)
-    return _read_note(page, list_name)
+    # Maps stores the note a few seconds after the blur, and a reload before
+    # that shows the old text: found live 2026-09-25, read back 3 s after Tab
+    # the old note, read a minute later the new one. So a mismatch is not yet
+    # a failure: reload and read again, a few times. Reloads are reads.
+    seen = None
+    for attempt in range(READBACK_TRIES):
+        if attempt:
+            page.wait_for_timeout(READBACK_GAP_MS)
+        page.goto(place_url, wait_until="domcontentloaded", timeout=60_000)
+        page.wait_for_timeout(3500)
+        seen = _read_note(page, list_name)
+        if seen == text:
+            break
+    return seen
 
 
 @single_writer
