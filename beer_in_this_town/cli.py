@@ -23,7 +23,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from . import flow_cmds
+from . import consent, flow_cmds
 from .adb_device import AdbDevice, AdbUnavailable
 from .agent_io import Envelope, Problem, emit, fail, log_to_stderr
 from .app_calibrate import CalibrationFailed
@@ -44,6 +44,7 @@ from .config import (
     DEFAULT_METHOD,
     SWEEP_METHODS,
     Settings,
+    cli_arg,
     ensure_dirs,
 )
 from .emulator_checks import check_emulator, emulator_ready, first_failure
@@ -157,6 +158,20 @@ def check_pacing(min_gap: float, max_gap: float) -> None:
             f"The gap is drawn from that range, so an inverted one paces on "
             f"nonsense."
         )
+
+
+def consent_days(raw: str) -> int:
+    """--days for allow-writes: a whole number of days, 1 to MAX_DAYS."""
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not a whole number "
+                                         f"of days.") from exc
+    if not 1 <= value <= consent.MAX_DAYS:
+        raise argparse.ArgumentTypeError(
+            f"--days must be between 1 and {consent.MAX_DAYS}. Consent is "
+            f"meant to be given again, not left standing.")
+    return value
 
 
 MAP_FORMATS = ("kml", "geojson", "gpx")
@@ -875,9 +890,122 @@ def resolve_region(region: str | None, path: Path) -> tuple[str | None, list[str
     ]
 
 
+def _no_consent(command: str, list_name: str) -> Envelope | None:
+    """The failure envelope when `list_name` has no live consent, else None.
+
+    Checked before the CSV, the pre-flight and any browser launch: without
+    consent there is nothing for `pin` or `notes` to do, so nothing is done.
+    The remedy is prose, not a command, so `fail()` keeps it out of
+    `next_actions` (and `allow-writes` is on its human-only list anyway).
+    """
+    if consent.has_consent(list_name):
+        return None
+    return fail(command, Problem(
+        code="no_consent",
+        message=f"No recorded consent to write to the list {list_name!r}. "
+                f"`{command}` writes to the Google account, so it needs the "
+                f"account owner's say-so for this exact list.",
+        remedy=f"Only a person can give it. In their own terminal, not "
+               f"through an agent: python -m beer_in_this_town allow-writes "
+               f"--list {cli_arg(list_name)} -- then re-run this command.",
+    ), list=list_name)
+
+
+_CONSENT_EXPLAINER = """\
+You are about to allow `pin` and `notes` to write to the Google Maps saved
+list {name!r}, for {days} day(s).
+
+What they do:
+  * pin   opens Google Maps in a real Chrome window on this tool's profile,
+          signed in as you, and saves each venue from a CSV into that list.
+  * notes writes the Untappd check-in stats into each saved place's note.
+
+What that crosses:
+  * Google's Terms of Service ask you not to use the service through
+    automated means. There is no API for saved lists, so these commands
+    drive the Maps interface the way you would. Your account, your call:
+    see "Using other people's services" in README.md.
+  * The writes land in your real account. The guardrails (100 writes a day,
+    60 a run, a circuit breaker, CAPTCHA detection, a six-hour cool-off)
+    make trouble less likely; they do not make it permitted.
+
+Consent covers this exact list only, lasts {days} day(s), and can be taken
+back at any time with:
+  python -m beer_in_this_town allow-writes --revoke --list {arg}
+"""
+
+
+def cmd_allow_writes(list_name: str, days: int, revoke: bool, *,
+                     as_json: bool, stdin=None) -> Envelope:
+    """Record, or revoke, a person's consent for `pin`/`notes` on one list.
+
+    Granting refuses `--json` and a stdin that is not a terminal: an agent
+    must not be able to consent on the account owner's behalf, and a piped
+    "yes" is exactly that. Revoking needs neither -- taking permission away
+    is always safe, whoever does it.
+    """
+    stdin = sys.stdin if stdin is None else stdin
+    if not list_name.strip():
+        return fail("allow-writes", Problem(
+            code="bad_arguments",
+            message="--list is empty.",
+            remedy='Pass --list "<exact name>" of the Google Maps list.',
+        ))
+    if revoke:
+        removed = consent.revoke(list_name)
+        return Envelope(
+            command="allow-writes", ok=True,
+            data={"list": list_name, "revoked": removed},
+            warnings=([] if removed else
+                      [f"There was no consent recorded for {list_name!r}."]),
+        )
+
+    try:
+        interactive = bool(stdin.isatty())
+    except (AttributeError, ValueError, OSError):
+        interactive = False
+    if as_json or not interactive:
+        return fail("allow-writes", Problem(
+            code="human_only",
+            message="allow-writes records a person's consent, so it only runs "
+                    "at an interactive terminal and never with --json.",
+            remedy="The account owner runs it themselves, in their own "
+                   "terminal. An agent cannot give this consent.",
+        ), list=list_name)
+
+    print(_CONSENT_EXPLAINER.format(name=list_name, days=days,
+                                    arg=cli_arg(list_name)))
+    print(f"To agree, type the list's name exactly ({list_name}) and press "
+          f"Enter. Anything else cancels.")
+    print("> ", end="", flush=True)
+    try:
+        typed = stdin.readline()
+    except (OSError, ValueError, KeyboardInterrupt):
+        typed = ""
+    if typed.strip() != list_name:
+        return fail("allow-writes", Problem(
+            code="consent_not_given",
+            message="The name typed did not match, so nothing was recorded.",
+            remedy=f"Run it again and type {list_name} exactly, or leave it: "
+                   f"pin and notes stay refused.",
+        ), list=list_name)
+
+    record = consent.grant(list_name, days)
+    return Envelope(
+        command="allow-writes", ok=True,
+        data={"list": list_name, "days": days,
+              "expires": time.strftime("%Y-%m-%d %H:%M",
+                                       time.localtime(record["expires_at"]))},
+        hints=["Start with a trial: pin ... --limit 3, and check the three "
+               "places in Google Maps before the rest."],
+    )
+
+
 def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
             region: str | None, min_gap: float, max_gap: float) -> Envelope:
     """Save places from a CSV into a real Google Maps saved list."""
+    if (refused := _no_consent("pin", list_name)) is not None:
+        return refused
     path = Path(csv_path)
     if not path.exists():
         return fail("pin", Problem(
@@ -981,6 +1109,8 @@ def cmd_pin(s: Settings, csv_path: str, list_name: str, limit: int | None,
 def cmd_notes(s: Settings, csv_path: str, list_name: str, limit: int | None,
               region: str | None, min_gap: float, max_gap: float) -> Envelope:
     """Write the Untappd stats into each saved place's note field."""
+    if (refused := _no_consent("notes", list_name)) is not None:
+        return refused
     path = Path(csv_path)
     if not path.exists():
         return fail("notes", Problem(
@@ -1202,6 +1332,22 @@ def build_parser() -> argparse.ArgumentParser:
     notes.add_argument("--region", default=None,
                        help="as for pin; read from the CSV when not given")
 
+    allow = sub.add_parser(
+        "allow-writes",
+        parents=[common],
+        help="(a person, at a terminal) consent to pin/notes writing to one "
+             "saved list for a few days; --revoke takes it back",
+    )
+    allow.add_argument("--list", dest="list_name", required=True,
+                       help="the exact name of the Google Maps list")
+    allow.add_argument("--days", type=consent_days,
+                       default=consent.DEFAULT_DAYS,
+                       help=f"how long the consent lasts (default "
+                            f"{consent.DEFAULT_DAYS}, at most "
+                            f"{consent.MAX_DAYS})")
+    allow.add_argument("--revoke", action="store_true",
+                       help="remove the consent for this list instead")
+
     label = sub.add_parser(
         "label",
         parents=[common],
@@ -1272,7 +1418,7 @@ def build_parser() -> argparse.ArgumentParser:
 _SUBCOMMANDS = frozenset({
     "status", "doctor", "bootstrap", "selfcheck", "sweep", "enrich",
     "filter", "export", "pin", "notes", "label", "score", "closures", "ui",
-    "verify",
+    "verify", "allow-writes",
 })
 
 
@@ -1377,6 +1523,9 @@ def main(argv: list[str] | None = None) -> int:
             env = cmd_label(s, args.csv, args.out, args.quota, args.seed)
         elif args.cmd == "verify":
             env = cmd_verify(s)
+        elif args.cmd == "allow-writes":
+            env = cmd_allow_writes(args.list_name, args.days, args.revoke,
+                                   as_json=as_json)
         elif args.cmd == "ui":
             env = cmd_ui(s, args.port, open_browser=not args.no_open,
                          detach=args.detach)

@@ -22,9 +22,9 @@ is. Never infer progress from logs — ask.
 `filter`, `export`, `ui --detach` (when a sign-in is needed or no city has
 been chosen, and no dashboard is already serving), and `score` after
 `label`. None of them writes to an account. `status` never offers `doctor`:
-doctor changes nothing, so offering it would loop. `pin`, `notes`, `closures`
-and `bootstrap` never appear there; when they are the next step, their exact
-command text is in `hints`, for the human.
+doctor changes nothing, so offering it would loop. `pin`, `notes`, `closures`,
+`allow-writes` and `bootstrap` never appear there; when they are the next
+step, their exact command text is in `hints`, for the human.
 
 An empty `next_actions` means one of these, and `data.blocked_on` says which:
 
@@ -76,7 +76,7 @@ illustrative; the keys are the ones `filter` returns.
 - `ok` — did the command achieve its purpose. Exit code matches (`0` / `1`).
 - `next_actions` — **literal runnable commands**, best first. Not hints.
   Only read-only, safe commands appear here; it never contains `pin`, `notes`,
-  `closures` or `bootstrap`, and never contains a `#` comment. An **empty list
+  `allow-writes`, `closures` or `bootstrap`, and never contains a `#` comment. An **empty list
   is the end of the loop**, not an error.
 - `hints` — prose for a human: what only a person can decide to do next.
   Nothing executes this, and an agent must not treat it as a next action.
@@ -304,11 +304,31 @@ These are backups and non-Google maps, not the delivery.
 > and use only letters, digits and spaces: symbols such as & | $ are
 > stripped from the commands the tool prints.
 
-### 11. Pin — human-triggered only
+### 11. Consent — human, at their own terminal
+
+`pin` and `notes` refuse with `no_consent`, before any browser opens, unless
+the account owner has recorded consent for the **exact** list. You cannot
+record it: `allow-writes` refuses `--json` and a stdin that is not a
+terminal, and you must not try to get round that (piping input, a pseudo-
+terminal, writing `state/consent.json` yourself). Message:
+
+> Before I can save anything into "<name>", you need to allow it yourself.
+> In your own terminal, run:
+> `python -m beer_in_this_town allow-writes --list "<name>"`
+> It explains what pin and notes do and that they automate Google Maps
+> against Google's terms, then asks you to type the list name. It lasts 7
+> days (`--days`, up to 30), and `--revoke` takes it back.
+
+`status` shows what is recorded under `data.write_guardrails.consent` (each
+live grant's `list`, `expires_at` and `remaining_h`). Consent for one list
+does not cover another, however similar the name.
+
+### 12. Pin — human-triggered only
 
 Do not run `pin` unless the human has explicitly asked you to put the venues
 in their saved list, after reading that it automates Google Maps against
-Google's terms. Then, trial first:
+Google's terms, and has run `allow-writes` for that list (step 11). Then,
+trial first:
 
 ```bash
 python -m beer_in_this_town pin --csv data/<slug>/3_venues.csv --list "<exact name>" --limit 3 --json
@@ -322,9 +342,9 @@ itself to the write budget (60 per run, 100 per 24h, shared with `notes`) and
 says so; that is correct. Report where it stopped and tell the human to ask
 again tomorrow. Do not schedule it.
 
-### 12. Notes — human-triggered only
+### 13. Notes — human-triggered only
 
-Same rules as `pin`, same trial:
+Same rules as `pin`, same consent (step 11), same trial:
 
 ```bash
 python -m beer_in_this_town notes --csv data/<slug>/3_venues.csv --list "<exact name>" --limit 3 --json
@@ -364,6 +384,9 @@ yourself are `adb connect` and `adb devices`.
 | `port_unavailable` | `ui --detach` could not start the dashboard | Another process holds the port, or the interpreter could not be spawned. Retry with `--port` set to something else. |
 | `no_list` | `pin`/`notes` with no `--list`, and no list name remembered from `sweep --title` or the dashboard | **Ask the human.** Always pass `--list` with the exact name they gave you; this writes into a real Maps list and a guessed name is a guess about where. |
 | `list_missing` | Target saved list does not exist | Ask the human to create it (step 10), or pick another `--list`. |
+| `no_consent` | `pin`/`notes` with no live consent recorded for this exact list (none given, expired, revoked, or the record is unreadable) | **Stop and ask the human** to run `allow-writes --list "<name>"` in their own terminal (step 11). Nothing was written and no browser opened. You cannot give consent; do not retry until they say they have. |
+| `human_only` | `allow-writes` was run with `--json` or without an interactive terminal | It is the human's command, not yours. Give them the step-11 message. |
+| `consent_not_given` | `allow-writes`: the name typed back did not match the list | Nothing was recorded. The human may run it again. |
 | `list_ambiguous` | `--list` does not name exactly one list — no list matches it exactly, or several do | **Stop and ask.** Nothing was saved. Do not retry with a nearby name; that is how a place lands in the wrong list. |
 | `already_running` | Another process holds the write budget | Wait for it, then re-run the same command. Nothing has to elapse — this is not a cool-off. `status` reports the lock's age and whether it is stale under `data.write_guardrails.lock`. Do not delete the lock file; an abandoned one is broken automatically after 2h. |
 | `robots_disallow` | `enrich`: Untappd's robots.txt disallows the venue pages | **Stop and ask.** Nothing was fetched. There is no flag to override it; see rule 1. |
@@ -398,7 +421,11 @@ yourself are `adb connect` and `adb devices`.
 2. **Never run `pin` without an explicit human instruction.** It automates the
    Google Maps UI, which is against Google's ToS (see README). It is never in
    `next_actions`; it is in `hints`, where nothing is instructed to run it.
-   Following the loop can therefore never lead you into a write.
+   Following the loop can therefore never lead you into a write. The
+   instruction is also recorded, not assumed: `pin` and `notes` refuse with
+   `no_consent` until the human has run `allow-writes --list "<name>"` at
+   their own terminal (step 11). Never run `allow-writes` yourself, never
+   feed it input, and never write or edit `state/consent.json`.
 3. **Trial before bulk.** First `pin` run should use `--limit 3`. Report the
    result before doing the rest.
 4. **Do not lower the pacing.** `pin`'s and `notes`' `--min-gap` /
@@ -425,8 +452,9 @@ yourself are `adb connect` and `adb devices`.
 ## The `notes` command
 
 Writes Untappd stats into the note on each saved place. Same rules as `pin`: it
-writes to the account, so never run it without an explicit human request, and
-trial it with `--limit` first.
+writes to the account, so never run it without an explicit human request and
+the human's `allow-writes` consent for the list, and trial it with `--limit`
+first.
 
 It only annotates places already in the target list; anything else is recorded
 as `not-in-list` and left alone. A note that already matches is never rewritten.
@@ -613,6 +641,8 @@ Rules for agents:
   describe. `status` reports per-city stage progress in `data.stages` (done,
   stale, count, path, detail); its `next_actions` are built from those, not
   from defaults.
+- `allow-writes` — records or revokes consent in `state/consent.json`,
+  per list; granting again replaces the list's entry with a fresh window.
 - `status`, `doctor`, `selfcheck`, `verify` — read-only.
 
 ## What needs a human
@@ -626,11 +656,12 @@ Rules for agents:
 - Opening Discover → View Map before each sweep, and leaving the emulator
   alone while it runs.
 - Creating the target saved list in Google Maps.
-- Deciding whether to use `pin`, `notes` and `closures` at all.
+- Deciding whether to use `pin`, `notes` and `closures` at all, and
+  recording that decision for `pin` and `notes` with `allow-writes`.
 
 ## Account-safety guardrails (do not weaken these)
 
-`pin` writes to a live Google account. Four independent guardrails, layered so
+`pin` writes to a live Google account. Five independent guardrails, layered so
 defeating one still leaves the others:
 
 | Guardrail | Behaviour |
@@ -639,6 +670,7 @@ defeating one still leaves the others:
 | **Circuit breaker** | 3 consecutive failures → stop and start a cool-off. Repeated failure is when a script looks least human. |
 | **Block detection** | Scans every page for CAPTCHA / "unusual traffic" / "not a robot" / forced sign-out. Any hit aborts instantly. Google serves these as HTTP 200, so text is the only signal. |
 | **Cool-off** | 6h, persisted. Applied after any trip or detected block. |
+| **Consent** | Per list, persisted in `state/consent.json`, 7 days by default and 30 at most. Recorded only by `allow-writes` at an interactive terminal; checked before the pre-flight. Missing, expired or unreadable means `no_consent`. |
 
 Every one of those survives a restart, and so do the read-side protections:
 the hourly request ceiling and the circuit-breaker count are both on disk. A
@@ -652,7 +684,8 @@ real, signed-in Untappd account, and a fixed rhythm is a tell.
 Rules for agents:
 
 1. **Never delete `state/rate_ledger.json`** to get a fresh allowance. The
-   persistence is the entire point.
+   persistence is the entire point. Likewise never create or edit
+   `state/consent.json`: only `allow-writes`, run by the human, writes it.
 2. **Never raise `max_per_day` / `max_per_run`** on your own initiative.
 3. **Never retry past a `Tripped` error.** It means stop, not try again.
 4. If a run trims itself ("Trimming this run to N places"), that is correct
