@@ -169,6 +169,17 @@ blank: unknown, never zero.
 
 ## How good is it
 
+**Last verified end to end: 2026-11-15**, on Untappd 5.0.3 (BlueStacks,
+Android 9), Tel Aviv:
+
+- **Sweep:** a depth-3 map sweep found 116 venues, all placed. Every
+  densely-populated cell sat within about 50 m of where the venues' own
+  Untappd pages put them; a few sparse outskirt cells were about 330 m off.
+- **Enrich:** 104 of 116 matched to their venue page. The 9 refused as too
+  far were all real namesakes, 2 km to 10,500 km away.
+- **Pin:** a 3-place trial saved all 3 into a Google Maps list, each read
+  back from the place's "Saved in" line, and checked by hand.
+
 Measured on 2026-09-21 against the live app:
 
 - **Tel Aviv:** 84 venues from a filtered depth-1 sweep, 2 of them
