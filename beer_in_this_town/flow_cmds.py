@@ -227,7 +227,10 @@ def cmd_enrich(s: Settings, city: str, in_path: str | None = None, *,
         row = ({**rows[0][0].to_row(), "sweep_name": res.name,
                 "resolution": res.status,
                 "resolution_detail": res.detail} if rows else None)
-        done[str(i)] = {"status": res.status, "row": row}
+        entry = {"status": res.status, "row": row}
+        if res.candidate is not None:
+            entry["candidate"] = res.candidate.to_row()
+        done[str(i)] = entry
         _save_journal(city, source, done)
 
     try:
@@ -259,7 +262,13 @@ def cmd_enrich(s: Settings, city: str, in_path: str | None = None, *,
             next_actions=[again],
         )
 
-    rows, dupes = _journal_rows(done, len(swept))
+    final = _reanchored(done, swept)
+    counts = Counter(entry["status"] for entry in final.values())
+    base = {**base, "resolved": counts.get("resolved", 0),
+            "statuses": dict(counts),
+            "shifted": sum(1 for k in final
+                           if final[k]["status"] != done[k]["status"])}
+    rows, dupes = _journal_rows(final, len(swept))
     out = write_stage(stage_path(city, ENRICHED_CSV), rows, ENRICHED_FIELDS)
     unresolved = sum(1 for r in rows if r["resolution"] != "resolved")
     warnings = []
@@ -276,6 +285,43 @@ def cmd_enrich(s: Settings, city: str, in_path: str | None = None, *,
         warnings=warnings,
         next_actions=[_cmd("filter", city)],
     )
+
+
+def _reanchored(done: dict[str, dict], swept: list[Venue]
+                ) -> dict[str, dict]:
+    """The journal with misplaced-cell misses accepted (`shared_shifts`).
+
+    A new dict: the journal on disk keeps what each lookup actually found,
+    so the decision is re-made from the evidence on every write.
+    """
+    from .resolve import shared_shifts
+
+    def point(row: dict | None) -> tuple[float, float] | None:
+        try:
+            return float(row["lat"]), float(row["lng"])
+        except (TypeError, KeyError, ValueError):
+            return None
+
+    points = {}
+    for key, entry in done.items():
+        idx = int(key)
+        pin = ((swept[idx].lat, swept[idx].lng)
+               if idx < len(swept) and swept[idx].has_coords else None)
+        page = point(entry.get("candidate") if entry["status"] == "too_far"
+                     else entry.get("row"))
+        if pin is not None and page is not None:
+            points[key] = (entry["status"], pin, page)
+    accepted = shared_shifts(points)
+    out = dict(done)
+    for key, detail in accepted.items():
+        entry = done[key]
+        row = {**entry["candidate"], "sweep_name": entry["row"]["sweep_name"],
+               "resolution": "resolved", "resolution_detail": detail}
+        out[key] = {**entry, "status": "resolved", "row": row}
+    if accepted:
+        log.info("Accepted %d too_far venue(s) whose miss matches their "
+                 "neighbours' shift.", len(accepted))
+    return out
 
 
 def _journal_rows(done: dict[str, dict], total: int) -> tuple[list[dict], int]:

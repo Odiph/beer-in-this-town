@@ -85,6 +85,21 @@ MAX_MATCH_M = 1000.0
 # five of them.
 MAX_FETCHES_PER_NAME = 2
 
+# A sweep cell is placed as a block: when the camera misjudges a pan, every
+# pin in that cell is off by the same vector. Found live on Tel Aviv
+# (2026-11-14): one cell's six venues all missed their pages by 1.6 km, in
+# the same direction, and were refused as `too_far`; matched cells carried
+# shifts of 200-700 m. A namesake in another town does not line up like
+# that, so a miss is accepted when at least SHIFT_MIN_VENUES venues with
+# pins within SHIFT_NEIGHBOUR_M of each other share its offset to within
+# SHIFT_AGREE_M, and the shift is under SHIFT_MAX_M. The neighbourhood is
+# a cell's width, not a street's: the Tel Aviv cell's eight misses agreed to
+# within 20 m but their pins spanned 6.4 km.
+SHIFT_MIN_VENUES = 3
+SHIFT_AGREE_M = 100.0
+SHIFT_NEIGHBOUR_M = 10_000.0
+SHIFT_MAX_M = 5000.0
+
 # Deliberate stops, not per-venue failures. Same rule as `fetch_venues`:
 # swallowing one keeps firing a request per remaining venue into an active
 # rate limit, which is exactly what the client exists to prevent.
@@ -173,6 +188,9 @@ class Resolution:
     status: str  # one of STATUSES
     venue: Venue | None = None
     detail: str = ""
+    # `too_far` only: the nearest page the name matched. Not the venue --
+    # kept so `shared_shifts` can tell a misplaced cell from a namesake.
+    candidate: Venue | None = None
 
 
 @dataclass
@@ -244,6 +262,7 @@ def resolve_one(swept: Located,
         return candidates
 
     last = Resolution(swept.name, "no_match")
+    nearest = math.inf
     for ref in candidates[:MAX_FETCHES_PER_NAME]:
         try:
             page = fetch(ref)
@@ -262,9 +281,51 @@ def resolve_one(swept: Located,
         if gap <= MAX_MATCH_M:
             return Resolution(swept.name, "resolved", venue=page,
                               detail=f"{gap:.0f} m from the pin")
-        last = Resolution(swept.name, "too_far",
-                          detail=f"{ref.url} is {gap / 1000:.1f} km away")
+        if gap < nearest:
+            nearest = gap
+            last = Resolution(swept.name, "too_far", candidate=page,
+                              detail=f"{ref.url} is {gap / 1000:.1f} km away")
     return last
+
+
+Point = tuple[float, float]
+
+
+def _offset(pin: Point, page: Point) -> Point:
+    """`page` minus `pin`, in metres east and north."""
+    north = (page[0] - pin[0]) * 111_320.0
+    east = (page[1] - pin[1]) * 111_320.0 * math.cos(math.radians(pin[0]))
+    return east, north
+
+
+def shared_shifts(points: dict[str, tuple[str, Point, Point]]
+                  ) -> dict[str, str]:
+    """Which `too_far` misses are a misplaced sweep cell, not a namesake.
+
+    `points` maps a key to `(status, pin, page)`: each venue's map pin and
+    the page it matched (`resolved`) or nearly matched (`too_far`). Returns
+    the `too_far` keys to accept, each with the detail to record. Resolved
+    venues count as support, so a cell whose other venues matched lifts its
+    one miss; a cell where nothing matched lifts itself only when enough of
+    its misses agree. A lone miss is never accepted.
+    """
+    offsets = {k: (st, pin, _offset(pin, page))
+               for k, (st, pin, page) in points.items()}
+    accepted: dict[str, str] = {}
+    for k, (st, pin, off) in offsets.items():
+        size = math.hypot(*off)
+        if st != "too_far" or size > SHIFT_MAX_M:
+            continue
+        agree = [j for j, (st2, pin2, off2) in offsets.items()
+                 if j != k and st2 in ("resolved", "too_far")
+                 and _metres(pin, pin2) <= SHIFT_NEIGHBOUR_M
+                 and math.hypot(off[0] - off2[0], off[1] - off2[1])
+                 <= SHIFT_AGREE_M]
+        if len(agree) + 1 >= SHIFT_MIN_VENUES:
+            accepted[k] = (f"{size:.0f} m from the pin, the same shift as "
+                           f"{len(agree)} nearby venue(s): the sweep placed "
+                           f"this cell off")
+    return accepted
 
 
 def _as_map_venue(sv: Located, city: str) -> Venue:
