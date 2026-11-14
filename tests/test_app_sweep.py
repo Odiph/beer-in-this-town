@@ -799,7 +799,7 @@ class WorldDevice:
     app's result-set cap.
     """
 
-    def __init__(self, spacing=45, fling=1.0, cap=58):
+    def __init__(self, spacing=45, fling=1.0, cap=58, blind=()):
         from beer_in_this_town.app_sweep import MAP_BOTTOM, MAP_TOP, SCREEN_WIDTH
         self.top, self.bottom, self.width = MAP_TOP, MAP_BOTTOM, SCREEN_WIDTH
         self.pins = [(f"W{x}_{y}", x, y)
@@ -813,6 +813,12 @@ class WorldDevice:
         self.ox = self.oy = 0.0
         self.offsets: list[tuple[float, float]] = []
         self.focus = MAP_PACKAGE
+        # Swipe numbers (1-based) after which the re-query shows only venues
+        # the previous screen did not: nothing shared, so the pan cannot be
+        # measured. What a 5.x re-query that reshuffles its top results does.
+        self.blind, self.swipes = set(blind), 0
+        self._last: set[str] = set()
+        self._blind_next = False
 
     def focused_package(self):
         return self.focus
@@ -824,7 +830,12 @@ class WorldDevice:
         # Untappd returns its most popular venues across the whole view, not
         # the nearest ones, so a quarter-screen pan shares many of them.
         on.sort(key=lambda p: self.rank[p[0]])
-        return on[:self.cap]
+        if self._blind_next:
+            on = [p for p in on if p[0] not in self._last]
+            self._blind_next = False
+        on = on[:self.cap]
+        self._last = {p[0] for p in on}
+        return on
 
     def dump(self):
         self.offsets.append((self.ox, self.oy))
@@ -837,6 +848,8 @@ class WorldDevice:
     def swipe(self, x1, y1, x2, y2, ms):
         self.ox += (x2 - x1) * self.fling
         self.oy += (y2 - y1) * self.fling
+        self.swipes += 1
+        self._blind_next = self.swipes in self.blind
 
     def tap(self, x, y):
         pass
@@ -900,3 +913,45 @@ def test_the_camera_tracks_where_the_map_really_is():
             abs(v.lng - ref.locate(Pin(v.name, *ground[v.name]))[1]))
         for v in result.venues)
     assert worst < 5e-4, worst  # ~50 m
+
+
+def _placement_error_m(result, dev):
+    from beer_in_this_town.app_geo import Camera, Scale
+    from beer_in_this_town.app_map import Pin
+
+    ground = {n: (x, y) for n, x, y in dev.pins}
+    ref = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.0))
+    worst = 0.0
+    for v in result.venues:
+        lat, lng = ref.locate(Pin(v.name, *ground[v.name]))
+        worst = max(worst, abs(v.lat - lat) * 111_320,
+                    abs(v.lng - lng) * 111_320 * 0.847)
+    return worst
+
+
+def test_a_pan_that_cannot_be_measured_uses_the_measured_fling():
+    """Found live on a depth-3 Tel Aviv sweep, 2026-11-14: whole cells were
+    placed 1-3 km off, mostly north, before any correction. A pan whose
+    screens share too few pins was assumed to have landed exactly, though
+    the fling overshoots, and the error carried into every later cell.
+    The pans that were measured already say how much the fling overshoots."""
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.0))
+    dev = WorldDevice(fling=1.2, blind=range(4, 200, 3))
+    result = sweep(dev, CELL, max_depth=2, verify_pans=True, camera=cam,
+                   settle_min_s=0, settle_max_s=0)
+    assert any(p["measured"] is None for p in result.pans)
+    assert _placement_error_m(result, dev) < 120
+
+
+def test_every_pan_is_recorded_for_the_post_mortem():
+    """Nothing recorded the pans, so the Tel Aviv drift could be traced to a
+    cell but not to the gesture that caused it."""
+    dev = WorldDevice(fling=1.15)
+    result = sweep(dev, CELL, max_depth=1, verify_pans=True,
+                   settle_min_s=0, settle_max_s=0)
+    assert result.pans
+    first = result.pans[0]
+    assert set(first) >= {"cell", "kind", "aim", "measured", "shared", "used"}
+    assert first["kind"] == "pan"
