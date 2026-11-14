@@ -230,6 +230,36 @@ def test_displacement_reports_nothing_when_no_pin_survives_the_pan():
     assert (dx, dy) == (None, None)
 
 
+def test_a_chain_with_several_branches_on_screen_does_not_skew_the_pan():
+    """Found in real 5.x dumps: 42 of 44 shared pins agreed the map moved
+    (0, 302) px, but `AM:PM` and `Tiv Taam` -- chains with several branches
+    on screen -- paired a branch before with a different branch after. The
+    mean read (14.1, 292.7), and over a depth-3 Tel Aviv sweep that drift put
+    whole cells 0.5-2 km off."""
+    from beer_in_this_town.app_map import Pin
+
+    before = [Pin(f"Bar {i}", 100 + 40 * i, 400) for i in range(10)]
+    before += [Pin("Tiv Taam", 120, 500), Pin("Tiv Taam", 800, 900)]
+    after = [Pin(p.name, p.x, p.y + 302) for p in before[:10]]
+    # The branch that survives the pan is the other one, somewhere else.
+    after += [Pin("Tiv Taam", 845, 555)]
+    dx, dy, n = pin_displacement(before, after)
+    assert (dx, dy) == (0, 302)
+    assert n == 10
+
+
+def test_one_misread_pin_cannot_drag_the_measurement():
+    """A marker clipped at the screen edge, or re-laid-out by the map, reads
+    a few pixels off. The median ignores it; a mean does not."""
+    from beer_in_this_town.app_map import Pin
+
+    before = [Pin(f"Bar {i}", 100 + 40 * i, 400) for i in range(9)]
+    after = [Pin(p.name, p.x - 5, p.y + 300) for p in before]
+    after[0] = Pin("Bar 0", 0, 700 + 90)
+    dx, dy, _ = pin_displacement(before, after)
+    assert (dx, dy) == (-5, 300)
+
+
 # --- the screen guard -----------------------------------------------------
 
 def test_a_dump_of_the_wrong_screen_is_refused():

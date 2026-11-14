@@ -385,6 +385,14 @@ off to under 50 m. Every pan (asked, measured, shared pins, used) is written
 to the sweep journal as `pans`, so a misplaced cell can be traced to its
 gesture.
 
+**Measure a pan by the median, not the mean.** That pan record found the
+real cause. On the next live Tel Aviv sweep, only 3 of 57 pans were
+unmeasurable, yet cells were still 0.5-2 km off, and they had been reached
+by measured pans. Replaying a real before/after pair: 42 of 44 shared pins
+agreed the map moved (0, 302) px, while `AM:PM` and `Tiv Taam`, chains with
+branches across the city, showed a different branch under the same name
+after the pan. The mean read (14.1, 292.7). The median reads (0, 302).
+
 Two things absorb a swipe and leave the map still, both found the hard way:
 
 - **A marker under the finger.** Dragging a pin pans nothing.

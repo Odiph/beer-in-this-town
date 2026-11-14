@@ -58,7 +58,9 @@ here -- a short corpus is indistinguishable from a complete one.
 from __future__ import annotations
 
 import re
+import statistics
 import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import dataclass
 
 # The largest result set observed, across seven cities on three continents:
@@ -281,13 +283,25 @@ def pin_displacement(
     Returns `(None, None, 0)` when no pin is present in both dumps. That is
     "cannot tell", and it must not be confused with `(0, 0)`, which is "the
     map did not move".
+
+    The result is the **median**, not the mean. Found in real 5.x dumps: 42
+    of 44 shared pins agreed on (0, 302) px, but two chains (`AM:PM`, `Tiv
+    Taam`) showed one branch before the pan and a different branch after,
+    under the same name, and the mean read (14.1, 292.7). Repeated over a
+    depth-3 Tel Aviv sweep, that put whole cells 0.5-2 km off. A marker
+    clipped at the screen edge reads a few pixels off too; the median
+    ignores both. A name on screen twice is ambiguous and is not paired.
     """
-    by_name = {p.name: p for p in before}
-    pairs = [(by_name[p.name], p) for p in after if p.name in by_name]
+    def unique(pins: list[Pin]) -> dict[str, Pin]:
+        counts = Counter(p.name for p in pins)
+        return {p.name: p for p in pins if counts[p.name] == 1}
+
+    was, now = unique(before), unique(after)
+    pairs = [(was[name], now[name]) for name in now if name in was]
     if not pairs:
         return None, None, 0
-    dx = sum(b.x - a.x for a, b in pairs) / len(pairs)
-    dy = sum(b.y - a.y for a, b in pairs) / len(pairs)
+    dx = statistics.median(b.x - a.x for a, b in pairs)
+    dy = statistics.median(b.y - a.y for a, b in pairs)
     return dx, dy, len(pairs)
 
 
