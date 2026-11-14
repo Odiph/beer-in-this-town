@@ -186,11 +186,12 @@ beertown doctor --json
 ```
 
 `doctor` checks, in order: `adb` is on your `PATH`, a device is connected at
-the serial above, the Untappd app is installed on it, and the screen is 900 x
-1600 (`adb_on_path`, `device_connected`, `untappd_installed`, `screen_size`
-under `data.emulator`, with `data.emulator_ready` true once all pass). Each
-failing check says what to do. No sweep is worth running until all four
-pass; while a sweep is the next stage, `status` reports
+the serial above, it runs Android 8 or newer, the Untappd app is installed
+on it at version 5 or newer, and the screen is 900 x 1600 (`adb_on_path`,
+`device_connected`, `android_version`, `untappd_installed`,
+`untappd_version`, `screen_size` under `data.emulator`, with
+`data.emulator_ready` true once all pass). Each failing check says what to
+do. No sweep is worth running until all six pass; while a sweep is the next stage, `status` reports
 `blocked_on: "emulator"` until they do.
 
 ---
