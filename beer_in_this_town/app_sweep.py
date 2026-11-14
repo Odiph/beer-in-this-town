@@ -11,9 +11,9 @@ bit on the first live run: a map left panned from earlier work showed 56 of a
 58-venue result set, `is_truncated(56)` said "complete", and the sweep
 declined to subdivide a cell that was in fact full. Pins are clipped to the
 viewport; the cap is not. So **every cell re-searches before it harvests** --
-`Refresh search` queries the current viewport, which puts the whole result
-set inside it by construction and makes the pin count mean what the rule
-assumes. Measured on the
+in Untappd 4.x by pressing `Refresh search`, in 5.x by the pan itself (see
+below) -- which puts the whole result set inside the viewport by construction
+and makes the pin count mean what the rule assumes. Measured on the
 live app: two independent Tel Aviv searches both returned exactly 58, Haifa
 returned 37. That single number replaces every guess about grid spacing --
 density decides how deep to divide, and no requests are spent on empty
@@ -23,11 +23,18 @@ countryside.
 dense cell revealed eight venues the wider view never showed. No single
 viewport enumerates an area, so a city is a tree, not a rectangle.
 
-**Why `Refresh search` per cell.** Panning re-draws; it does not re-query. A
-child cell that is panned into but not re-searched shows a slice of its
-parent's result set and finds nothing new -- which looks exactly like a
-saturated cell, and would end the recursion early with a confident wrong
-answer.
+**Why a pan is enough (Untappd 5.x).** The app re-queries by itself once a
+pan settles. Measured 2026-11-14: four quarter-screen pans over filtered Tel
+Aviv saw 71 distinct venues, more than one result set holds, and each view's
+pins were final within 4 s -- inside the settle. So a child cell is a pan and
+a wait. (Untappd 4.x only re-drew on a pan, and every cell had to press
+`Refresh search`; 5.x removed that button.) The category filter survives the
+re-query, so it is set once per sweep, not per cell.
+
+**Every control is found by its label.** 4.x controls were tapped at
+remembered positions, and 5.x moved every one of them. A label that is not on
+screen raises `WrongScreen` before anything is touched: a tap at a stale
+position lands on whatever is there now.
 
 The sweep runs unattended, so every judgement a person made during the
 research is a check here: that the app in front of us is the app, that the
@@ -52,6 +59,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from .adb_device import ScreenNotReady
 from .app_categories import is_drinking_category, plan_category_taps
 from .app_map import (
     Pin,
@@ -89,33 +97,38 @@ SCREEN_WIDTH = 900
 # the map by precisely (0,0) across 58 shared pins.
 CARD_TOP = 1242
 
-# Controls on the map and in the filter panel. Tapped by position because
-# their bounds are stable within a session; the descriptions record what each
-# one is, so a layout change is a lookup rather than a hunt.
-REFRESH_BUTTON = (855, 315)      # content-desc "Refresh search"
-FILTERS_BUTTON = (774, 81)        # content-desc "filters"
-CATEGORY_ROW = (450, 185)         # "Filter by Category"
-APPLY_BUTTON = (845, 78)          # "APPLY"
-SHOW_RESULTS_BUTTON = (450, 1556) # "SHOW RESULTS"
+# Controls, by the label Untappd 5.x gives them (content-desc or text).
+# Found in each dump, never tapped by position: see the module docstring.
+FILTER_LABEL = "Filter"                    # map -> filter panel
+CATEGORY_LABEL = "Filter by Category"      # filter panel -> category list
+DESELECT_ALL_LABEL = "Deselect All"        # category list, anything ticked
+SELECT_ALL_LABEL = "Select All"            # the same toggle, nothing ticked
+APPLY_LABEL = "Apply"                      # category list -> filter panel
+SHOW_RESULTS_LABEL = "Show Results"        # filter panel -> map, re-queries
+LOCATION_SHEET_LABEL = "Choose Location"   # the city-search sheet
+CLEAR_LABEL = "Clear"                      # empties the sheet's text box
 
 # How many tap-and-rescan passes the category panel gets before we accept it
 # as set. It scrolls, so one pass only reaches the visible rows.
 MAX_CATEGORY_PASSES = 10
 
-# Discover -> "View Map". Located by its text in the dump, never tapped by a
-# remembered position: recovery runs precisely when the screen is not what
-# was expected, which is the one moment a remembered position is least safe.
-VIEW_MAP_LABEL = "View Map"
+# Discover -> the `Map` button (4.x called it "View Map"). Located by its
+# label in the dump, never tapped by a remembered position: recovery runs
+# precisely when the screen is not what was expected, which is the one moment
+# a remembered position is least safe.
+VIEW_MAP_LABEL = "Map"
 
 # How many looks a relaunch gets before the screen is declared wrong. At
 # half a settle apart that is roughly 20-30 s, well past a measured cold start.
 RELAUNCH_POLLS = 8
-SEARCH_BOX = (440, 82)
-CLEAR_SEARCH = (723, 82)
 
-# `Refresh search`, found by content-desc in the live app. Kept as a constant
-# so a layout change is one edit rather than a hunt through the sweep.
-REFRESH_DESC = "Refresh search"
+# The place-name button at the top left of the map opens the city search.
+# Its label *is* the current place ("Haifa, Israel"), so it cannot be found
+# by label; it is the wide button in the header's top-left corner. The
+# filter panel's `Close` sits in the same corner but is 66 px wide.
+LOCATION_BUTTON_MAX_X1 = 60
+LOCATION_BUTTON_MAX_Y2 = 120
+LOCATION_BUTTON_MIN_WIDTH = 150
 
 # Slow enough that the fling is small; the caller measures what actually
 # happened rather than trusting it. A 400 ms swipe overshot by 27%.
@@ -158,8 +171,9 @@ MAX_CONSECUTIVE_DEAD_PANS = 3
 CELL_OVERLAP = 0.15
 
 # How long to let the app settle after a gesture before believing the screen.
-# A `Refresh search` re-queries the network, and a dump taken too early
-# catches a half-drawn map -- which reads as a thinner city, not as an error.
+# A pan re-queries the network (Untappd 5.x does it by itself; measured final
+# within 4 s), and a dump taken too early catches a half-drawn map -- which
+# reads as a thinner city, not as an error.
 # Jittered, because a fixed interval is a tell and this drives a real
 # account; same reasoning as `http_client`'s min/max delay.
 SETTLE_MIN_S = 5.0
@@ -298,14 +312,56 @@ def _settle(lo: float, hi: float) -> None:
         time.sleep(random.uniform(lo, hi))
 
 
-def _refresh(device: Device) -> None:
-    """Re-query for the current viewport.
+def _tap_label(device: Device, label: str, xml: str | None = None) -> None:
+    """Tap the control labelled `label` in the current dump, or refuse.
 
-    Tapped by position because the button's bounds are stable within a
-    session; `REFRESH_DESC` records what it is so a future reader can find it
-    by description instead if the layout moves.
+    Refusing is the point: a missing label means the screen is not the one we
+    think, and a tap anyway lands on whatever is there.
     """
-    device.tap(*REFRESH_BUTTON)
+    target = _find_label(xml if xml is not None else device.dump(), label)
+    if target is None:
+        raise WrongScreen(
+            f"no {label!r} control on screen. Refusing to tap blind; the app "
+            "is not on the screen the sweep expected.")
+    device.tap(*target)
+
+
+def _bounds_of(node: ET.Element) -> tuple[int, int, int, int] | None:
+    m = _BOUNDS.match(node.get("bounds") or "")
+    return tuple(int(g) for g in m.groups()) if m else None  # type: ignore[return-value]
+
+
+def _location_button(xml: str) -> tuple[int, int] | None:
+    """The centre of the place-name button that opens the city search."""
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+    for node in root.iter():
+        if not (node.get("class") or "").endswith("Button"):
+            continue
+        box = _bounds_of(node)
+        if box is None:
+            continue
+        x1, y1, x2, y2 = box
+        if (x1 <= LOCATION_BUTTON_MAX_X1 and y2 <= LOCATION_BUTTON_MAX_Y2
+                and x2 - x1 >= LOCATION_BUTTON_MIN_WIDTH):
+            return (x1 + x2) // 2, (y1 + y2) // 2
+    return None
+
+
+def _text_field(xml: str) -> tuple[int, int] | None:
+    """The centre of the first text box in the dump."""
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+    for node in root.iter():
+        if (node.get("class") or "").endswith("EditText"):
+            box = _bounds_of(node)
+            if box is not None:
+                return (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+    return None
 
 
 def _clear_origin(pins: list[Pin], dx: int, dy: int) -> tuple[int, int]:
@@ -507,8 +563,18 @@ def ensure_map_screen(device: Device, relaunch: bool = True,
     # the first dump after relaunch was once a half-drawn splash. So poll,
     # boundedly, for either the map itself or the way to it.
     target = None
+    not_ready: ScreenNotReady | None = None
     for _ in range(RELAUNCH_POLLS):
-        xml = device.dump()
+        # A cold-starting app can have no window at all yet, and uiautomator
+        # says so instead of dumping (found live on Untappd 5.0.3). Here, and
+        # only here, that is expected: keep polling, boundedly.
+        try:
+            xml = device.dump()
+        except ScreenNotReady as exc:
+            not_ready = exc
+            _settle(settle_min_s / 2, settle_max_s / 2)
+            continue
+        not_ready = None
         try:
             require_map_screen(xml)
             return
@@ -518,11 +584,13 @@ def ensure_map_screen(device: Device, relaunch: bool = True,
         if target is not None:
             break
         _settle(settle_min_s / 2, settle_max_s / 2)
+    if target is None and not_ready is not None:
+        raise not_ready
     if target is None:
         raise WrongScreen(
-            f"relaunched, but there is no {VIEW_MAP_LABEL!r} on screen to "
-            "reach the map from. Refusing to tap blind; open Discover -> "
-            "View Map by hand and re-run.")
+            f"relaunched, but there is no {VIEW_MAP_LABEL!r} button on screen "
+            "to reach the map from. Refusing to tap blind; open Discover -> "
+            "Map by hand and re-run.")
     device.tap(*target)
     _settle(settle_min_s, settle_max_s)
 
@@ -533,12 +601,40 @@ def ensure_map_screen(device: Device, relaunch: bool = True,
 def search_city(device: Device, query: str,
                 settle_min_s: float = SETTLE_MIN_S,
                 settle_max_s: float = SETTLE_MAX_S) -> None:
-    """Move the viewport by name, from a screen known to be the map."""
+    """Move the viewport by name, from a screen known to be the map.
+
+    Untappd 5.x: tap the place name at the top left, which opens a "Choose
+    Location" sheet; clear any text left in its box; type; Enter. Enter is
+    what runs the search -- the sheet offers no suggestions to pick from.
+
+    The sheet is drawn *over* the map and the map's nodes stay in the dump,
+    so `require_map_screen` passes while it is open. That is why the sheet is
+    checked for by name both before typing and after the search.
+    """
     ensure_map_screen(device, settle_min_s=settle_min_s,
                       settle_max_s=settle_max_s)
-    device.tap(*CLEAR_SEARCH)
+    button = _location_button(device.dump())
+    if button is None:
+        raise WrongScreen(
+            "the map shows no place-name button to search from. Refusing to "
+            "tap blind.")
+    device.tap(*button)
     _settle(settle_min_s / 2, settle_max_s / 2)
-    device.tap(*SEARCH_BOX)
+
+    xml = device.dump()
+    if _find_label(xml, LOCATION_SHEET_LABEL) is None:
+        raise WrongScreen(
+            f"tapped the place name but no {LOCATION_SHEET_LABEL!r} sheet "
+            "opened. Refusing to type into whatever has focus.")
+    if _find_label(xml, CLEAR_LABEL) is not None:
+        _tap_label(device, CLEAR_LABEL, xml)
+        _settle(settle_min_s / 2, settle_max_s / 2)
+        xml = device.dump()
+    field = _text_field(xml)
+    if field is None:
+        raise WrongScreen(
+            f"the {LOCATION_SHEET_LABEL!r} sheet has no text box to type into.")
+    device.tap(*field)
     _settle(settle_min_s / 2, settle_max_s / 2)
     device.type_text(query)
     _settle(settle_min_s / 2, settle_max_s / 2)
@@ -546,36 +642,58 @@ def search_city(device: Device, query: str,
     # A search is a network round trip, so it gets longer than a gesture.
     _settle(settle_min_s * 2, settle_max_s * 2)
 
+    xml = device.dump()
+    if _find_label(xml, LOCATION_SHEET_LABEL) is not None:
+        raise WrongScreen(
+            f"searched for {query!r} but the {LOCATION_SHEET_LABEL!r} sheet is "
+            "still open: the app did not place that name. Harvesting now would "
+            "read the previous city's map as this one.")
+    require_map_screen(xml)
+
 
 def apply_drinking_filter(device: Device,
                           settle_min_s: float = 1.0,
                           settle_max_s: float = 2.0) -> list[str]:
-    """Set the category filter to drinking venues only, before searching.
+    """Set the category filter to drinking venues only.
 
     A result set holds about 60 venues and Untappd's index is not a drinking
-    index -- only 6 of the 17 categories a Tel Aviv search returns are places
-    you can drink. Every slot spent on a park, a hotel or a supermarket is a
-    bar that did not fit, and it cannot be corrected afterwards because pins
-    carry no category.
+    index -- a Tel Aviv search returns parks, markets, hostels and hotels
+    beside its bars. Every slot spent on one is a bar that did not fit, and it
+    cannot be corrected afterwards because pins carry no category.
 
-    The panel scrolls, so this taps what is visible, re-reads, and moves
-    down until the rows stop changing. Returns the categories it ended up
-    keeping, so a caller can record what the corpus was filtered to.
+    Untappd 5.x: map -> `Filter` -> `Filter by Category` -> `Deselect All`,
+    tick the drinking rows, `Apply` -> `Show Results`, which re-queries and
+    returns to the map. The list scrolls, so this ticks what is visible,
+    re-reads, and moves down until the rows stop changing. Returns the
+    categories it kept, so a caller can record what the corpus was filtered
+    to.
     """
     panel_lo = min(PANEL_SETTLE_MIN_S, settle_min_s)
     panel_hi = min(PANEL_SETTLE_MAX_S, settle_max_s)
 
-    device.tap(*FILTERS_BUTTON)
+    _tap_label(device, FILTER_LABEL)
     _settle(panel_lo, panel_hi)
-    device.tap(*CATEGORY_ROW)
+    _tap_label(device, CATEGORY_LABEL)
     _settle(panel_lo, panel_hi)
+    # Every category normally arrives ticked; one tap turns them all off, and
+    # the pass below only has to turn the drinking ones on. The button is a
+    # toggle -- it reads `Select All` once nothing is ticked -- so it is
+    # pressed only while it says `Deselect All`. A list left cleared by an
+    # earlier run needs no press, and pressing `Select All` would tick
+    # everything.
+    xml = device.dump()
+    if _find_label(xml, DESELECT_ALL_LABEL) is not None:
+        _tap_label(device, DESELECT_ALL_LABEL, xml)
+        _settle(panel_lo, panel_hi)
+    elif _find_label(xml, SELECT_ALL_LABEL) is None:
+        raise WrongScreen(
+            f"tapped {CATEGORY_LABEL!r} but the category list did not open "
+            f"(no {DESELECT_ALL_LABEL!r} or {SELECT_ALL_LABEL!r}).")
 
-    kept: set[str] = set()
     seen: set[str] = set()
     for _ in range(MAX_CATEGORY_PASSES):
         xml = device.dump()
         cats = categories_in(xml)
-        kept.update(n for n, c in cats.items() if c.checked)
         taps = plan_category_taps(cats, xml)
         for tap in taps:
             device.tap(tap.x, tap.y)
@@ -589,10 +707,10 @@ def apply_drinking_filter(device: Device,
         device.swipe(450, 1200, 450, 700, PAN_MS // 2)
         _settle(panel_lo, panel_hi)
 
-    device.tap(*APPLY_BUTTON)
+    _tap_label(device, APPLY_LABEL)
     _settle(panel_lo, panel_hi)
     # This one issues a query, so it gets a search's patience.
-    device.tap(*SHOW_RESULTS_BUTTON)
+    _tap_label(device, SHOW_RESULTS_LABEL)
     _settle(settle_min_s, settle_max_s)
 
     return sorted(n for n in seen if is_drinking_category(n))
@@ -652,21 +770,12 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
     if _depth == 0:
         _require_app(device)
 
-    # Re-query for this exact viewport before believing what is drawn. A
-    # stale result set from a previous search is clipped to the screen, and a
-    # clipped count reads as a smaller city rather than as a truncation.
-    #
-    # `Refresh search` **clears the category filter** -- measured: 9 categories
-    # checked before, all 17 after. So a filtered sweep runs the filter pass
-    # *instead of* the refresh, because `SHOW RESULTS` is itself a search of
-    # the current viewport. Refreshing and then filtering would work too and
-    # costs an extra query; refreshing *after* filtering silently undoes it,
-    # which is what made a whole filtered sweep come back unfiltered.
-    if filter_drinking:
+    # The root viewport has already been queried by the city search, and a
+    # child's by the pan that reached it (Untappd 5.x re-queries on its own).
+    # The filter is set once, at the root: `Show Results` re-queries the root
+    # viewport, and the filter survives every later automatic re-query.
+    if filter_drinking and _depth == 0:
         apply_drinking_filter(device, settle_min_s, settle_max_s)
-    else:
-        _refresh(device)
-        _settle(settle_min_s, settle_max_s)
 
     pins = _harvest_screen(device)
     result.cells_visited += 1
@@ -778,7 +887,8 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
                     _follow(camera, int(err_x), int(err_y))
                     _settle(settle_min_s, settle_max_s)
 
-        # The child re-searches on entry, so nothing is needed here.
+        # The pan's own re-query has landed during the settle above, so the
+        # child harvests what is drawn.
         sweep(device, cell, max_depth=max_depth, min_depth=min_depth,
               verify_pans=verify_pans,
               city=city, filter_drinking=filter_drinking, camera=camera,

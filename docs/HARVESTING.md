@@ -59,6 +59,38 @@ into the shorter ones they contain, nothing under 2%, at most ten. Tel Aviv:
 
 ---
 
+## 1b. Untappd 5.x (measured 2026-11-14 on 5.0.3)
+
+Untappd 5 redesigned the app. What changed for the sweep, each measured on a
+BlueStacks Pie 64-bit instance at 900 x 1600:
+
+- **Android 8.0+ only** (`minSdk 26`). A Nougat instance stays on 4.x
+  forever; the Play Store does not say why.
+- **No `Refresh search`. A pan re-queries by itself**, final within 4 s.
+  Netanya searched alone drew 11 pins; panned south it drew 28, 27 new. Four
+  quarter-screen pans over filtered Tel Aviv saw 71 distinct venues, more
+  than one result set holds.
+- **The category filter survives the re-query.** Filtered Tel Aviv, panned
+  away and back: 52 pins, still no park, market or hotel. So the filter is
+  set once per sweep. (In 4.x `Refresh search` cleared it; section 11.)
+- **Category counts describe the last city search only.** They do not move
+  when a pan re-queries (Haifa: 29 categories summing to 50, before and after
+  a pan), so the per-view pin count is the only saturation signal.
+- **Unchanged:** pins are still `View` nodes named after the venue, the map
+  check (`Google Map` + `Switch to list view`) still holds, and the cap is
+  still about 60 (filtered Tel Aviv: 52-56 per view; Haifa unfiltered: 40).
+- **Every control moved**, so the sweep now finds each by its label:
+  Discover's `Map` button; the place-name button at the top left, which opens
+  a "Choose Location" sheet (type, Enter); `Filter` -> `Filter by Category`
+  -> `Deselect All`, tick, `Apply` -> `Show Results`. Category rows read
+  `"Bar, 21"`, without 4.x's trailing comma.
+- The location sheet is drawn over the map with the map's nodes still in the
+  dump, so the map check alone passes while it is open; the search checks
+  for the sheet by name before typing and after Enter.
+
+Sections 2-11 describe 4.x as measured in September 2026. Where they disagree
+with the list above, the list wins.
+
 ## 2. The model of the surface
 
 Four facts, and almost every confusing observation follows from them:
@@ -159,7 +191,7 @@ the normal path for any real city, not an edge case for dense ones.
 
 ```
 harvest(cell):
-    search(cell)                     # Refresh search -- not optional
+    search(cell)                     # 4.x: Refresh search; 5.x: the pan itself
     pins = dump_pins()               # one uiautomator dump
     if len(pins) >= TRUNCATION_THRESHOLD:  subdivide into 4
     else:                                  accept as complete

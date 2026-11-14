@@ -180,12 +180,38 @@ def test_dump_gives_up_when_the_kill_repeats():
 
 
 def test_dump_does_not_retry_other_garbage():
-    """Only the known-transient case is retried. Anything else is news."""
-    runner = SequenceRunner(["ERROR: null root node\n", DUMP])
+    """Only the known-transient cases are retried. Anything else is news."""
+    runner = SequenceRunner(["ERROR: could not get idle state.\n", DUMP])
     dev = AdbDevice("x", run=runner)
     with pytest.raises(AdbUnavailable):
         dev.dump()
     assert runner.calls == 1
+
+
+NO_WINDOW = "ERROR: null root node returned by UiTestAutomationBridge.\n"
+
+
+def test_dump_retries_once_when_there_is_no_window():
+    """`null root node` is uiautomator finding no window to read. Found live
+    on Untappd 5.0.3 twice: right after a relaunch, and once mid-sweep on a
+    map that was fine a second later. Transient, like a kill, so one retry."""
+    runner = SequenceRunner([NO_WINDOW, DUMP])
+    dev = AdbDevice("x", run=runner, retry_pause_s=0)
+    assert "Lauter" in dev.dump()
+    assert runner.calls == 2
+
+
+def test_a_window_that_stays_missing_is_reported_as_not_ready():
+    """Two in a row is not a blip. It is still an `AdbUnavailable`, but a
+    distinct one, so the caller that expects a cold start can wait longer."""
+    from beer_in_this_town.adb_device import ScreenNotReady
+
+    runner = SequenceRunner([NO_WINDOW, NO_WINDOW, DUMP])
+    dev = AdbDevice("x", run=runner, retry_pause_s=0)
+    with pytest.raises(ScreenNotReady):
+        dev.dump()
+    assert runner.calls == 2
+    assert issubclass(ScreenNotReady, AdbUnavailable)
 
 
 def test_launch_stops_the_app_before_starting_it():

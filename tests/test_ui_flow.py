@@ -69,7 +69,7 @@ def test_a_fresh_city_shows_four_commands_and_nothing_done(project):
 
 def test_the_sweep_names_its_manual_precondition(project):
     sweep = flow.build_card("Tel Aviv", method="map")["stages"][0]
-    assert "Discover -> View Map" in sweep["precondition"]
+    assert "Discover -> Map" in sweep["precondition"]
     assert "--here" in sweep["options"]
 
 

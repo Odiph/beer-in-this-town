@@ -192,7 +192,7 @@ SEARCH_OPTIONS = (
 
 SWEEP_PRECONDITION = (
     "Before each sweep: BlueStacks running, the Untappd app open on "
-    "Discover -> View Map, and nothing covering the map."
+    "Discover -> Map, and nothing covering the map."
 )
 SWEEP_OPTIONS = (
     "Options: --here centres on the emulator's own location instead of "

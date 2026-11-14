@@ -324,7 +324,7 @@ def cmd_doctor(s: Settings, emulator=None) -> Envelope:
             f"Fix: {first.remedy}")
     else:
         notes.append(
-            "Before each sweep, open the Untappd app on Discover -> View Map.")
+            "Before each sweep, open the Untappd app on Discover -> Map.")
 
     return Envelope(
         command="doctor",
@@ -1519,7 +1519,7 @@ def main(argv: list[str] | None = None) -> int:
         env = fail(args.cmd, Problem(
             code="app_screen_unexpected",
             message=str(exc),
-            remedy="Open the Untappd app on Discover -> View Map and re-run, "
+            remedy="Open the Untappd app on Discover -> Map and re-run, "
                    "or drop --here to centre by city name instead.",
         ))
     except AdbUnavailable as exc:
@@ -1554,7 +1554,7 @@ def main(argv: list[str] | None = None) -> int:
             code="app_screen_unexpected",
             message=str(exc),
             remedy="The Untappd app was not showing the map. Open it on "
-                   "Discover -> View Map and re-run; progress is journalled.",
+                   "Discover -> Map and re-run; progress is journalled.",
         ))
     except Exception as exc:
         log.error("Run aborted: %s", exc, exc_info=verbose)

@@ -510,7 +510,7 @@ def _emulator_hints(state: dict[str, Any]) -> list[str]:
            "Fix these in order, then re-run `python -m beer_in_this_town "
            "doctor --json` to confirm:"]
     out += [f"{c['name']}: {c['detail']} Fix: {c['remedy']}" for c in failed]
-    out.append("Then open the Untappd app on Discover -> View Map, and the "
+    out.append("Then open the Untappd app on Discover -> Map, and the "
                "sweep can start.")
     return out
 
@@ -598,7 +598,7 @@ def hints(state: dict[str, Any], s: Settings) -> list[str]:
     if state.get("next_stage") == "sweep" and state.get("method") == "map":
         out.append(
             "Before the sweep: open the Untappd app in BlueStacks on Discover "
-            "-> View Map. The sweep reads that map, and reads only.")
+            "-> Map. The sweep reads that map, and reads only.")
     guards = state.get("write_guardrails") or {}
     if guards.get("cooloff_remaining_h"):
         out.append(

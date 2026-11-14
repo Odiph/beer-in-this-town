@@ -211,7 +211,7 @@ spelling, and the envelope says so in `warnings`.
 
 ### 5b. Open the map — human, before each `--method map` sweep
 
-> In BlueStacks, open Untappd, tap Discover, then View Map, and close
+> In BlueStacks, open Untappd, tap Discover, then Map, and close
 > anything covering the map. Please don't touch the emulator until I say the
 > sweep is done.
 
@@ -623,7 +623,7 @@ Rules for agents:
 - Signing in to Google and Untappd in the tool's Chrome profile (`ui` or
   `bootstrap`).
 - Choosing the city.
-- Opening Discover → View Map before each sweep, and leaving the emulator
+- Opening Discover → Map before each sweep, and leaving the emulator
   alone while it runs.
 - Creating the target saved list in Google Maps.
 - Deciding whether to use `pin`, `notes` and `closures` at all.
