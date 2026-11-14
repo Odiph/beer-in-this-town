@@ -284,7 +284,8 @@ def test_a_child_cell_is_reached_by_panning_alone():
     full = dump_with([f"v{i}" for i in range(58)])
     dev = FakeDevice([full] + [dump_with(["a"])] * 40)
     sweep(dev, CELL, settle_max_s=0, max_depth=1)
-    assert sum(1 for a in dev.actions if a.startswith("swipe")) == 4
+    # Four children, then one pan handing the map back to the parent.
+    assert sum(1 for a in dev.actions if a.startswith("swipe")) == 5
     assert not any(a.startswith("tap") for a in dev.actions), dev.actions
 
 
@@ -570,7 +571,8 @@ def test_a_pan_within_tolerance_is_left_alone():
                       offset=-step_x - 5, yoff=-step_y - 5)
     dev = FakeDevice([full, close] + [dump_with(["x"])] * 40)
     sweep(dev, CELL, settle_max_s=0, max_depth=1, verify_pans=True)
-    assert len([a for a in dev.actions if a.startswith("swipe")]) == 4
+    # Four children and the hand-back; no corrective pan among them.
+    assert len([a for a in dev.actions if a.startswith("swipe")]) == 5
 
 
 # --- a sparse wide cell is not a complete one -----------------------------
@@ -778,3 +780,123 @@ def test_each_venue_records_the_cell_that_found_it(tmp_path, monkeypatch):
                 settle_max_s=0, city="Tel Aviv")
     assert {v.cell for v in out.venues} == {1}
     assert {v.cell for v in app_sweep.load_journal("Tel Aviv").venues} == {1}
+
+
+# --- a map that really moves: pins sit at fixed ground positions ------------
+#
+# Found live on Untappd 5.x (Tel Aviv, depth 1): every second child pan
+# "landed (193,261) px off target", the third was skipped as a dead pan
+# though the map had moved, and one cell was dead-reckoned 5.8 km off. The
+# swipes are relative to wherever the map is, but each was measured against
+# the *parent's* screen, captured once. The queue-of-dumps fake above cannot
+# show that: its screens do not depend on where the map is.
+
+class WorldDevice:
+    """A map whose content sits at fixed positions and moves when swiped.
+
+    `fling` scales every drag, the way a fast `input swipe` overshoots.
+    The screen shows at most `cap` pins, the most popular first, like the
+    app's result-set cap.
+    """
+
+    def __init__(self, spacing=45, fling=1.0, cap=58):
+        from beer_in_this_town.app_sweep import MAP_BOTTOM, MAP_TOP, SCREEN_WIDTH
+        self.top, self.bottom, self.width = MAP_TOP, MAP_BOTTOM, SCREEN_WIDTH
+        self.pins = [(f"W{x}_{y}", x, y)
+                     for x in range(-1800, 2700, spacing)
+                     for y in range(-1800, 3400, spacing)]
+        self.fling, self.cap = fling, cap
+        import random
+        order = list(range(len(self.pins)))
+        random.Random(7).shuffle(order)
+        self.rank = {self.pins[i][0]: r for r, i in enumerate(order)}
+        self.ox = self.oy = 0.0
+        self.offsets: list[tuple[float, float]] = []
+        self.focus = MAP_PACKAGE
+
+    def focused_package(self):
+        return self.focus
+
+    def _visible(self):
+        on = [(n, x + self.ox, y + self.oy) for n, x, y in self.pins
+              if 30 <= x + self.ox <= self.width - 30
+              and self.top + 70 <= y + self.oy <= self.bottom]
+        # Untappd returns its most popular venues across the whole view, not
+        # the nearest ones, so a quarter-screen pan shares many of them.
+        on.sort(key=lambda p: self.rank[p[0]])
+        return on[:self.cap]
+
+    def dump(self):
+        self.offsets.append((self.ox, self.oy))
+        nodes = "".join(
+            f'<node class="android.view.View" content-desc="{n}" '
+            f'bounds="[{int(x) - 27},{int(y) - 62}][{int(x) + 27},{int(y)}]"/>'
+            for n, x, y in self._visible())
+        return f"<?xml version='1.0'?><hierarchy>{CHROME}{nodes}</hierarchy>"
+
+    def swipe(self, x1, y1, x2, y2, ms):
+        self.ox += (x2 - x1) * self.fling
+        self.oy += (y2 - y1) * self.fling
+
+    def tap(self, x, y):
+        pass
+
+
+def _child_targets():
+    from beer_in_this_town.app_sweep import (
+        CELL_OVERLAP,
+        MAP_BOTTOM,
+        MAP_TOP,
+        SCREEN_WIDTH,
+    )
+    sx = int(SCREEN_WIDTH // 4 * (1 - CELL_OVERLAP))
+    sy = int((MAP_BOTTOM - MAP_TOP) // 4 * (1 - CELL_OVERLAP))
+    return [(-sx, -sy), (sx, -sy), (-sx, sy), (sx, sy)]
+
+
+def _visited(dev, target, tol=26):
+    return any(abs(ox - target[0]) <= tol and abs(oy - target[1]) <= tol
+               for ox, oy in dev.offsets)
+
+
+@pytest.mark.parametrize("fling", [1.0, 1.15])
+def test_every_child_is_visited_where_it_should_be(fling):
+    dev = WorldDevice(fling=fling)
+    result = sweep(dev, CELL, max_depth=1, verify_pans=True,
+                   settle_min_s=0, settle_max_s=0)
+    missed = [t for t in _child_targets() if not _visited(dev, t)]
+    assert not missed, f"children never reached: {missed}"
+    assert result.skipped_cells == 0, result.warnings
+
+
+def test_a_sweep_leaves_the_map_where_it_found_it():
+    """What lets the recursion compose: a parent can only aim at its next
+    child if the last one handed the map back where it started."""
+    dev = WorldDevice(fling=1.15)
+    sweep(dev, CELL, max_depth=2, verify_pans=True,
+          settle_min_s=0, settle_max_s=0)
+    assert abs(dev.ox) <= 26 and abs(dev.oy) <= 26, (dev.ox, dev.oy)
+
+
+def test_the_camera_tracks_where_the_map_really_is():
+    """Each pan is measured against the screen just before it, so the camera
+    adds up real moves. Measured against a stale screen, it counted every
+    earlier child's move again and drifted kilometres."""
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.0))
+    dev = WorldDevice(fling=1.15)
+    result = sweep(dev, CELL, max_depth=2, verify_pans=True, camera=cam,
+                   settle_min_s=0, settle_max_s=0)
+    truth = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.0))
+    truth.pan_px(dev.ox, dev.oy)
+    assert cam.centre == pytest.approx(truth.centre, abs=3e-4)  # ~30 m
+    # And every venue sits on its ground position, whichever cell found it.
+    ground = {n: (x, y) for n, x, y in dev.pins}
+    ref = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.0))
+    from beer_in_this_town.app_map import Pin
+    worst = max(
+        max(abs(v.lat - ref.locate(Pin(v.name, *ground[v.name]))[0]),
+            abs(v.lng - ref.locate(Pin(v.name, *ground[v.name]))[1]))
+        for v in result.venues)
+    assert worst < 5e-4, worst  # ~50 m

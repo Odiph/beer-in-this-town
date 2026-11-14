@@ -281,6 +281,13 @@ class SweepResult:
     hit_depth_limit: bool = False
     warnings: list[str] = field(default_factory=list)
     _consecutive_dead_pans: int = 0
+    # The screen as it was after the most recent dump, wherever the map is
+    # now. Every pan is measured against this, never against an older one.
+    _screen: list[Pin] = field(default_factory=list)
+    # Where the last finished cell left the map, relative to its own centre:
+    # what its hand-back pan did not quite undo. The parent adds it to its
+    # own reckoning instead of assuming the child came back exactly.
+    _left_at: tuple[float, float] = (0.0, 0.0)
 
 
 def _require_app(device: Device) -> None:
@@ -722,6 +729,92 @@ def _harvest_screen(device: Device) -> list[Pin]:
     return pins_in(xml)
 
 
+def _measure(before: list[Pin], after: list[Pin]
+             ) -> tuple[float, float] | None:
+    """How far the content moved between two screens, if enough pins say so."""
+    moved_x, moved_y, shared = pin_displacement(before, after)
+    if moved_x is None or moved_y is None or shared < MIN_SHARED_FOR_PAN_CHECK:
+        return None
+    return moved_x, moved_y
+
+
+def _move_to(device: Device, here: tuple[float, float],
+             target: tuple[float, float], result: SweepResult,
+             camera: Camera | None, verify: bool,
+             settle_min_s: float, settle_max_s: float,
+             returning: bool = False) -> tuple[tuple[float, float], bool]:
+    """Pan from `here` to `target`, both content offsets from a cell centre.
+
+    Returns where the map really is afterwards, and whether it got there.
+
+    Found live on Untappd 5.x: every pan used to be measured against the
+    *parent's* screen, captured once, although each swipe moves the map from
+    wherever the previous child left it. The second child then read as a
+    whole step off target, the third as a dead pan (skipped, though the map
+    had moved), and the camera added every earlier child's move again, which
+    put one Tel Aviv cell 5.8 km off. So each pan here is measured against
+    the screen just before it, and a correction is measured too.
+    """
+    dx, dy = round(target[0] - here[0]), round(target[1] - here[1])
+    if abs(dx) <= PAN_TOLERANCE_PX and abs(dy) <= PAN_TOLERANCE_PX:
+        return here, True
+
+    before = result._screen
+    _pan(device, dx, dy, before)
+    _settle(settle_min_s, settle_max_s)
+    if not verify:
+        _follow(camera, dx, dy)
+        result._screen = []
+        return (here[0] + dx, here[1] + dy), True
+
+    after = _harvest_screen(device)
+    result._screen = after
+    moved = _measure(before, after)
+    # Believe the measurement when there is enough overlap to make one;
+    # otherwise the request is the best estimate there is.
+    mx, my = moved if moved is not None else (dx, dy)
+    _follow(camera, mx, my)
+    here = (here[0] + mx, here[1] + my)
+
+    # Low overlap is evidence the map moved, not that it stalled, so the
+    # guard only accuses when it has enough pins to be sure.
+    if moved is not None and abs(mx) < MIN_PAN_PX and abs(my) < MIN_PAN_PX:
+        result._consecutive_dead_pans += 1
+        what = ("the map is not back at its parent's centre" if returning
+                else "skipping this cell")
+        msg = (f"pan of ({dx},{dy}) px moved the map ({mx:.0f},{my:.0f}); "
+               f"{what} ({result._consecutive_dead_pans} in a row).")
+        log.warning(msg)
+        result.warnings.append(msg)
+        if not returning:
+            result.skipped_cells += 1
+        if result._consecutive_dead_pans >= MAX_CONSECUTIVE_DEAD_PANS:
+            raise DeadPan(
+                f"{result._consecutive_dead_pans} pans in a row failed "
+                "to move the map. The gesture is not reaching it, and "
+                "every later cell would re-harvest the same rectangle.")
+        return here, False
+    result._consecutive_dead_pans = 0
+
+    # Close the loop. The fling overshoots by up to 27%; left alone, that
+    # error accumulates and shifts every later cell off its target.
+    err_x, err_y = target[0] - here[0], target[1] - here[1]
+    if moved is not None and (abs(err_x) > PAN_TOLERANCE_PX
+                              or abs(err_y) > PAN_TOLERANCE_PX):
+        log.info("Pan landed (%.0f,%.0f) px off target; correcting.",
+                 err_x, err_y)
+        cx, cy = round(err_x), round(err_y)
+        _pan(device, cx, cy, after)
+        _settle(settle_min_s, settle_max_s)
+        again = _harvest_screen(device)
+        result._screen = again
+        fixed = _measure(after, again)
+        fx, fy = fixed if fixed is not None else (cx, cy)
+        _follow(camera, fx, fy)
+        here = (here[0] + fx, here[1] + fy)
+    return here, True
+
+
 def sweep(device: Device, cell: Cell, max_depth: int = 3,
           min_depth: int = 1,
           verify_pans: bool = False, city: str | None = None,
@@ -778,6 +871,8 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
         apply_drinking_filter(device, settle_min_s, settle_max_s)
 
     pins = _harvest_screen(device)
+    result._screen = pins
+    result._left_at = (0.0, 0.0)
     result.cells_visited += 1
 
     known = {v.name for v in result.venues}
@@ -832,67 +927,29 @@ def sweep(device: Device, cell: Cell, max_depth: int = 3,
     step_x = int(SCREEN_WIDTH // 4 * (1 - CELL_OVERLAP))
     step_y = int((MAP_BOTTOM - MAP_TOP) // 4 * (1 - CELL_OVERLAP))
 
-    for dx, dy in ((-step_x, -step_y), (step_x, -step_y),
+    # Where the map is now, as a content offset from this cell's centre.
+    # A swipe is relative to wherever the map happens to be, so each child is
+    # aimed from `here`, and `here` follows what each pan actually did.
+    here = (0.0, 0.0)
+    for target in ((-step_x, -step_y), (step_x, -step_y),
                    (-step_x, step_y), (step_x, step_y)):
-        before = pins if verify_pans else None
-        _pan(device, dx, dy, pins)
-        _settle(settle_min_s, settle_max_s)
-
-        if not verify_pans:
-            _follow(camera, dx, dy)
-        else:
-            after = _harvest_screen(device)
-            moved_x, moved_y, shared = pin_displacement(before or [], after)
-            measured = (moved_x is not None and moved_y is not None
-                        and shared >= MIN_SHARED_FOR_PAN_CHECK)
-            # Believe the measurement when there is enough overlap to make
-            # one; otherwise the request is the best estimate there is.
-            if measured:
-                _follow(camera, moved_x, moved_y)
-            else:
-                _follow(camera, dx, dy)
-            # Low overlap is evidence the map moved, not that it stalled,
-            # so the guard only accuses when it has enough pins to be sure.
-            stalled = (shared >= MIN_SHARED_FOR_PAN_CHECK
-                       and moved_x is not None and moved_y is not None
-                       and abs(moved_x) < MIN_PAN_PX
-                       and abs(moved_y) < MIN_PAN_PX)
-            if stalled:
-                result._consecutive_dead_pans += 1
-                msg = (f"pan of ({dx},{dy}) px moved the map "
-                       f"({moved_x:.0f},{moved_y:.0f}) across {shared} shared "
-                       f"pin(s); skipping this cell "
-                       f"({result._consecutive_dead_pans} in a row).")
-                log.warning(msg)
-                result.warnings.append(msg)
-                result.skipped_cells += 1
-                if result._consecutive_dead_pans >= MAX_CONSECUTIVE_DEAD_PANS:
-                    raise DeadPan(
-                        f"{result._consecutive_dead_pans} pans in a row failed "
-                        "to move the map. The gesture is not reaching it, and "
-                        "every later cell would re-harvest the same rectangle.")
-                continue
-            result._consecutive_dead_pans = 0
-
-            # Close the loop. The fling overshoots by up to 27%, and that
-            # error was being measured and then ignored, so it accumulated
-            # across a sweep and shifted every later cell off its target.
-            if (moved_x is not None and moved_y is not None
-                    and shared >= MIN_SHARED_FOR_PAN_CHECK):
-                err_x, err_y = dx - moved_x, dy - moved_y
-                if abs(err_x) > PAN_TOLERANCE_PX or abs(err_y) > PAN_TOLERANCE_PX:
-                    log.info("Pan landed (%.0f,%.0f) px off target; correcting.",
-                             err_x, err_y)
-                    _pan(device, int(err_x), int(err_y), after)
-                    _follow(camera, int(err_x), int(err_y))
-                    _settle(settle_min_s, settle_max_s)
-
-        # The pan's own re-query has landed during the settle above, so the
-        # child harvests what is drawn.
+        here, arrived = _move_to(device, here, target, result, camera,
+                                 verify_pans, settle_min_s, settle_max_s)
+        if not arrived:
+            continue
+        # The pan's own re-query has landed during the settle, so the child
+        # harvests what is drawn. It hands the map back at its own centre,
+        # which is `here`.
         sweep(device, cell, max_depth=max_depth, min_depth=min_depth,
               verify_pans=verify_pans,
               city=city, filter_drinking=filter_drinking, camera=camera,
               settle_min_s=settle_min_s, settle_max_s=settle_max_s,
               _depth=_depth + 1, _result=result)
+        here = (here[0] + result._left_at[0], here[1] + result._left_at[1])
 
+    # Hand the map back where this cell found it, so the parent can aim at
+    # its next child from a known place.
+    result._left_at, _ = _move_to(device, here, (0.0, 0.0), result, camera,
+                                  verify_pans, settle_min_s, settle_max_s,
+                                  returning=True)
     return result

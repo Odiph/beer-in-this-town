@@ -360,6 +360,17 @@ sweep to shift every later cell. Smaller drift is left alone -- correcting it
 costs more than the ~34 px cell overlap already absorbs. That is closed-loop, costs two
 dumps, and self-calibrates across zoom levels and devices.
 
+**Measure each pan against the screen just before it.** Until 2026-11-14
+every child pan was measured against the parent's screen, captured once,
+while the swipe itself moves the map from wherever the previous child left
+it. Live on Tel Aviv at depth 1: the second child read as a full step off
+target, the third as a dead pan (skipped, so a quarter of every split cell
+went unsearched), and the camera re-added every earlier child's move, which
+put one cell 5.8 km off until cell anchoring pulled it back. Now each child
+is aimed from where the map really is, corrections are measured too, and
+every cell hands the map back to its own centre, reporting what that pan
+left over, so the parent's reckoning stays closed.
+
 Two things absorb a swipe and leave the map still, both found the hard way:
 
 - **A marker under the finger.** Dragging a pin pans nothing.
