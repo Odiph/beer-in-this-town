@@ -39,34 +39,35 @@ from beer_in_this_town.app_map import (
     require_map_screen,
 )
 
-# A cut-down but faithful dump: the real chrome nodes, three pins, the
-# bottom-sheet card. Bounds and descriptions are verbatim in shape.
+# A cut-down but faithful dump of Untappd 5.0.3's map (captured 2026-11-14):
+# the real chrome nodes, three pins, the venue card. Bounds and descriptions
+# are verbatim in shape. 5.x pins carry no trailing full stop; one here does,
+# because 4.x pins did and the parser still has to cope with either.
 MAP_XML = """<?xml version='1.0' encoding='UTF-8'?>
 <hierarchy>
- <node class="android.widget.Button" content-desc="Back" bounds="[9,48][75,114]"/>
- <node class="android.widget.EditText" text="City, state, or zip code" bounds="[138,48][744,114]"/>
- <node class="android.widget.Button" content-desc="filters" bounds="[756,63][792,99]"/>
- <node class="android.widget.Button" content-desc="Switch to list view" bounds="[828,57][876,105]"/>
- <node class="android.widget.Button" content-desc="VENUES" bounds="[0,120][450,192]"/>
- <node class="android.widget.Button" content-desc="BREWERIES" bounds="[450,120][900,192]"/>
- <node class="android.view.View" content-desc="Google Map" bounds="[0,192][900,1516]"/>
- <node class="android.view.View" content-desc="Lauter." bounds="[449,860][503,922]"/>
+ <node class="android.widget.Button" content-desc="Haifa, Israel" bounds="[18,36][429,102]"/>
+ <node class="android.widget.Button" content-desc="Filter" bounds="[738,36][804,102]"/>
+ <node class="android.widget.Button" content-desc="Switch to list view" bounds="[816,36][882,102]"/>
+ <node class="android.widget.Button" content-desc="Places" bounds="[0,117][450,186]"/>
+ <node class="android.widget.Button" content-desc="Producers" bounds="[450,117][900,186]"/>
+ <node class="android.view.View" content-desc="Google Map" bounds="[0,189][900,1600]"/>
+ <node class="android.view.View" content-desc="Lauter" bounds="[449,860][503,922]"/>
  <node class="android.view.View" content-desc="Schnitt Brewing Company." bounds="[445,849][499,911]"/>
- <node class="android.view.View" content-desc="Ursa - אורסה." bounds="[294,994][348,1056]"/>
- <node class="android.widget.Button" content-desc="Refresh search" bounds="[822,282][888,348]"/>
- <node class="android.widget.Button" content-desc="Reset location" bounds="[822,204][888,270]"/>
- <node class="android.view.ViewGroup" content-desc="Lauter , 10 HaArba'a Street" bounds="[24,1242][876,1414]"/>
- <node class="android.widget.Button" content-desc="View" bounds="[24,1417][876,1492]"/>
- <node class="android.widget.FrameLayout" content-desc="Profile, tab, 5 out of 5" bounds="[666,1516][810,1600]"/>
+ <node class="android.view.View" content-desc="Ursa - אורסה" bounds="[294,994][348,1056]"/>
+ <node class="android.widget.Button" content-desc="Reset location" bounds="[822,201][888,267]"/>
+ <node class="android.view.ViewGroup" content-desc="Lauter, 10 HaArba'a Street Tel Aviv, Category: Bar, Beer Store" bounds="[24,1258][876,1409]"/>
+ <node class="android.widget.Button" content-desc="View Menu" bounds="[42,1422][858,1471]"/>
+ <node class="android.widget.Button" content-desc="Back to Discover" bounds="[322,1504][579,1588]"/>
 </hierarchy>"""
 
+# The 5.x category list: `"Bar, 21"`, no trailing comma.
 FILTER_XML = """<?xml version='1.0' encoding='UTF-8'?>
 <hierarchy>
- <node class="android.widget.TextView" text="Filter by Category" bounds="[132,58][370,99]"/>
- <node class="android.widget.CheckBox" content-desc="Beer Bar, 2, " checked="false" bounds="[0,254][900,336]"/>
- <node class="android.widget.CheckBox" content-desc="Bar, 6, " checked="true" bounds="[0,501][900,584]"/>
- <node class="android.widget.CheckBox" content-desc="Hotel, 4, " checked="false" bounds="[0,584][900,666]"/>
- <node class="android.widget.CheckBox" content-desc="Israeli Restaurant" checked="false" bounds="[0,1574][900,1600]"/>
+ <node class="android.widget.Button" content-desc="Deselect All" bounds="[36,207][870,240]"/>
+ <node class="android.widget.CheckBox" content-desc="Beer Bar, 2" checked="false" bounds="[18,252][882,327]"/>
+ <node class="android.widget.CheckBox" content-desc="Bar, 6" checked="true" bounds="[18,327][882,402]"/>
+ <node class="android.widget.CheckBox" content-desc="Hotel, 4" checked="false" bounds="[18,402][882,477]"/>
+ <node class="android.widget.CheckBox" content-desc="Israeli Restaurant" checked="false" bounds="[18,1527][882,1600]"/>
 </hierarchy>"""
 
 
@@ -87,17 +88,18 @@ def test_the_trailing_full_stop_is_stripped():
 
 
 def test_map_chrome_is_not_a_venue():
-    """`Google Map`, `Refresh search`, `VENUES` and friends are all nodes with
+    """`Google Map`, `Reset location`, `Places` and friends are all nodes with
     a content-desc. Without an exclusion list the sweep harvests the toolbar."""
     names = {p.name for p in pins_in(MAP_XML)}
-    for chrome in ("Google Map", "Refresh search", "Reset location",
-                   "VENUES", "BREWERIES", "Back", "filters", "View"):
+    for chrome in ("Google Map", "Reset location", "Places", "Producers",
+                   "Filter", "Switch to list view", "View Menu",
+                   "Back to Discover", "Haifa, Israel"):
         assert chrome not in names
 
 
 def test_the_bottom_card_is_not_a_pin():
-    """The selected venue also appears as a ViewGroup card with the same name
-    plus its address. Counting it doubles one arbitrary venue per dump."""
+    """The selected venue also appears as a card with the same name plus its
+    address. Counting it doubles one arbitrary venue per dump."""
     assert sum(1 for p in pins_in(MAP_XML) if p.name == "Lauter") == 1
 
 
@@ -143,6 +145,24 @@ def test_category_counts_are_read_with_their_checked_state():
     assert cats["Bar"].count == 6
     assert cats["Bar"].checked is True
     assert cats["Hotel"].checked is False
+
+
+@pytest.mark.parametrize("desc", ["Beer Bar, 2", "Beer Bar, 2, "])
+def test_a_category_row_parses_with_or_without_the_trailing_comma(desc):
+    """Untappd 5.x dropped the trailing comma 4.x printed (`"Beer Bar, 2, "`).
+    A parser that required it read every 5.x row as count-less, so the filter
+    could not tell a populated category from a clipped one."""
+    xml = FILTER_XML.replace('content-desc="Beer Bar, 2"', f'content-desc="{desc}"')
+    cat = categories_in(xml)["Beer Bar"]
+    assert cat.count == 2
+
+
+def test_a_compound_category_name_keeps_its_commas():
+    """A row such as `"Bar, Diner, 3"` is one category with a comma in its
+    name; only the final number is the count."""
+    xml = FILTER_XML.replace('content-desc="Hotel, 4"', 'content-desc="Bar, Diner, 3"')
+    cats = categories_in(xml)
+    assert cats["Bar, Diner"].count == 3
 
 
 def test_a_category_with_no_count_is_still_reported():

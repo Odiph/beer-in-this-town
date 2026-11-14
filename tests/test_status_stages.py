@@ -92,7 +92,7 @@ def test_a_city_chosen_for_search_offers_the_search_sweep(s):
                        '--method search --json']
     assert st["blocked_on"] is None
     assert st["emulator"] is None, "a search sweep needs no emulator"
-    assert not any("Discover -> View Map" in h for h in hints)
+    assert not any("Discover -> Map" in h for h in hints)
     assert_safe(actions)
 
 
@@ -101,7 +101,7 @@ def test_a_map_sweep_is_offered_with_its_emulator_hint(s):
     st, actions, hints = look(s)
     assert actions == ['python -m beer_in_this_town sweep --city "Tel Aviv" '
                        '--method map --json']
-    assert any("Discover -> View Map" in h for h in hints)
+    assert any("Discover -> Map" in h for h in hints)
 
 
 def test_the_last_runs_method_outranks_the_intent(s):
@@ -202,7 +202,7 @@ def test_an_unready_emulator_blocks_the_sweep(s):
     assert actions == [], "doctor changes nothing, so offering it would loop"
     joined = " ".join(hints)
     assert "adb_on_path" in joined and "platform-tools" in joined
-    assert "Discover -> View Map" in joined
+    assert "Discover -> Map" in joined
 
 
 def test_status_works_with_no_adb_installed(s, monkeypatch, capsys):

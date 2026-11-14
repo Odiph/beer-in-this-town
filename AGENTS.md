@@ -132,11 +132,14 @@ The rest is theirs. Message:
 python -m beer_in_this_town doctor --json
 ```
 
-`doctor` runs four emulator checks, in order: `adb_on_path`,
-`device_connected`, `untappd_installed` (package `com.untappdllc.app`),
+`doctor` runs six emulator checks, in order: `adb_on_path`,
+`device_connected`, `android_version` (SDK 26, Android 8.0, or newer: what
+Untappd 5 needs), `untappd_installed` (package `com.untappdllc.app`),
+`untappd_version` (5.x or newer: the only app the sweep drives), and
 `screen_size` (1600x900 or 900x1600). They are in `data.emulator`, a list of
 `{name, ok, detail, remedy}` always in that order, and `data.emulator_ready`
-is true only when all four pass. A check after a failing one is reported as
+is true only when all of them pass. The two version checks were added after
+the first four; read the list by `name`, not by position. A check after a failing one is reported as
 not checked rather than run. Take the **first** failing one and give the
 human its `remedy`. Message, when nothing is set up yet:
 
@@ -211,7 +214,7 @@ spelling, and the envelope says so in `warnings`.
 
 ### 5b. Open the map — human, before each `--method map` sweep
 
-> In BlueStacks, open Untappd, tap Discover, then View Map, and close
+> In BlueStacks, open Untappd, tap Discover, then Map, and close
 > anything covering the map. Please don't touch the emulator until I say the
 > sweep is done.
 
@@ -623,7 +626,7 @@ Rules for agents:
 - Signing in to Google and Untappd in the tool's Chrome profile (`ui` or
   `bootstrap`).
 - Choosing the city.
-- Opening Discover → View Map before each sweep, and leaving the emulator
+- Opening Discover → Map before each sweep, and leaving the emulator
   alone while it runs.
 - Creating the target saved list in Google Maps.
 - Deciding whether to use `pin`, `notes` and `closures` at all.

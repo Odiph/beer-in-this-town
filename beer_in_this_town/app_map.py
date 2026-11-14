@@ -23,6 +23,18 @@ that looks contradictory until you have it:
 - Panning re-draws; it does **not** re-query. A pin count falling after a pan
   is clipping, not a smaller city.
 
+**Untappd 5.x changed two of those**, measured 2026-11-14 on 5.0.3:
+
+- A pan **does** re-query, by itself, within about 4 s. `Refresh search` is
+  gone. Netanya searched alone drew 11 pins; panned south it drew 28, 27 of
+  them new.
+- The category counts describe **the last city search only**. They do not
+  move when a pan re-queries (Haifa: 29 categories summing to 50, before and
+  after), so the per-view pin count is the only saturation signal left.
+
+The pins, the screen check and the ~60 cap are unchanged: filtered Tel Aviv
+still draws 52-56 pins per view.
+
 **The result set is capped at 60.** Measured across seven cities on three
 continents: Portland 60, Reykjavik 60, Berlin 58, Tel Aviv 58, Jerusalem 45,
 Haifa 37, Eilat 16. So a cell that comes back near the cap is truncated and
@@ -75,17 +87,27 @@ TRUNCATION_THRESHOLD = 55
 # Nodes on the map that carry a `content-desc` and are not venues. Without
 # this the sweep harvests the toolbar: `Google Map` and `Refresh search` look
 # exactly like pins to a naive reader.
+#
+# Pins are `View` nodes and most of these are `Button`s, so the class check
+# already excludes them; this list is the second line, for a release that
+# changes a control's class. 4.x labels are kept: they cost nothing.
 _CHROME = frozenset({
-    "Back", "filters", "Switch to list view", "Switch to map view",
-    "VENUES", "BREWERIES", "Google Map", "My Location", "Reset location",
-    "Refresh search", "View",
+    # Untappd 5.x
+    "Filter", "Switch to list view", "Switch to map view", "Places",
+    "Producers", "Google Map", "Reset location", "View Menu", "View",
+    "Back to Discover", "Close", "Clear",
+    # Untappd 4.x
+    "Back", "filters", "VENUES", "BREWERIES", "My Location", "Refresh search",
 })
 
 _BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 
-# `"Beer Bar, 2, "` -- name, count, trailing comma. The count is absent on a
-# row clipped by the screen edge.
-_CATEGORY = re.compile(r"^(?P<name>.+?),\s*(?P<count>\d+),")
+# A category row: `"Bar, 21"` in Untappd 5.x, `"Beer Bar, 2, "` in 4.x. The
+# name is everything before the LAST number, so a compound name such as
+# `"Bar, Diner, 3"` keeps its commas. The count is absent on a row clipped by
+# the screen edge. `app_categories` keys its taps with this same pattern; two
+# copies that drift apart key the rows differently and every lookup misses.
+CATEGORY_LABEL = re.compile(r"^(?P<name>.+),\s*(?P<count>\d+),?\s*$")
 
 
 class WrongScreen(RuntimeError):
@@ -220,7 +242,7 @@ def categories_in(xml: str) -> dict[str, Category]:
         if not desc:
             continue
         checked = node.get("checked") == "true"
-        m = _CATEGORY.match(desc)
+        m = CATEGORY_LABEL.match(desc)
         if m:
             out[m.group("name").strip()] = Category(
                 name=m.group("name").strip(),

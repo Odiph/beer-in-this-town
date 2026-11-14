@@ -1,11 +1,12 @@
-"""Is the emulator ready for a sweep? Four cheap questions, asked in order.
+"""Is the emulator ready for a sweep? Six cheap questions, asked in order.
 
 `sweep` drives the Untappd Android app through `adb`. When any link in that
 chain is missing the sweep used to find out several minutes in, as an
 `adb_unavailable` or an `app_screen_unexpected` whose remedy could only guess
 at the cause. These checks name the link:
 
-    adb_on_path  ->  device_connected  ->  untappd_installed  ->  screen_size
+    adb_on_path  ->  device_connected  ->  android_version
+                 ->  untappd_installed  ->  untappd_version  ->  screen_size
 
 Each later check needs the earlier ones, so a failure marks the rest as not
 checked rather than running them into a confusing second error. All four are
@@ -16,6 +17,11 @@ anything. `status` calls this, and `status` is documented as free and
 side-effect-free. (`adb devices` may start the adb server daemon; that is the
 one unavoidable effect, and it is the same one any adb command has.)
 
+The two version checks were added after an hour lost on 2026-11-14: the
+Android 7.1 BlueStacks instance never offered the Untappd 5 update, because
+5.x needs Android 8 (SDK 26), and nothing said so. The sweep drives only
+5.x's screens, so a 4.x app would fail minutes in instead.
+
 Never raises. A check that cannot run is a failed check with a remedy a
 stranger can follow, because `status` must still answer on a machine with no
 adb installed at all.
@@ -23,6 +29,7 @@ adb installed at all.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -41,8 +48,14 @@ EXPECTED_SIZE = (SCREEN_WIDTH, SCREEN_HEIGHT)
 DEVICES_TIMEOUT_S = 8.0
 SHELL_TIMEOUT_S = 5.0
 
-CHECK_NAMES = ("adb_on_path", "device_connected", "untappd_installed",
-               "screen_size")
+CHECK_NAMES = ("adb_on_path", "device_connected", "android_version",
+               "untappd_installed", "untappd_version", "screen_size")
+
+# Untappd 5.x declares minSdk 26 (Android 8.0). Measured on 5.0.3.
+MIN_SDK = 26
+# The sweep drives Untappd 5.x's map, location sheet and filter panel.
+MIN_APP_MAJOR = 5
+_VERSION_NAME = re.compile(r"versionName=(\d+)(?:\.[\w.]*)?")
 
 # (returncode, stdout+stderr). Injected so every branch is testable without
 # an emulator.
@@ -136,6 +149,39 @@ def _untappd_installed(serial: str, run: Runner) -> Check:
         "and sign in to your Untappd account in the app.")
 
 
+def _android_version(serial: str, run: Runner) -> Check:
+    code, out = run(["adb", "-s", serial, "shell", "getprop",
+                     "ro.build.version.sdk"], SHELL_TIMEOUT_S)
+    raw = out.strip()
+    if code == 0 and raw.isdigit() and int(raw) >= MIN_SDK:
+        return Check("android_version", True, f"SDK {raw}", "")
+    detail = (f"Android SDK {raw} on {serial}; Untappd 5 needs {MIN_SDK} "
+              f"(Android 8.0) or newer." if code == 0 and raw.isdigit()
+              else f"could not read the Android version: {raw[:200]!r}")
+    return Check(
+        "android_version", False, detail,
+        "Untappd 5 cannot be installed on this emulator, and the Play Store "
+        "will not say why. In the BlueStacks Multi-Instance Manager create a "
+        "new instance with Android 9 (Pie) 64-bit or newer, set it up as in "
+        "docs/FLOW.md step 2, and point BEERTOWN_ADB_SERIAL at its address.")
+
+
+def _untappd_version(serial: str, run: Runner) -> Check:
+    code, out = run(["adb", "-s", serial, "shell", "dumpsys", "package",
+                     MAP_PACKAGE], SHELL_TIMEOUT_S)
+    m = _VERSION_NAME.search(out) if code == 0 else None
+    if m and int(m.group(1)) >= MIN_APP_MAJOR:
+        return Check("untappd_version", True, m.group(0).split("=", 1)[1], "")
+    detail = (f"Untappd {m.group(0).split('=', 1)[1]} is installed; the sweep "
+              f"needs {MIN_APP_MAJOR}.x or newer." if m
+              else f"could not read the Untappd version: {out.strip()[:200]!r}")
+    return Check(
+        "untappd_version", False, detail,
+        "Open the Play Store inside BlueStacks, find Untappd and tap Update. "
+        "If no update is offered, the emulator's Android is too old; see the "
+        "android_version check.")
+
+
 def _parse_size(out: str) -> tuple[int, int] | None:
     """`wm size` prints a Physical line and, when set, an Override line.
 
@@ -181,14 +227,16 @@ def check_emulator(serial: str | None = None, *,
                    run: Runner | None = None,
                    which: Callable[[str], str | None] | None = None,
                    ) -> list[Check]:
-    """The four emulator checks, in order. Never raises."""
+    """The emulator checks, in `CHECK_NAMES` order. Never raises."""
     serial = serial or default_serial()
     run = run or _default_run
     which = which or shutil.which
     steps: list[tuple[str, Callable[[], Check]]] = [
         ("adb_on_path", lambda: _adb_on_path(which)),
         ("device_connected", lambda: _device_connected(serial, run)),
+        ("android_version", lambda: _android_version(serial, run)),
         ("untappd_installed", lambda: _untappd_installed(serial, run)),
+        ("untappd_version", lambda: _untappd_version(serial, run)),
         ("screen_size", lambda: _screen_size(serial, run)),
     ]
     out: list[Check] = []

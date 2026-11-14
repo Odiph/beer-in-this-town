@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .app_map import Category
+from .app_map import CATEGORY_LABEL, Category
 from .classify import KEEP_CATEGORIES
 
 # Categories that mean "a craft-beer venue could be here". Matched as whole
@@ -37,10 +37,10 @@ DRINKING_CATEGORIES = KEEP_CATEGORIES
 
 _BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 
-# `"Beer Bar, 2, "` -- the same shape `app_map.categories_in` parses. Both
-# must strip the count identically or the two dictionaries key differently
-# and every lookup misses.
-_LABEL = re.compile(r"^(?P<name>.+?),\s*\d+,")
+# The same pattern `app_map.categories_in` parses with -- shared, not copied:
+# both must strip the count identically or the two dictionaries key
+# differently and every lookup misses.
+_LABEL = CATEGORY_LABEL
 
 
 class CategoryPanelError(RuntimeError):
@@ -72,11 +72,27 @@ def is_drinking_category(label: str) -> bool:
     return any(p in DRINKING_CATEGORIES for p in parts)
 
 
+# The control only the category list has: a bulk toggle that reads
+# `Deselect All` while anything is ticked and `Select All` once nothing is.
+# Found live: a guard that knew only the first label refused the panel the
+# moment the driver pressed it. In Untappd 5.x `Filter by Category` is a
+# button on the filter panel one level *above* the list, so it proves
+# nothing about where we are.
+DESELECT_ALL = "Deselect All"
+SELECT_ALL = "Select All"
+PANEL_MARKERS = (DESELECT_ALL, SELECT_ALL)
+
+
+def _has_label(xml: str, label: str) -> bool:
+    return f'"{label}"' in xml or f"'{label}'" in xml
+
+
 def _require_panel(xml: str) -> None:
-    if "Filter by Category" not in xml:
+    if not any(_has_label(xml, m) for m in PANEL_MARKERS):
         raise CategoryPanelError(
-            "no `Filter by Category` heading -- this is not the category "
-            "panel, and tapping through it would toggle whatever is there.")
+            f"no `{DESELECT_ALL}` / `{SELECT_ALL}` control -- this is not the "
+            "category list, and tapping through it would toggle whatever is "
+            "there.")
 
 
 def plan_category_taps(categories: dict[str, Category],

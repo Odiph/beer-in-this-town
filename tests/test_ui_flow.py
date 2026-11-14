@@ -69,7 +69,7 @@ def test_a_fresh_city_shows_four_commands_and_nothing_done(project):
 
 def test_the_sweep_names_its_manual_precondition(project):
     sweep = flow.build_card("Tel Aviv", method="map")["stages"][0]
-    assert "Discover -> View Map" in sweep["precondition"]
+    assert "Discover -> Map" in sweep["precondition"]
     assert "--here" in sweep["options"]
 
 
@@ -200,8 +200,7 @@ def test_a_raising_check_is_reported_not_swallowed(monkeypatch):
 def test_the_stand_in_checks_never_raise_without_adb(monkeypatch):
     monkeypatch.setattr(emulator_checks.shutil, "which", lambda name: None)
     found = emulator_checks.check_emulator()
-    assert [c.name for c in found] == [
-        "adb_on_path", "device_connected", "untappd_installed", "screen_size"]
+    assert [c.name for c in found] == list(emulator_checks.CHECK_NAMES)
     assert not found[0].ok and found[0].remedy
     assert emulator_checks.emulator_ready(found) is False
 
@@ -276,8 +275,7 @@ def test_the_state_carries_every_step_card(board):
 def test_check_again_runs_the_emulator_checks_and_shows_them(board,
                                                              monkeypatch):
     fake = [emulator_checks.Check(n, True, "fine", "") for n in
-            ("adb_on_path", "device_connected", "untappd_installed",
-             "screen_size")]
+            emulator_checks.CHECK_NAMES]
     monkeypatch.setattr(emulator_checks, "check_emulator",
                         lambda serial=None: fake)
     base, token = board
@@ -287,7 +285,7 @@ def test_check_again_runs_the_emulator_checks_and_shows_them(board,
     state = _wait_for_job(base, token)
     card = state["cards"]["emulator"]
     assert card["checked"] and card["ready"]
-    assert len(card["checks"]) == 4
+    assert len(card["checks"]) == 6
     row = next(c for c in state["checks"] if c["key"] == "emulator")
     assert row["state"] == "ok"
 

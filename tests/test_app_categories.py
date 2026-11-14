@@ -31,14 +31,15 @@ from beer_in_this_town.app_map import categories_in
 
 def panel(rows):
     nodes = "".join(
-        f'<node class="android.widget.CheckBox" content-desc="{name}, {n}, " '
+        f'<node class="android.widget.CheckBox" content-desc="{name}, {n}" '
         f'checked="{str(chk).lower()}" bounds="[0,{254 + i * 82}][900,{336 + i * 82}]"/>'
         for i, (name, n, chk) in enumerate(rows))
+    # Untappd 5.x's category list: `Deselect All` above `"Bar, 21"` rows.
     return ("<?xml version='1.0'?><hierarchy>"
-            '<node class="android.widget.TextView" text="Filter by Category"'
-            ' bounds="[132,58][370,99]"/>'
-            '<node class="android.widget.Button" content-desc="DESELECT ALL"'
-            ' bounds="[24,218][165,242]"/>'
+            '<node class="android.widget.Button" content-desc="Apply"'
+            ' bounds="[763,36][882,102]"/>'
+            '<node class="android.widget.Button" content-desc="Deselect All"'
+            ' bounds="[36,207][870,240]"/>'
             f"{nodes}</hierarchy>")
 
 
@@ -113,7 +114,7 @@ def test_a_row_with_no_count_is_still_actionable():
     """The bottom row is clipped by the screen edge and never renders its
     number. Skipping it would leave a junk category selected."""
     xml = ("<?xml version='1.0'?><hierarchy>"
-           '<node class="android.widget.TextView" text="Filter by Category" bounds="[1,1][2,2]"/>'
+           '<node class="android.widget.Button" content-desc="Deselect All" bounds="[1,1][2,2]"/>'
            '<node class="android.widget.CheckBox" content-desc="Supermarket"'
            ' checked="true" bounds="[0,1574][900,1600]"/></hierarchy>')
     assert [t.name for t in plan_category_taps(categories_in(xml), xml)] == ["Supermarket"]
@@ -129,3 +130,25 @@ def test_a_dump_that_is_not_the_category_panel_is_refused():
     whatever happens to sit at those coordinates."""
     with pytest.raises(CategoryPanelError):
         plan_category_taps({}, "<?xml version='1.0'?><hierarchy/>")
+
+
+def test_the_filter_panel_one_level_up_is_not_the_category_panel():
+    """In Untappd 5.x `Filter by Category` is a button on the *filter* panel,
+    one screen above the category list. Accepting it as proof of the category
+    list would let the driver tap rows that are not there -- landing on
+    `Filter by Menu Offering` or `Has Local Badge` instead."""
+    filter_panel = ("<?xml version='1.0'?><hierarchy>"
+                    '<node class="android.widget.Button" content-desc="Filter by Category"'
+                    ' bounds="[18,135][882,210]"/>'
+                    '<node class="android.widget.CheckBox" content-desc="Has Local Badge"'
+                    ' checked="true" bounds="[18,285][882,360]"/></hierarchy>')
+    with pytest.raises(CategoryPanelError):
+        plan_category_taps(categories_in(filter_panel), filter_panel)
+
+
+def test_the_panel_is_recognised_after_deselect_all():
+    """`Deselect All` becomes `Select All` once pressed. Found live on Untappd
+    5.0.3: a guard that knew only the first label refused the panel straight
+    after the driver pressed it, and the sweep stopped."""
+    xml = panel([("Bar", 6, False)]).replace('"Deselect All"', '"Select All"')
+    assert [t.name for t in plan_category_taps(categories_in(xml), xml)] == ["Bar"]

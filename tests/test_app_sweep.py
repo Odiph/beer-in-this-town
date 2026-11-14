@@ -30,6 +30,8 @@ from beer_in_this_town.app_sweep import (
 )
 from beer_in_this_town.app_sweep import sweep as library_sweep
 
+from .untappd5 import ScreenApp
+
 # The library defaults are the measured ones (min_depth 1, filter on). Most
 # tests here exercise the recursion and the harvest in isolation, so they opt
 # out explicitly; the tests below that check the defaults use library_sweep.
@@ -38,7 +40,8 @@ sweep = partial(library_sweep, min_depth=0, filter_drinking=False)
 CHROME = """
  <node class="android.view.View" content-desc="Google Map" bounds="[0,192][900,1516]"/>
  <node class="android.widget.Button" content-desc="Switch to list view" bounds="[828,57][876,105]"/>
- <node class="android.widget.Button" content-desc="Refresh search" bounds="[822,282][888,348]"/>
+ <node class="android.widget.Button" content-desc="Filter" bounds="[738,36][804,102]"/>
+ <node class="android.widget.Button" content-desc="Tel Aviv-Yafo, Israel" bounds="[18,36][429,102]"/>
 """
 
 
@@ -91,13 +94,14 @@ CELL = Cell(left=34.74, right=34.84, bottom=32.03, top=32.12)
 
 # --- the happy path -------------------------------------------------------
 
-def test_every_cell_re_searches_before_it_harvests():
-    """Pins are clipped to the viewport; the cap is a property of the result
-    set. A cell that reads a stale, clipped result set undercounts and calls
-    itself complete."""
+def test_an_unfiltered_cell_is_harvested_without_tapping_anything():
+    """Untappd 5.x has no `Refresh search`: the city search has already
+    queried the root viewport, so there is nothing to press. A tap here would
+    land on whatever sits where the 4.x button used to be."""
     dev = FakeDevice([dump_with(["Lauter"])])
-    sweep(dev, CELL, settle_max_s=0)
-    assert dev.actions and dev.actions[0].startswith("tap")
+    out = sweep(dev, CELL, settle_max_s=0)
+    assert not any(a.startswith("tap") for a in dev.actions), dev.actions
+    assert {v.name for v in out.venues} == {"Lauter"}
 
 
 def test_a_cell_under_the_cap_is_taken_whole():
@@ -272,54 +276,84 @@ def test_the_result_records_where_it_looked_and_what_it_doubted():
     assert out.warnings
 
 
-def test_refresh_is_pressed_for_each_cell():
-    """Panning redraws; it does not re-query. Without `Refresh search` every
-    child cell shows slices of the parent's result set and the sweep finds
-    nothing new."""
+def test_a_child_cell_is_reached_by_panning_alone():
+    """In Untappd 5.x a pan re-queries by itself. Measured 2026-11-14: four
+    quarter-screen pans over filtered Tel Aviv saw 71 distinct venues, more
+    than one result set holds, and each view's pins were final within 4 s.
+    So a child cell is a pan and a settle, with no tap at all."""
     full = dump_with([f"v{i}" for i in range(58)])
     dev = FakeDevice([full] + [dump_with(["a"])] * 40)
     sweep(dev, CELL, settle_max_s=0, max_depth=1)
-    # One per cell, the root included. Found the hard way: the first live
-    # sweep inherited a panned map, saw 56 of a 58-venue result set, and
-    # concluded the cell was complete. A cell must re-search before it
-    # believes its own pin count.
-    assert sum(1 for a in dev.actions if a.startswith("tap")) == 5
+    # Four children, then one pan handing the map back to the parent.
+    assert sum(1 for a in dev.actions if a.startswith("swipe")) == 5
+    assert not any(a.startswith("tap") for a in dev.actions), dev.actions
 
 
 # --- the category filter --------------------------------------------------
 
-def _panel(rows):
-    nodes = "".join(
-        f'<node class="android.widget.CheckBox" content-desc="{n}, {c}, " '
-        f'checked="{str(k).lower()}" bounds="[0,{254 + i * 82}][900,{336 + i * 82}]"/>'
-        for i, (n, c, k) in enumerate(rows))
-    return ("<?xml version='1.0'?><hierarchy>"
-            '<node class="android.widget.TextView" text="Filter by Category"'
-            ' bounds="[132,58][370,99]"/>' + nodes + "</hierarchy>")
+BEER = [("Bar", 21, True), ("Liquor Store", 7, True), ("Pub", 7, True)]
+JUNK = [("Park", 7, True), ("Hotel", 6, True), ("Supermarket", 2, True)]
 
 
-def test_the_filter_turns_drinking_categories_on_and_junk_off():
-    """Only 6 of the 17 categories a Tel Aviv search returns are drinking
-    places, so most of a 58-slot result set goes to parks and hotels. It
-    cannot be fixed afterwards: pins carry no category."""
+def test_the_filter_keeps_only_drinking_categories():
+    """Only a third of the categories a Tel Aviv search returns are places you
+    drink, so most of a 58-slot result set goes to parks and hotels. It cannot
+    be fixed afterwards: pins carry no category."""
     from beer_in_this_town.app_sweep import apply_drinking_filter
 
-    settled = _panel([("Bar", 6, True), ("Supermarket", 2, False)])
-    dev = FakeDevice([_panel([("Bar", 6, False), ("Supermarket", 2, True)]), settled])
-    kept = apply_drinking_filter(dev, settle_max_s=0)
-    assert kept == ["Bar"]
-    # Two toggles, plus filters / category row / APPLY / SHOW RESULTS.
-    assert sum(1 for a in dev.actions if a.startswith("tap")) >= 6
+    app = ScreenApp(categories=BEER + JUNK)
+    kept = apply_drinking_filter(app, settle_max_s=0)
+    assert sorted(app.applied) == ["Bar", "Liquor Store", "Pub"]
+    assert kept == ["Bar", "Liquor Store", "Pub"]
+    assert app.screen == "map", "Show Results should land back on the map"
 
 
-def test_the_filter_stops_when_the_panel_stops_changing():
-    """The panel scrolls, so the driver must know when it has reached the
-    bottom rather than scrolling forever."""
+def test_the_filter_starts_from_deselect_all():
+    """Every category arrives ticked. `Deselect All` turns them off in one
+    tap; toggling seventy rows off one by one is seventy chances to miss."""
     from beer_in_this_town.app_sweep import apply_drinking_filter
 
-    dev = FakeDevice([_panel([("Bar", 6, True)])])
-    apply_drinking_filter(dev, settle_max_s=0)
-    assert sum(1 for a in dev.actions if a.startswith("swipe")) <= 1
+    app = ScreenApp(categories=BEER + JUNK)
+    apply_drinking_filter(app, settle_max_s=0)
+    taps = [a for a in app.actions if a.startswith("tap:")]
+    assert taps.index("tap:Deselect All") < taps.index("tap:Bar, 21")
+    assert "tap:Park, 7" not in taps
+
+
+def test_the_filter_does_not_select_all_when_the_list_opens_cleared():
+    """A list left cleared by an earlier run opens showing `Select All`.
+    Pressing the bulk button then would tick every category -- the opposite
+    of what the pass assumes."""
+    from beer_in_this_town.app_sweep import apply_drinking_filter
+
+    cleared = [(n, c, False) for n, c, _ in BEER + JUNK]
+    app = ScreenApp(categories=cleared)
+    apply_drinking_filter(app, settle_max_s=0)
+    assert "tap:Select All" not in app.actions
+    assert sorted(app.applied) == ["Bar", "Liquor Store", "Pub"]
+
+
+def test_the_filter_reaches_rows_below_the_fold_and_then_stops():
+    """The list scrolls. A drinking category on the second page must still be
+    ticked, and the driver must notice the bottom rather than scroll forever."""
+    from beer_in_this_town.app_sweep import MAX_CATEGORY_PASSES, apply_drinking_filter
+
+    rows = [(f"Junk {i}", 1, True) for i in range(30)] + [("Brewery", 3, True)]
+    app = ScreenApp(categories=rows)
+    apply_drinking_filter(app, settle_max_s=0)
+    assert app.applied == ["Brewery"]
+    assert sum(1 for a in app.actions if a.startswith("swipe")) < MAX_CATEGORY_PASSES
+
+
+def test_the_filter_refuses_when_its_button_is_not_on_screen():
+    """Every control is found by its label. If `Filter` is not there, the map
+    is not in front of us, and a tap at its old position hits something else."""
+    from beer_in_this_town.app_sweep import apply_drinking_filter
+
+    app = ScreenApp(screen="elsewhere")
+    with pytest.raises(WrongScreen, match="Filter"):
+        apply_drinking_filter(app, settle_max_s=0)
+    assert not any(a.startswith("tap") for a in app.actions)
 
 
 # --- navigation guards ----------------------------------------------------
@@ -350,14 +384,52 @@ def test_navigation_relaunches_rather_than_pressing_back():
     assert not any("keyevent" in a for a in dev.actions)
 
 
-def test_a_city_search_checks_the_screen_before_typing():
+def test_a_city_search_goes_through_the_location_sheet():
+    """Untappd 5.x moved the search box into a "Choose Location" sheet behind
+    the place name at the top of the map. Enter runs the search."""
     from beer_in_this_town.app_sweep import search_city
 
-    dev = FakeDevice([dump_with(["Lauter"])])
-    search_city(dev, "Tel Aviv", settle_max_s=0)
-    order = [a for a in dev.actions if a.startswith(("tap", "type", "enter"))]
-    assert "type(Tel Aviv)" in order
-    assert order.index("type(Tel Aviv)") < order.index("enter")
+    app = ScreenApp(place="Haifa, Israel")
+    search_city(app, "Tel Aviv", settle_max_s=0)
+    assert app.searched == ["Tel Aviv"]
+    assert app.screen == "map"
+    order = app.actions
+    assert order.index("tap:Haifa, Israel") < order.index("type:Tel Aviv") < order.index("enter")
+
+
+def test_a_city_search_clears_text_left_in_the_box():
+    """The sheet can reopen with the last query still typed. Typing after it
+    would search for `HaifaTel Aviv`."""
+    from beer_in_this_town.app_sweep import search_city
+
+    app = ScreenApp(typed="Haifa")
+    search_city(app, "Tel Aviv", settle_max_s=0)
+    assert app.searched == ["Tel Aviv"]
+    assert "tap:Clear" in app.actions
+
+
+def test_a_city_search_never_types_unless_the_sheet_opened():
+    """The sheet is drawn over the map and the map's nodes stay in the dump,
+    so the map check alone cannot tell it is open. If `Choose Location` is not
+    there, typing would go into whatever has focus."""
+    from beer_in_this_town.app_sweep import search_city
+
+    app = ScreenApp()
+    app._on_tap = lambda label: None          # the location button does nothing
+    with pytest.raises(WrongScreen, match="Choose Location"):
+        search_city(app, "Tel Aviv", settle_max_s=0)
+    assert not any(a.startswith("type") for a in app.actions)
+
+
+def test_a_search_that_leaves_the_sheet_open_is_not_a_city():
+    """Enter on a name the app cannot place leaves the sheet up. Harvesting
+    then would read the map underneath -- the previous city -- as this one."""
+    from beer_in_this_town.app_sweep import search_city
+
+    app = ScreenApp()
+    app.press_enter = lambda: app.actions.append("enter")   # nothing happens
+    with pytest.raises(WrongScreen, match="Choose Location"):
+        search_city(app, "Nowhere", settle_max_s=0)
 
 
 # --- the resume journal ---------------------------------------------------
@@ -406,32 +478,15 @@ def test_an_unreadable_journal_starts_fresh_rather_than_crashing(tmp_path, monke
     assert app_sweep.load_journal("Tel Aviv").venues == []
 
 
-def test_a_filtered_sweep_refilters_every_cell():
-    """`Refresh search` clears the category filter -- measured: 9 categories
-    checked before it, all 17 after. A sweep that filtered once and then
-    refreshed per cell came back entirely unfiltered, with parks and hotels
-    in the output and zero new venues."""
-    from beer_in_this_town import app_sweep
-
-    panel = ("<?xml version='1.0'?><hierarchy>"
-             '<node class="android.widget.TextView" text="Filter by Category"'
-             ' bounds="[132,58][370,99]"/>'
-             '<node class="android.widget.CheckBox" content-desc="Bar, 6, "'
-             ' checked="true" bounds="[0,254][900,336]"/></hierarchy>')
-    # One panel dump per pass: the driver re-reads after scrolling.
-    dev = FakeDevice([panel, panel, dump_with(["Lauter"])])
-    sweep(dev, CELL, settle_max_s=0, filter_drinking=True)
-    taps = [a for a in dev.actions if a.startswith("tap")]
-    assert f"tap({app_sweep.FILTERS_BUTTON[0]},{app_sweep.FILTERS_BUTTON[1]})" in taps
-
-
-def test_an_unfiltered_sweep_still_just_refreshes():
-    from beer_in_this_town import app_sweep
-
-    dev = FakeDevice([dump_with(["Lauter"])])
-    sweep(dev, CELL, settle_max_s=0)
-    taps = [a for a in dev.actions if a.startswith("tap")]
-    assert taps == [f"tap({app_sweep.REFRESH_BUTTON[0]},{app_sweep.REFRESH_BUTTON[1]})"]
+def test_a_filtered_sweep_filters_once_not_per_cell():
+    """In Untappd 5.x the filter survives the automatic re-query. Measured
+    2026-11-14: filtered Tel Aviv, panned away and back, came back with 52
+    pins and still no park, market or hotel. (4.x was the opposite: its
+    `Refresh search` cleared the filter, so every cell had to refilter.)"""
+    app = ScreenApp(pins=tuple(f"v{i}" for i in range(58)), categories=BEER + JUNK)
+    sweep(app, CELL, settle_max_s=0, max_depth=1, filter_drinking=True)
+    assert app.actions.count("tap:Filter") == 1
+    assert sum(1 for a in app.actions if a.startswith("swipe(")) >= 4
 
 
 # --- overlap at the seams -------------------------------------------------
@@ -516,7 +571,8 @@ def test_a_pan_within_tolerance_is_left_alone():
                       offset=-step_x - 5, yoff=-step_y - 5)
     dev = FakeDevice([full, close] + [dump_with(["x"])] * 40)
     sweep(dev, CELL, settle_max_s=0, max_depth=1, verify_pans=True)
-    assert len([a for a in dev.actions if a.startswith("swipe")]) == 4
+    # Four children and the hand-back; no corrective pan among them.
+    assert len([a for a in dev.actions if a.startswith("swipe")]) == 5
 
 
 # --- a sparse wide cell is not a complete one -----------------------------
@@ -615,36 +671,38 @@ def test_the_camera_follows_the_sweep_as_it_pans():
 # a crashed sweep had left open, and recovery then tapped `VIEW_MAP_ROW`'s
 # remembered coordinate on that panel -- a blind tap on an unknown screen,
 # landing on a checkbox. The fix has two halves: the app really restarts
-# (see test_adb_device), and `View Map` is found, not assumed.
+# (see test_adb_device), and the `Map` button is found, not assumed.
 
+# Untappd 5.x's Discover: the way to the map is a `Map` button, not 4.x's
+# "View Map" row.
 DISCOVER = ("<?xml version='1.0'?><hierarchy>"
-            "<node class='android.widget.TextView' text='Discover' "
-            "bounds='[0,40][300,100]'/>"
-            "<node class='android.widget.TextView' text='View Map' "
-            "bounds='[120,400][400,440]'/>"
+            "<node class='android.widget.Button' content-desc='Discover' "
+            "bounds='[180,1516][360,1600]'/>"
+            "<node class='android.widget.Button' content-desc='Map' "
+            "bounds='[389,1425][512,1509]'/>"
             "</hierarchy>")
 
 FILTER_PANEL = ("<?xml version='1.0'?><hierarchy>"
                 "<node class='android.widget.CheckBox' "
-                "content-desc='Beer Garden, 2, ' bounds='[0,360][900,420]'/>"
+                "content-desc='Beer Garden, 2' bounds='[0,360][900,420]'/>"
                 "</hierarchy>")
 
 
-def test_relaunch_taps_view_map_where_it_actually_is():
+def test_relaunch_taps_the_map_button_where_it_actually_is():
     from beer_in_this_town.app_sweep import ensure_map_screen
 
     dev = FakeDevice([DISCOVER, dump_with(["Lauter"])],
                      focus="com.uncube.launcher3")
     ensure_map_screen(dev, settle_max_s=0)
-    assert "tap(260,420)" in dev.actions, dev.actions
+    assert "tap(450,1467)" in dev.actions, dev.actions
 
 
 def test_relaunch_onto_an_unknown_screen_raises_without_tapping():
-    """No `View Map`, no tap. A guess here lands on whatever is under it."""
+    """No `Map` button, no tap. A guess here lands on whatever is under it."""
     from beer_in_this_town.app_sweep import ensure_map_screen
 
     dev = FakeDevice([FILTER_PANEL], focus="com.uncube.launcher3")
-    with pytest.raises(WrongScreen, match="View Map"):
+    with pytest.raises(WrongScreen, match="'Map'"):
         ensure_map_screen(dev, settle_max_s=0)
     assert not any(a.startswith("tap(") for a in dev.actions), dev.actions
 
@@ -659,7 +717,48 @@ def test_relaunch_waits_for_a_cold_start_instead_of_giving_up():
     dev = FakeDevice([splash, splash, DISCOVER, dump_with(["Lauter"])],
                      focus="com.uncube.launcher3")
     ensure_map_screen(dev, settle_max_s=0)
-    assert "tap(260,420)" in dev.actions, dev.actions
+    assert "tap(450,1467)" in dev.actions, dev.actions
+
+
+def test_relaunch_waits_through_a_window_less_cold_start():
+    """Found live on Untappd 5.0.3: straight after the relaunch, uiautomator
+    answered `null root node` -- the app had no window yet -- and the sweep
+    stopped with `adb_unavailable`. A cold start is exactly when that is
+    expected, so recovery keeps polling through it."""
+    from beer_in_this_town.adb_device import ScreenNotReady
+    from beer_in_this_town.app_sweep import ensure_map_screen
+
+    class ColdStart(FakeDevice):
+        def __init__(self, *a, not_ready=2, **k):
+            super().__init__(*a, **k)
+            self.not_ready = not_ready
+
+        def dump(self):
+            if self.focus == MAP_PACKAGE and self.not_ready and any(
+                    a.startswith("launch(") for a in self.actions):
+                self.not_ready -= 1
+                raise ScreenNotReady("null root node")
+            return super().dump()
+
+    dev = ColdStart([DISCOVER, dump_with(["Lauter"])], focus="com.uncube.launcher3")
+    ensure_map_screen(dev, settle_max_s=0)
+    assert "tap(450,1467)" in dev.actions, dev.actions
+
+
+def test_relaunch_does_not_wait_forever_for_a_window():
+    from beer_in_this_town.adb_device import ScreenNotReady
+    from beer_in_this_town.app_sweep import ensure_map_screen
+
+    class NeverReady(FakeDevice):
+        def dump(self):
+            if any(a.startswith("launch(") for a in self.actions):
+                self.dumps_served += 1
+                raise ScreenNotReady("null root node")
+            return super().dump()
+
+    dev = NeverReady([DISCOVER], focus="com.uncube.launcher3")
+    with pytest.raises(ScreenNotReady):
+        ensure_map_screen(dev, settle_max_s=0)
 
 
 def test_relaunch_waiting_is_bounded():
@@ -681,3 +780,123 @@ def test_each_venue_records_the_cell_that_found_it(tmp_path, monkeypatch):
                 settle_max_s=0, city="Tel Aviv")
     assert {v.cell for v in out.venues} == {1}
     assert {v.cell for v in app_sweep.load_journal("Tel Aviv").venues} == {1}
+
+
+# --- a map that really moves: pins sit at fixed ground positions ------------
+#
+# Found live on Untappd 5.x (Tel Aviv, depth 1): every second child pan
+# "landed (193,261) px off target", the third was skipped as a dead pan
+# though the map had moved, and one cell was dead-reckoned 5.8 km off. The
+# swipes are relative to wherever the map is, but each was measured against
+# the *parent's* screen, captured once. The queue-of-dumps fake above cannot
+# show that: its screens do not depend on where the map is.
+
+class WorldDevice:
+    """A map whose content sits at fixed positions and moves when swiped.
+
+    `fling` scales every drag, the way a fast `input swipe` overshoots.
+    The screen shows at most `cap` pins, the most popular first, like the
+    app's result-set cap.
+    """
+
+    def __init__(self, spacing=45, fling=1.0, cap=58):
+        from beer_in_this_town.app_sweep import MAP_BOTTOM, MAP_TOP, SCREEN_WIDTH
+        self.top, self.bottom, self.width = MAP_TOP, MAP_BOTTOM, SCREEN_WIDTH
+        self.pins = [(f"W{x}_{y}", x, y)
+                     for x in range(-1800, 2700, spacing)
+                     for y in range(-1800, 3400, spacing)]
+        self.fling, self.cap = fling, cap
+        import random
+        order = list(range(len(self.pins)))
+        random.Random(7).shuffle(order)
+        self.rank = {self.pins[i][0]: r for r, i in enumerate(order)}
+        self.ox = self.oy = 0.0
+        self.offsets: list[tuple[float, float]] = []
+        self.focus = MAP_PACKAGE
+
+    def focused_package(self):
+        return self.focus
+
+    def _visible(self):
+        on = [(n, x + self.ox, y + self.oy) for n, x, y in self.pins
+              if 30 <= x + self.ox <= self.width - 30
+              and self.top + 70 <= y + self.oy <= self.bottom]
+        # Untappd returns its most popular venues across the whole view, not
+        # the nearest ones, so a quarter-screen pan shares many of them.
+        on.sort(key=lambda p: self.rank[p[0]])
+        return on[:self.cap]
+
+    def dump(self):
+        self.offsets.append((self.ox, self.oy))
+        nodes = "".join(
+            f'<node class="android.view.View" content-desc="{n}" '
+            f'bounds="[{int(x) - 27},{int(y) - 62}][{int(x) + 27},{int(y)}]"/>'
+            for n, x, y in self._visible())
+        return f"<?xml version='1.0'?><hierarchy>{CHROME}{nodes}</hierarchy>"
+
+    def swipe(self, x1, y1, x2, y2, ms):
+        self.ox += (x2 - x1) * self.fling
+        self.oy += (y2 - y1) * self.fling
+
+    def tap(self, x, y):
+        pass
+
+
+def _child_targets():
+    from beer_in_this_town.app_sweep import (
+        CELL_OVERLAP,
+        MAP_BOTTOM,
+        MAP_TOP,
+        SCREEN_WIDTH,
+    )
+    sx = int(SCREEN_WIDTH // 4 * (1 - CELL_OVERLAP))
+    sy = int((MAP_BOTTOM - MAP_TOP) // 4 * (1 - CELL_OVERLAP))
+    return [(-sx, -sy), (sx, -sy), (-sx, sy), (sx, sy)]
+
+
+def _visited(dev, target, tol=26):
+    return any(abs(ox - target[0]) <= tol and abs(oy - target[1]) <= tol
+               for ox, oy in dev.offsets)
+
+
+@pytest.mark.parametrize("fling", [1.0, 1.15])
+def test_every_child_is_visited_where_it_should_be(fling):
+    dev = WorldDevice(fling=fling)
+    result = sweep(dev, CELL, max_depth=1, verify_pans=True,
+                   settle_min_s=0, settle_max_s=0)
+    missed = [t for t in _child_targets() if not _visited(dev, t)]
+    assert not missed, f"children never reached: {missed}"
+    assert result.skipped_cells == 0, result.warnings
+
+
+def test_a_sweep_leaves_the_map_where_it_found_it():
+    """What lets the recursion compose: a parent can only aim at its next
+    child if the last one handed the map back where it started."""
+    dev = WorldDevice(fling=1.15)
+    sweep(dev, CELL, max_depth=2, verify_pans=True,
+          settle_min_s=0, settle_max_s=0)
+    assert abs(dev.ox) <= 26 and abs(dev.oy) <= 26, (dev.ox, dev.oy)
+
+
+def test_the_camera_tracks_where_the_map_really_is():
+    """Each pan is measured against the screen just before it, so the camera
+    adds up real moves. Measured against a stale screen, it counted every
+    earlier child's move again and drifted kilometres."""
+    from beer_in_this_town.app_geo import Camera, Scale
+
+    cam = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.0))
+    dev = WorldDevice(fling=1.15)
+    result = sweep(dev, CELL, max_depth=2, verify_pans=True, camera=cam,
+                   settle_min_s=0, settle_max_s=0)
+    truth = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.0))
+    truth.pan_px(dev.ox, dev.oy)
+    assert cam.centre == pytest.approx(truth.centre, abs=3e-4)  # ~30 m
+    # And every venue sits on its ground position, whichever cell found it.
+    ground = {n: (x, y) for n, x, y in dev.pins}
+    ref = Camera(centre=(32.0853, 34.7818), scale=Scale(m_per_px=10.0))
+    from beer_in_this_town.app_map import Pin
+    worst = max(
+        max(abs(v.lat - ref.locate(Pin(v.name, *ground[v.name]))[0]),
+            abs(v.lng - ref.locate(Pin(v.name, *ground[v.name]))[1]))
+        for v in result.venues)
+    assert worst < 5e-4, worst  # ~50 m

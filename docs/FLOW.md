@@ -13,7 +13,7 @@ such and the exact message to give them.
  once                      each city                                    into Google Maps
  ----                      ---------                                    ----------------
  install tools      ->     open app on          ->  sweep  -> enrich ->  create a saved list
- set up emulator           Discover > View Map      filter -> export     pin --limit 3, check
+ set up emulator           Discover > Map      filter -> export     pin --limit 3, check
  sign in (app,                                                           pin the rest (nights)
    Google, Untappd)                                                      notes
 ```
@@ -112,7 +112,11 @@ been run on BlueStacks 5 on Windows.
 ### 2a. Install BlueStacks 5
 
 Download it from bluestacks.com and run the installer. Choose the default
-Android instance (the installer's "Pie 64-bit" or newer is fine). Let it
+Android instance (the installer's "Pie 64-bit" or newer is fine). **Not
+"Nougat 32-bit"**: Untappd 5.x needs Android 8.0 or newer, and the Play Store
+quietly keeps a Nougat instance on Untappd 4.x, which the sweep no longer
+drives. If you already have a Nougat instance, make a Pie 64-bit one in the
+Multi-Instance Manager. Let it
 finish, open it once, and sign in to the Google Play Store inside it with any
 Google account (it does not have to be the one your saved list will live in).
 
@@ -182,11 +186,12 @@ beertown doctor --json
 ```
 
 `doctor` checks, in order: `adb` is on your `PATH`, a device is connected at
-the serial above, the Untappd app is installed on it, and the screen is 900 x
-1600 (`adb_on_path`, `device_connected`, `untappd_installed`, `screen_size`
-under `data.emulator`, with `data.emulator_ready` true once all pass). Each
-failing check says what to do. No sweep is worth running until all four
-pass; while a sweep is the next stage, `status` reports
+the serial above, it runs Android 8 or newer, the Untappd app is installed
+on it at version 5 or newer, and the screen is 900 x 1600 (`adb_on_path`,
+`device_connected`, `android_version`, `untappd_installed`,
+`untappd_version`, `screen_size` under `data.emulator`, with
+`data.emulator_ready` true once all pass). Each failing check says what to
+do. No sweep is worth running until all six pass; while a sweep is the next stage, `status` reports
 `blocked_on: "emulator"` until they do.
 
 ---
@@ -254,14 +259,15 @@ folder (`data/tel-aviv/`), so keep it the same across stages.
 
 ---
 
-## 5. Open Discover -> View Map in the Untappd app
+## 5. Open Discover -> Map in the Untappd app
 
 Before **every** sweep:
 
 1. Bring BlueStacks to the front and open the Untappd app.
 2. Tap **Discover** in the bottom bar.
-3. Tap **View Map**.
-4. Close anything covering the map: a venue card, a dialog, the keyboard.
+3. Tap **Map** (the button at the bottom of Discover).
+4. Close anything covering the map: a dialog, the keyboard. The venue card
+   Untappd keeps open along the bottom can stay; the sweep pans around it.
 
 Leave it there. The sweep checks that the map is in front before it starts and
 refuses with `app_screen_unexpected` if it is not. Do not use the list view
@@ -589,7 +595,7 @@ Every command prints one JSON envelope with `--json`. On failure it carries
 |---|---|---|
 | `emulator_unavailable` | `doctor`'s emulator checks failed before a sweep | Run `beertown doctor --json` and fix the first failing check: adb on `PATH`, `adb connect`, Untappd installed, screen 1600 x 900 (or 900 x 1600). |
 | `adb_unavailable` | `adb` could not reach the device, or returned nothing usable | Is BlueStacks running? `adb connect 127.0.0.1:5555`, then `adb devices`. Check `BEERTOWN_ADB_SERIAL` if you changed the port. |
-| `app_screen_unexpected` | The Untappd app was not on the map, or (with `--here`) the map's Reset location control was not on screen | Open Discover -> View Map, close any card or dialog, and re-run. For `--here`, allow Untappd location permission. The sweep resumes where it stopped. |
+| `app_screen_unexpected` | The Untappd app was not on the map, or (with `--here`) the map's Reset location control was not on screen | Open Discover -> Map, close any card or dialog, and re-run. For `--here`, allow Untappd location permission. The sweep resumes where it stopped. |
 | `app_pan_failed` | Swipes stopped moving the map three times in a row | Something is over the map (venue card, dialog, keyboard). Clear it and re-run. Check the screen is still 1600 x 900. |
 | `calibration_failed` | Too few swept venues matched OpenStreetMap to fit positions safely | Nothing was written. Usually a very small area or a city with sparse OSM data; sweep a larger area, or retry later if Overpass was struggling. |
 | `city_not_found` | The geocoder has no match for the city | Spell it the way a map would, add the country (`Portland, OR`), or use `--here`. |

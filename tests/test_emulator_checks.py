@@ -1,4 +1,4 @@
-"""The emulator checks: four questions, in order, that never raise.
+"""The emulator checks: six questions, in order, that never raise.
 
 A fake runner stands in for adb. No device, no network.
 """
@@ -22,10 +22,13 @@ SERIAL = "127.0.0.1:5555"
 DEVICES = f"List of devices attached\n{SERIAL}\tdevice\n\n"
 PACKAGES = f"package:{MAP_PACKAGE}\n"
 SIZE = "Physical size: 900x1600\n"
+SDK = "28\n"
+APP = ("    versionCode=2147102969 minSdk=26 targetSdk=36\n"
+       "    versionName=5.0.3\n")
 
 
-def runner(devices=DEVICES, packages=PACKAGES, size=SIZE, codes=None,
-           raises=None):
+def runner(devices=DEVICES, packages=PACKAGES, size=SIZE, sdk=SDK, app=APP,
+           codes=None, raises=None):
     """A fake `adb`: answers by subcommand, records what it was asked."""
     codes = codes or {}
     calls: list[list[str]] = []
@@ -34,10 +37,13 @@ def runner(devices=DEVICES, packages=PACKAGES, size=SIZE, codes=None,
         calls.append(argv)
         assert timeout <= 10, "status must stay cheap"
         key = ("devices" if argv[1:] == ["devices"]
-               else "pm" if "pm" in argv else "wm" if "wm" in argv else "?")
+               else "pm" if "pm" in argv else "wm" if "wm" in argv
+               else "getprop" if "getprop" in argv
+               else "dumpsys" if "dumpsys" in argv else "?")
         if raises and key in raises:
             raise raises[key]
-        out = {"devices": devices, "pm": packages, "wm": size}[key]
+        out = {"devices": devices, "pm": packages, "wm": size,
+               "getprop": sdk, "dumpsys": app}[key]
         return codes.get(key, 0), out
 
     run.calls = calls
@@ -52,7 +58,7 @@ def no_adb(name):
     return None
 
 
-def test_a_ready_emulator_passes_all_four_in_order():
+def test_a_ready_emulator_passes_every_check_in_order():
     checks = check_emulator(SERIAL, run=runner(), which=have_adb)
     assert [c.name for c in checks] == list(CHECK_NAMES)
     assert all(c.ok for c in checks), checks
@@ -191,3 +197,57 @@ def test_checks_serialise_for_the_envelope():
 
 def test_an_empty_list_is_not_ready():
     assert emulator_ready([]) is False
+
+
+# --- Untappd 5 needs Android 8, and the sweep needs Untappd 5 --------------
+#
+# Found 2026-11-14: the old Nougat (Android 7.1, SDK 25) BlueStacks instance
+# never offered the Untappd 5 update, because 5.x needs SDK 26. Nothing said
+# so; it cost an hour. And the sweep now drives only 5.x's screens, so a 4.x
+# app would fail minutes in as `app_screen_unexpected`.
+
+def test_the_order_puts_the_android_check_before_the_app_ones():
+    assert list(CHECK_NAMES) == ["adb_on_path", "device_connected",
+                                 "android_version", "untappd_installed",
+                                 "untappd_version", "screen_size"]
+
+
+def test_android_7_is_refused_with_a_way_out():
+    checks = check_emulator(SERIAL, which=have_adb, run=runner(sdk="25\n"))
+    bad = first_failure(checks)
+    assert bad.name == "android_version"
+    assert "25" in bad.detail
+    assert "Pie" in bad.remedy and "64-bit" in bad.remedy
+    later = checks[CHECK_NAMES.index("untappd_installed"):]
+    assert all("not checked" in c.detail for c in later)
+
+
+def test_android_8_is_enough():
+    checks = check_emulator(SERIAL, which=have_adb, run=runner(sdk="26\n"))
+    assert emulator_ready(checks), checks
+
+
+def test_an_unreadable_android_version_is_a_failure_not_a_pass():
+    checks = check_emulator(SERIAL, which=have_adb, run=runner(sdk="\n"))
+    assert first_failure(checks).name == "android_version"
+
+
+def test_untappd_4_is_refused_with_how_to_update():
+    old = "    versionName=4.6.12\n"
+    checks = check_emulator(SERIAL, which=have_adb, run=runner(app=old))
+    bad = first_failure(checks)
+    assert bad.name == "untappd_version"
+    assert "4.6.12" in bad.detail
+    assert "Play Store" in bad.remedy
+
+
+def test_an_unreadable_untappd_version_is_a_failure_not_a_pass():
+    checks = check_emulator(SERIAL, which=have_adb,
+                            run=runner(app="nothing\n"))
+    assert first_failure(checks).name == "untappd_version"
+
+
+def test_a_later_untappd_major_still_passes():
+    checks = check_emulator(SERIAL, which=have_adb,
+                            run=runner(app="    versionName=6.1\n"))
+    assert emulator_ready(checks), checks

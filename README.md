@@ -32,7 +32,7 @@ hand when you land somewhere new.
 
 ```
   Untappd app (Android, in BlueStacks)         untappd.com venue pages
-  Discover > View Map                          (signed in)
+  Discover > Map                          (signed in)
           |                                            |
           v                                            v
    1. sweep  ----->  2. enrich  ----->  3. filter  ----->  4. export
@@ -110,7 +110,7 @@ beertown doctor --json                 # emulator, Chrome, session
 beertown ui                            # sign in to Google + Untappd, pick a city
 beertown verify --json                 # both accounts actually work
 
-# in BlueStacks: Untappd > Discover > View Map, then hands off
+# in BlueStacks: Untappd > Discover > Map, then hands off
 beertown sweep  --city "Tel Aviv" --json
 beertown enrich --city "Tel Aviv" --json
 beertown filter --city "Tel Aviv" --json

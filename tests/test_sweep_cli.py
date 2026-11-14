@@ -184,7 +184,7 @@ def test_doctor_reports_every_emulator_check_and_the_first_fix():
 def test_doctor_with_a_ready_emulator_reminds_about_the_map_screen():
     env = cli.cmd_doctor(Settings(), emulator=ready)
     assert env.data["emulator_ready"] is True
-    assert any("Discover -> View Map" in h for h in env.hints)
+    assert any("Discover -> Map" in h for h in env.hints)
 
 
 # --- what 0.2.0 removed -------------------------------------------------------

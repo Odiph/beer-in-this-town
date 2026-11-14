@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -55,6 +56,20 @@ class AdbUnavailable(RuntimeError):
     """
 
 
+class ScreenNotReady(AdbUnavailable):
+    """uiautomator found no window to read: `null root node`, twice running.
+
+    What it says while an app is still starting, and occasionally for a
+    moment mid-sweep (both found live on Untappd 5.0.3). `dump` retries it
+    once; a repeat is raised as this type, so the one caller that expects a
+    cold start can keep waiting through it.
+    """
+
+
+# uiautomator's words for "there is no window to read yet".
+_NO_WINDOW = "null root node"
+
+
 def _default_run(argv: list[str], timeout: float) -> str:
     proc = subprocess.run(argv, capture_output=True, timeout=timeout)
     if proc.returncode != 0:
@@ -74,6 +89,8 @@ class AdbDevice:
     serial: str
     run: Callable[[list[str], float], str] = field(default=_default_run)
     timeout_s: float = DEFAULT_TIMEOUT_S
+    # How long to wait before the one retry of a transient dump failure.
+    retry_pause_s: float = 1.0
 
     def _adb(self, *args: str) -> str:
         argv = ["adb", "-s", self.serial, *args]
@@ -106,16 +123,24 @@ class AdbDevice:
     def dump(self) -> str:
         """The current screen's accessibility tree, as XML.
 
-        Retries **once**, and only on a killed `uiautomator`, which is
-        transient. A second kill is not transient, and anything else that is
-        not XML is news rather than noise, so both raise.
+        Retries **once**, and only on the two known blips: a killed
+        `uiautomator`, and `null root node` (no window to read, seen right
+        after a relaunch and once mid-sweep). A second blip in a row is not
+        transient, and anything else that is not XML is news rather than
+        noise, so both raise.
         """
         raw = self._adb("exec-out", "uiautomator", "dump", "/dev/tty")
-        if "<?xml" not in raw and raw.strip() == _KILLED:
-            log.warning("uiautomator was killed mid-dump; retrying once.")
+        if "<?xml" not in raw and (raw.strip() == _KILLED or _NO_WINDOW in raw):
+            log.warning("uiautomator dump failed transiently (%s); retrying once.",
+                        raw.strip()[:60])
+            if self.retry_pause_s > 0:
+                time.sleep(self.retry_pause_s)
             raw = self._adb("exec-out", "uiautomator", "dump", "/dev/tty")
         start = raw.find("<?xml")
         end = raw.rfind(">")
+        if (start < 0 or end <= start) and _NO_WINDOW in raw:
+            raise ScreenNotReady(
+                f"uiautomator found no window yet: {raw.strip()[:200]!r}")
         if start < 0 or end <= start:
             raise AdbUnavailable(
                 f"uiautomator returned no XML: {raw.strip()[:200]!r}")
