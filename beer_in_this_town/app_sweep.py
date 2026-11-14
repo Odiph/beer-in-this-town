@@ -193,6 +193,17 @@ PANEL_SETTLE_MAX_S = 0.9
 # than the drift; the cells overlap by ~34 px, which absorbs it.
 PAN_TOLERANCE_PX = 25.0
 
+# What an unmeasurable pan is assumed to have moved, per axis: the ratio of
+# measured to asked-for movement over the pans that could be measured.
+# Found live on a depth-3 Tel Aviv sweep (2026-11-14): whole cells placed
+# 1-3 km off, mostly north, before any correction. A pan whose screens share
+# too few pins was taken as landing exactly, though the fling overshoots, and
+# its error carried into every later cell. Only pans of at least
+# FLING_MIN_PX teach the ratio (a short one is mostly measurement noise),
+# and it is clamped to FLING_RANGE, the range ever measured with margin.
+FLING_MIN_PX = 60.0
+FLING_RANGE = (0.8, 1.4)
+
 
 @runtime_checkable
 class Device(Protocol):
@@ -288,6 +299,27 @@ class SweepResult:
     # what its hand-back pan did not quite undo. The parent adds it to its
     # own reckoning instead of assuming the child came back exactly.
     _left_at: tuple[float, float] = (0.0, 0.0)
+    # Every pan: what was asked, what was measured, what was used. Journalled,
+    # so a misplaced cell can be traced to the gesture that misplaced it.
+    pans: list[dict] = field(default_factory=list)
+    # Measured and asked-for movement per axis, over measurable pans.
+    _fling_sums: list[float] = field(default_factory=lambda: [0.0] * 4)
+
+    def fling(self) -> tuple[float, float]:
+        """The overshoot measured so far, per axis; 1.0 until measured."""
+        mx, ax, my, ay = self._fling_sums
+        lo, hi = FLING_RANGE
+
+        def ratio(m: float, a: float) -> float:
+            return min(hi, max(lo, m / a)) if a else 1.0
+        return ratio(mx, ax), ratio(my, ay)
+
+    def learn_fling(self, asked: tuple[float, float],
+                    moved: tuple[float, float]) -> None:
+        for axis, (a, m) in enumerate(zip(asked, moved, strict=True)):
+            if abs(a) >= FLING_MIN_PX:
+                self._fling_sums[2 * axis] += m * (1 if a > 0 else -1)
+                self._fling_sums[2 * axis + 1] += abs(a)
 
 
 def _require_app(device: Device) -> None:
@@ -444,7 +476,8 @@ def load_journal(city: str) -> SweepResult:
         truncated_cells=raw.get("truncated_cells", 0),
         skipped_cells=raw.get("skipped_cells", 0),
         hit_depth_limit=raw.get("hit_depth_limit", False),
-        warnings=list(raw.get("warnings", [])))
+        warnings=list(raw.get("warnings", [])),
+        pans=list(raw.get("pans", [])))
 
 
 def save_journal(city: str, result: SweepResult) -> None:
@@ -464,6 +497,7 @@ def save_journal(city: str, result: SweepResult) -> None:
         "skipped_cells": result.skipped_cells,
         "hit_depth_limit": result.hit_depth_limit,
         "warnings": result.warnings,
+        "pans": result.pans,
     }
     journal_path(city).write_text(
         json.dumps(payload, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -730,12 +764,35 @@ def _harvest_screen(device: Device) -> list[Pin]:
 
 
 def _measure(before: list[Pin], after: list[Pin]
-             ) -> tuple[float, float] | None:
-    """How far the content moved between two screens, if enough pins say so."""
+             ) -> tuple[tuple[float, float] | None, int]:
+    """How far the content moved between two screens, if enough pins say
+    so, and how many pins were shared."""
     moved_x, moved_y, shared = pin_displacement(before, after)
     if moved_x is None or moved_y is None or shared < MIN_SHARED_FOR_PAN_CHECK:
-        return None
-    return moved_x, moved_y
+        return None, shared
+    return (moved_x, moved_y), shared
+
+
+def _account(result: SweepResult, kind: str, asked: tuple[int, int],
+             moved: tuple[float, float] | None, shared: int
+             ) -> tuple[float, float]:
+    """What a pan is taken to have moved; learns from it and records it.
+
+    Measured, it is the measurement. Not, it is the request scaled by the
+    fling measured so far -- never the bare request, which is what let one
+    unmeasurable pan put a Tel Aviv cell 1.6 km off.
+    """
+    if moved is not None:
+        result.learn_fling(asked, moved)
+        used = moved
+    else:
+        fx, fy = result.fling()
+        used = (asked[0] * fx, asked[1] * fy)
+    result.pans.append({
+        "cell": result.cells_visited, "kind": kind, "aim": list(asked),
+        "measured": None if moved is None else [round(v, 1) for v in moved],
+        "shared": shared, "used": [round(v, 1) for v in used]})
+    return used
 
 
 def _move_to(device: Device, here: tuple[float, float],
@@ -769,10 +826,11 @@ def _move_to(device: Device, here: tuple[float, float],
 
     after = _harvest_screen(device)
     result._screen = after
-    moved = _measure(before, after)
+    moved, shared = _measure(before, after)
     # Believe the measurement when there is enough overlap to make one;
-    # otherwise the request is the best estimate there is.
-    mx, my = moved if moved is not None else (dx, dy)
+    # otherwise the request scaled by the fling measured so far.
+    mx, my = _account(result, "return" if returning else "pan", (dx, dy),
+                      moved, shared)
     _follow(camera, mx, my)
     here = (here[0] + mx, here[1] + my)
 
@@ -798,9 +856,10 @@ def _move_to(device: Device, here: tuple[float, float],
 
     # Close the loop. The fling overshoots by up to 27%; left alone, that
     # error accumulates and shifts every later cell off its target.
+    # An unmeasured pan is corrected too, from its estimate: the estimate
+    # is the best position there is, and the correction is itself measured.
     err_x, err_y = target[0] - here[0], target[1] - here[1]
-    if moved is not None and (abs(err_x) > PAN_TOLERANCE_PX
-                              or abs(err_y) > PAN_TOLERANCE_PX):
+    if abs(err_x) > PAN_TOLERANCE_PX or abs(err_y) > PAN_TOLERANCE_PX:
         log.info("Pan landed (%.0f,%.0f) px off target; correcting.",
                  err_x, err_y)
         cx, cy = round(err_x), round(err_y)
@@ -808,8 +867,8 @@ def _move_to(device: Device, here: tuple[float, float],
         _settle(settle_min_s, settle_max_s)
         again = _harvest_screen(device)
         result._screen = again
-        fixed = _measure(after, again)
-        fx, fy = fixed if fixed is not None else (cx, cy)
+        fixed, shared = _measure(after, again)
+        fx, fy = _account(result, "correction", (cx, cy), fixed, shared)
         _follow(camera, fx, fy)
         here = (here[0] + fx, here[1] + fy)
     return here, True

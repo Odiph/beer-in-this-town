@@ -371,6 +371,28 @@ is aimed from where the map really is, corrections are measured too, and
 every cell hands the map back to its own centre, reporting what that pan
 left over, so the parent's reckoning stays closed.
 
+**A pan that cannot be measured is not exact.** When the screens either side
+of a pan share fewer than six pins, there is nothing to measure it with. It
+used to be taken as landing exactly where it was aimed, though the fling
+overshoots by up to 27% (about 780 m on a vertical step at Tel Aviv's
+10 m/px). Live on the depth-3 Tel Aviv sweep of 2026-11-14, whole cells were
+placed 1-3 km off, mostly north, before any correction, and one cell's six
+real bars all missed their pages by 1.6 km. Now an unmeasured pan is taken as
+the request scaled by the overshoot measured on the pans that could be
+measured, and it is corrected like any other. On the fake device, with every
+third pan unmeasurable and a 20% overshoot, the worst venue went from 5 km
+off to under 50 m. Every pan (asked, measured, shared pins, used) is written
+to the sweep journal as `pans`, so a misplaced cell can be traced to its
+gesture.
+
+**Measure a pan by the median, not the mean.** That pan record found the
+real cause. On the next live Tel Aviv sweep, only 3 of 57 pans were
+unmeasurable, yet cells were still 0.5-2 km off, and they had been reached
+by measured pans. Replaying a real before/after pair: 42 of 44 shared pins
+agreed the map moved (0, 302) px, while `AM:PM` and `Tiv Taam`, chains with
+branches across the city, showed a different branch under the same name
+after the pan. The mean read (14.1, 292.7). The median reads (0, 302).
+
 Two things absorb a swipe and leave the map still, both found the hard way:
 
 - **A marker under the finger.** Dragging a pin pans nothing.

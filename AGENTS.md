@@ -274,6 +274,10 @@ Report `data.resolved` out of `data.venues`, and `data.statuses` (counts of
 `resolved`, `too_far`, `no_match`, `unverified`, `unlocated`, `fetch_failed`,
 `search_failed`, `duplicate`, `outside`; the per-row reason is the
 `resolution` column).
+`data.shifted` (on the run that writes the CSV) counts `too_far` misses
+accepted because at least three nearby venues missed their pages by the same
+vector: a sweep cell placed off as a block, not namesakes. Their
+`resolution_detail` says so.
 An unresolved venue has **unknown** counts, not zero: never report it as
 having no check-ins. If most rows come back `fetch_failed` or `unverified`,
 suspect the parser or the session, not the city: run `selfcheck --json`.
