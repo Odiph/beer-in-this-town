@@ -201,16 +201,45 @@ def test_dump_retries_once_when_there_is_no_window():
     assert runner.calls == 2
 
 
-def test_a_window_that_stays_missing_is_reported_as_not_ready():
-    """Two in a row is not a blip. It is still an `AdbUnavailable`, but a
-    distinct one, so the caller that expects a cold start can wait longer."""
-    from beer_in_this_town.adb_device import ScreenNotReady
+def test_a_missing_window_is_waited_out_across_several_tries():
+    """Found live on a depth-3 Tel Aviv sweep: eight drops in four minutes,
+    right after pans while 5.x redraws the map, and two came back to back --
+    which ended the sweep, on a map that dumped fine seconds later. So the
+    no-window case gets a few tries, with growing pauses, not one."""
+    from beer_in_this_town.adb_device import NO_WINDOW_RETRIES
 
+    runner = SequenceRunner([NO_WINDOW] * NO_WINDOW_RETRIES + [DUMP])
+    dev = AdbDevice("x", run=runner, retry_pause_s=0)
+    assert "Lauter" in dev.dump()
+    assert runner.calls == NO_WINDOW_RETRIES + 1
+
+
+def test_the_pauses_between_tries_grow():
+    from beer_in_this_town import adb_device
+
+    slept: list[float] = []
     runner = SequenceRunner([NO_WINDOW, NO_WINDOW, DUMP])
+    dev = AdbDevice("x", run=runner, retry_pause_s=1.0)
+    orig = adb_device.time.sleep
+    adb_device.time.sleep = slept.append
+    try:
+        dev.dump()
+    finally:
+        adb_device.time.sleep = orig
+    assert slept == [1.0, 2.0]
+
+
+def test_a_window_that_stays_missing_is_reported_as_not_ready():
+    """Bounded: past the last try it is not a blip. It is still an
+    `AdbUnavailable`, but a distinct one, so the caller that expects a cold
+    start can wait longer."""
+    from beer_in_this_town.adb_device import NO_WINDOW_RETRIES, ScreenNotReady
+
+    runner = SequenceRunner([NO_WINDOW] * (NO_WINDOW_RETRIES + 1) + [DUMP])
     dev = AdbDevice("x", run=runner, retry_pause_s=0)
     with pytest.raises(ScreenNotReady):
         dev.dump()
-    assert runner.calls == 2
+    assert runner.calls == NO_WINDOW_RETRIES + 1
     assert issubclass(ScreenNotReady, AdbUnavailable)
 
 

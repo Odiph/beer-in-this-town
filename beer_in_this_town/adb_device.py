@@ -69,6 +69,13 @@ class ScreenNotReady(AdbUnavailable):
 # uiautomator's words for "there is no window to read yet".
 _NO_WINDOW = "null root node"
 
+# How many times a missing window is retried before it is reported. Found
+# live on a depth-3 Tel Aviv sweep on Untappd 5.0.3: eight drops in four
+# minutes, right after pans while the map redraws, and two came back to back,
+# which ended the sweep on a map that dumped fine seconds later. Pauses grow
+# (1x, 2x, 3x `retry_pause_s`), so the whole wait is bounded at about 6 s.
+NO_WINDOW_RETRIES = 3
+
 
 def _default_run(argv: list[str], timeout: float) -> str:
     proc = subprocess.run(argv, capture_output=True, timeout=timeout)
@@ -123,18 +130,24 @@ class AdbDevice:
     def dump(self) -> str:
         """The current screen's accessibility tree, as XML.
 
-        Retries **once**, and only on the two known blips: a killed
-        `uiautomator`, and `null root node` (no window to read, seen right
-        after a relaunch and once mid-sweep). A second blip in a row is not
-        transient, and anything else that is not XML is news rather than
-        noise, so both raise.
+        Retries only the two known blips. A killed `uiautomator` gets one
+        retry; a repeat is not transient. `null root node` (no window to
+        read: during a cold start, and after pans while 5.x redraws the map)
+        gets `NO_WINDOW_RETRIES`, with growing pauses. Anything else that is
+        not XML is news rather than noise, so it raises at once.
         """
         raw = self._adb("exec-out", "uiautomator", "dump", "/dev/tty")
-        if "<?xml" not in raw and (raw.strip() == _KILLED or _NO_WINDOW in raw):
-            log.warning("uiautomator dump failed transiently (%s); retrying once.",
-                        raw.strip()[:60])
-            if self.retry_pause_s > 0:
-                time.sleep(self.retry_pause_s)
+        if "<?xml" not in raw and raw.strip() == _KILLED:
+            log.warning("uiautomator was killed; retrying once.")
+            self._pause(1)
+            raw = self._adb("exec-out", "uiautomator", "dump", "/dev/tty")
+        attempt = 0
+        while ("<?xml" not in raw and _NO_WINDOW in raw
+               and attempt < NO_WINDOW_RETRIES):
+            attempt += 1
+            log.warning("uiautomator found no window; retry %d of %d.",
+                        attempt, NO_WINDOW_RETRIES)
+            self._pause(attempt)
             raw = self._adb("exec-out", "uiautomator", "dump", "/dev/tty")
         start = raw.find("<?xml")
         end = raw.rfind(">")
@@ -145,6 +158,10 @@ class AdbDevice:
             raise AdbUnavailable(
                 f"uiautomator returned no XML: {raw.strip()[:200]!r}")
         return raw[start:end + 1]
+
+    def _pause(self, multiple: int) -> None:
+        if self.retry_pause_s > 0:
+            time.sleep(self.retry_pause_s * multiple)
 
     def location(self) -> tuple[float, float]:
         """The device's own position fix, as `(lat, lng)`.
